@@ -227,8 +227,13 @@ impl CensusRunner {
                         (count + 1, bytes + size)
                     });
                 let mut signals = Vec::new();
-                if matches!(relevance, PathRelevance::Deferred(_)) {
+                if let PathRelevance::Deferred(reason) = &relevance {
                     signals.push("high_volume".into());
+                    if matches!(reason.as_str(), "node_modules" | "vendor") {
+                        signals.push("dependency_materialization".into());
+                    } else if matches!(reason.as_str(), "target" | "dist") {
+                        signals.push("generated_artifacts".into());
+                    }
                 }
                 DirectorySummary {
                     relative_path,
@@ -451,7 +456,10 @@ mod tests {
             .find(|directory| directory.relative_path == "target")
             .unwrap();
         assert_eq!(target_summary.file_count, 0);
-        assert_eq!(target_summary.signals, vec!["high_volume"]);
+        assert_eq!(
+            target_summary.signals,
+            vec!["high_volume", "generated_artifacts"]
+        );
     }
 
     #[tokio::test]
