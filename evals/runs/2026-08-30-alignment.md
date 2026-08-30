@@ -48,6 +48,7 @@ fixtures listed below.
 | EVAL-032 | `cargo run -q -p rivet -- census .` and `":quit" | cargo run -q -p rivet -- chat .` after repository-signal wiring | PASS: CLI census observes 122 files, 49 bounded directory signals, and 1 deferred tree; persistent chat opens and exits cleanly. |
 | EVAL-033 | `cargo test -p rivet-core --test cognitive_cycle_test -- --nocapture` after Verity failure-path coverage | PASS: 14 Core tests; a missing evidence ledger yields HOLD, persists a failed verification receipt, and reopens the previously closed obligation. |
 | EVAL-034 | `cargo test --workspace` and `cargo clippy --workspace -- -D warnings` after all current changes | PASS: complete workspace test/doc suite and strict clippy. |
+| EVAL-035 | `cargo test -p rivet-core --test cognitive_cycle_test -- --nocapture` plus `cargo clippy -p rivet-core --tests -- -D warnings` | PASS: 14 Core tests now prove Verity PASS can complete a task, while a later HOLD reopens the obligation and invalidates completion. |
 
 ## Atomic milestones
 
@@ -64,7 +65,8 @@ fixtures listed below.
 - `8e418a6` — direct completion-event hardening and updated semantic gap tracking.
 - `98e5b1b` — authoritative verification/closure event hardening.
 - `c06a13d` — cycle-serialized public verification and concurrency proof.
-- `pending` — Verity failure-path coverage and final full-gate ledger update (to be committed after final gate).
+- `294238f` — Verity failure-path coverage and final full-gate ledger update.
+- `pending` — Verity PASS → completion → failed recheck invalidation extension (to be committed after final gate).
 
 ## Interpretation and remaining limits
 

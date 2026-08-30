@@ -745,7 +745,7 @@ async fn full_verity_pipeline_is_admitted_as_scoped_harness_verification() {
     let tmp_dir = tempfile::tempdir().unwrap();
     let store = Arc::new(MemoryStore::new());
     let harness = HarnessCore::new(
-        store,
+        store.clone(),
         Arc::new(ScriptedModelBackend::new(vec![])),
         Arc::new(Runtime::new(tmp_dir.path())),
     );
@@ -852,8 +852,30 @@ async fn full_verity_pipeline_is_admitted_as_scoped_harness_verification() {
     assert_eq!(harness.current_phase().await, RunPhase::Idle);
     drop(hard);
 
-    let failed_revision = harness.hard_state.lock().await.revision;
-    let failed = harness
+    let completed = HarnessCore::open(
+        store,
+        Arc::new(ScriptedModelBackend::new(vec![ModelResponse {
+            text_content: "The verified plan is complete.".into(),
+            actions: vec![CognitiveAction::CompletionRequest {
+                summary: "Full Verity pipeline passed.".into(),
+            }],
+            usage: TokenUsage::default(),
+        }])),
+        Arc::new(Runtime::new(tmp_dir.path())),
+    )
+    .await
+    .unwrap();
+    assert!(
+        completed
+            .step("Run the Verity plan", "Complete after the verified pass.")
+            .await
+            .unwrap()
+            .contains("Task completed")
+    );
+    assert_eq!(completed.current_phase().await, RunPhase::Completed);
+
+    let failed_revision = completed.hard_state.lock().await.revision;
+    let failed = completed
         .run_verity_plan(
             accp::VerificationRequest {
                 obligation_id: receipt.obligation_id.clone(),
@@ -872,7 +894,7 @@ async fn full_verity_pipeline_is_admitted_as_scoped_harness_verification() {
         .unwrap();
     assert_eq!(failed.overall_verdict, praxis::GateVerdict::Hold);
     assert!(failed.final_receipt.is_none());
-    let reopened = harness.hard_state.lock().await;
+    let reopened = completed.hard_state.lock().await;
     assert!(reopened.obligations.contains_key(&receipt.obligation_id));
     assert!(
         !reopened
@@ -881,4 +903,5 @@ async fn full_verity_pipeline_is_admitted_as_scoped_harness_verification() {
             .unwrap()
             .passed
     );
+    assert!(reopened.completed_tasks.is_empty());
 }
