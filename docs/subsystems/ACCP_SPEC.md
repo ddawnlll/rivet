@@ -1,9 +1,9 @@
 # ACCP specification: claim, action, authority and capability governance
 
-<span class="badge project">PROJECT_DESIGN</span> ACCP'nin iki ana sorusu vardır:
+<span class="badge established">SUPERSEDED_BY_ACCP_3_0</span>
 
-> [!NOTE]
-> **Normative Protocol Specification:** ACCP 3.0 protokolünün tam, uluslararası standart formatındaki normatif spesifikasyonu için bakınız: [`ACCP 3.0 Specification`](#accp-3-0-cognitive-controller-harness-semantic-protocol). Bu bölüm, Rivet v0.3 içindeki mimari entegrasyonu özetler.
+> [!IMPORTANT]
+> **CANONICAL SPECIFICATION:** Bu tarihsel draft dokümanı **ACCP 3.0** tarafından supersede edilmiştir. Geliştirme, tipler ve tüm implementasyon sınırları için tek kanonik kaynak: [`ACCP 3.0 Specification`](file:///c:/Users/dresden/Documents/rivet/docs/contracts/ACCP_3_0_SPEC.md). Bu dosya yalnız tarihsel bağlam referansıdır.
 
 **v0.2/v0.3 scope clarification.** ACCP memory engine, scheduler, RPC transport veya “everything protocol” değildir. Çekirdek görevi evidence admission, soft→hard promotion authority, action authorization ve auditable claim semantics'tir. Native provider tool/function calling başka bir transport olarak kalabilir; Rivet'in epistemic semantics'i onun üstünde veya yanında typed runtime state olarak uygulanabilir.
 

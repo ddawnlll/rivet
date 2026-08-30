@@ -1,0 +1,60 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/rivet-types",
+    "crates/accp",
+    "crates/noesis",
+    "crates/praxis",
+    "crates/hephaestus",
+    "crates/rivet-store",
+    "crates/rivet-model",
+    "crates/rivet-model-genai",
+    "crates/rivet-runtime",
+    "crates/rivet-repository",
+    "crates/rivet-core",
+    "crates/rivet",
+]
+
+[workspace.package]
+version = "0.3.0"
+edition = "2024"
+authors = ["Rivet Developers"]
+license = "MIT OR Apache-2.0"
+
+[workspace.dependencies]
+# Internal workspace crates
+rivet-types = { path = "crates/rivet-types" }
+accp = { path = "crates/accp" }
+noesis = { path = "crates/noesis" }
+praxis = { path = "crates/praxis" }
+hephaestus = { path = "crates/hephaestus" }
+rivet-store = { path = "crates/rivet-store" }
+rivet-model = { path = "crates/rivet-model" }
+rivet-model-genai = { path = "crates/rivet-model-genai" }
+rivet-runtime = { path = "crates/rivet-runtime" }
+rivet-repository = { path = "crates/rivet-repository" }
+rivet-core = { path = "crates/rivet-core" }
+
+# Common runtime & utilities
+tokio = { version = "1.44", features = ["full"] }
+async-trait = "0.1"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "2.0"
+anyhow = "1.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+bytes = "1.10"
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1.15", features = ["v4", "serde"] }
+
+# Storage & Embedded DB
+redb = "2.4"
+
+# Model Multi-provider
+genai = "0.1"
+
+# CLI / TUI
+clap = { version = "4.5", features = ["derive", "env"] }
+ratatui = "0.29"
+crossterm = "0.28"
