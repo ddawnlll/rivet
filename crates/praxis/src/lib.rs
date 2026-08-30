@@ -1,15 +1,38 @@
-//! # praxis (Mechanical Verification Engine)
+//! # praxis (Verity Mechanical Verification Engine)
 //!
-//! Executes bounded verification predicates (unit tests, linter, typecheck)
-//! and emits authoritative, signed VerificationReceipt objects.
+//! 100% Rust implementation of the Praxis Verity Truth Kernel.
+//! Provides:
+//! - Domain-separated SHA-256 Merkle tree with RFC 6962 inclusion proofs
+//! - Append-only NDJSON cryptographic evidence ledger
+//! - 8-Gate Pipeline: SchemaGate -> LockGate -> EvidenceGate -> WiringGate -> ExecGate -> CoverageGate -> FinalGate
+//! - Multi-framework test output parsers (Cargo, Pytest, Jest, Go)
+//! - Circuit breaker and failure rate tracking
+//! - LCOV and Istanbul coverage report analysis
+
+pub mod types;
+pub mod merkle;
+pub mod ledger;
+pub mod coverage;
+pub mod circuit_breaker;
+pub mod parsers;
+pub mod gates;
+pub mod pipeline;
+
+pub use types::*;
+pub use merkle::{MerkleProof, MerkleProofStep, hash_leaf, hash_node, root_from_hashes, root_from_records, inclusion_proof, verify_proof};
+pub use ledger::{Ledger, LedgerRecord, LedgerHeader, LedgerState};
+pub use coverage::{CoverageParser, CoverageResult, CoverageTotals, FileCoverage};
+pub use circuit_breaker::{CircuitBreaker, CircuitBreakerConfig, CircuitBreakerState};
+pub use parsers::{CargoTestParser, PytestParser, JestParser, GoTestParser, ParsedTestReport};
+pub use gates::{SchemaGate, LockGate, EvidenceGate, WiringGate, ExecGate, CoverageGate, FinalGate};
+pub use pipeline::{VerityPipeline, VerityPipelineResult};
 
 use accp::{VerificationReceipt, VerificationRequest};
 use chrono::Utc;
 use rivet_types::*;
-use serde::{Deserialize, Serialize};
 
-/// Parsed output of a mechanical test run
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// Legacy compatibility test report
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct TestRunReport {
     pub passed_count: usize,
     pub failed_count: usize,
@@ -21,50 +44,15 @@ pub struct TestRunReport {
 pub struct TestOutputParser;
 
 impl TestOutputParser {
-    /// Parse standard cargo test / generic test output lines
     pub fn parse_cargo_test(stdout: &str) -> TestRunReport {
-        let mut passed = 0;
-        let mut failed = 0;
-        let ignored = 0;
-
-        for line in stdout.lines() {
-            if line.contains("test result: ok.") {
-                // "test result: ok. 5 passed; 0 failed; 0 ignored;"
-                if let Some(p) = Self::extract_num_before(line, "passed") {
-                    passed = p;
-                }
-            } else if line.contains("test result: FAILED.") {
-                if let Some(p) = Self::extract_num_before(line, "passed") {
-                    passed = p;
-                }
-                if let Some(f) = Self::extract_num_before(line, "failed") {
-                    failed = f;
-                }
-            } else if line.starts_with("test ") && line.ends_with("... ok") {
-                passed += 1;
-            } else if line.starts_with("test ") && line.ends_with("... FAILED") {
-                failed += 1;
-            }
-        }
-
+        let parsed = CargoTestParser::parse(stdout, "");
         TestRunReport {
-            passed_count: passed,
-            failed_count: failed,
-            ignored_count: ignored,
-            raw_stdout: stdout.to_string(),
-            raw_stderr: String::new(),
+            passed_count: parsed.passed_count,
+            failed_count: parsed.failed_count,
+            ignored_count: parsed.skipped_count,
+            raw_stdout: parsed.raw_stdout,
+            raw_stderr: parsed.raw_stderr,
         }
-    }
-
-    fn extract_num_before(line: &str, marker: &str) -> Option<usize> {
-        let parts: Vec<&str> = line.split_whitespace().collect();
-        for (i, &word) in parts.iter().enumerate() {
-            if word.starts_with(marker) && i > 0 {
-                let num_str = parts[i - 1].trim_matches(|c: char| !c.is_numeric());
-                return num_str.parse().ok();
-            }
-        }
-        None
     }
 }
 
