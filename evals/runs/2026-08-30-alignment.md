@@ -64,6 +64,8 @@ fixtures listed below.
 | EVAL-048 | Focused final regression: 15 Core cognitive-cycle tests, 4 persistence/process-crash tests, 8 ACCP ontology tests, credential-aware OpenCode live tests, and `cargo fmt --all -- --check` | PASS: all focused suites and format check pass; live provider tests explicitly skip because credentials are absent. |
 | EVAL-049 | `cargo test --workspace --all-targets --locked --quiet` | PASS: lockfile-constrained all-target workspace regression passes with exit code 0. |
 | EVAL-050 | Focused follow-up: Praxis (13 unit + 2 integration), Runtime (4 boundary), Repository (2 census), and normal workspace clippy | PASS: all focused subsystem tests and `cargo clippy --workspace -- -D warnings` pass. |
+| EVAL-051 | Final gate after minimum end time: `cargo test --workspace --quiet`; normal and all-target `cargo clippy --workspace -- -D warnings`; `cargo fmt --all -- --check`; `git diff --check` | PASS: every final gate exits 0 at `2026-08-30T23:25:25.4550849+03:00`, with a clean working tree. |
+| EVAL-052 | `cargo test --workspace --doc --locked --quiet` | PASS: lockfile-constrained workspace documentation tests pass. |
 
 ## Atomic milestones
 
@@ -96,6 +98,7 @@ fixtures listed below.
 - `55fd77d` — focused final regression and rustfmt compliance.
 - `pending` — lockfile-constrained all-target workspace regression (to be committed after final gate).
 - `pending` — focused Praxis/Runtime/Repository regression and normal workspace clippy (to be committed after final gate).
+- `pending` — final post-timebox workspace, clippy, format, diff, and doc-test gates (to be committed after final gate).
 
 ## Interpretation and remaining limits
 
