@@ -407,6 +407,17 @@ async fn direct_completion_event_requires_closed_obligations() {
         })
         .await
         .unwrap();
+    let foreign_task = harness
+        .record_event(NoesisEvent::CompletionAccepted {
+            task_id: TaskId::new(),
+            final_receipt: receipt.receipt_id.clone(),
+            timestamp: Utc::now(),
+        })
+        .await;
+    assert!(matches!(
+        foreign_task,
+        Err(RivetError::SemanticViolation(_))
+    ));
     let rejected = harness
         .record_event(NoesisEvent::CompletionAccepted {
             task_id: harness.task_id.clone(),

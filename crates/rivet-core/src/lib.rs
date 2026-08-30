@@ -756,7 +756,16 @@ impl HarnessCore {
                     ));
                 }
             }
-            NoesisEvent::CompletionAccepted { final_receipt, .. } => {
+            NoesisEvent::CompletionAccepted {
+                task_id,
+                final_receipt,
+                ..
+            } => {
+                if task_id != &self.task_id {
+                    return Err(RivetError::SemanticViolation(
+                        "completion acceptance is bound to the active Harness task".into(),
+                    ));
+                }
                 let verified = hard
                     .verification_receipts
                     .values()
