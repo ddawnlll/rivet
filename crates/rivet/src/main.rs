@@ -8,8 +8,10 @@ use rivet_model_genai::GenAiBackend;
 use rivet_repository::CensusRunner;
 use rivet_runtime::Runtime;
 use rivet_store::{HardStateStore, RedbStore};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use tokio::io::{AsyncBufReadExt, BufReader};
 use tracing_subscriber::EnvFilter;
 
 #[derive(Parser)]
@@ -82,9 +84,16 @@ async fn run_chat(target_dir: &Path) -> anyhow::Result<()> {
     let store: Arc<dyn HardStateStore> = Arc::new(RedbStore::open(state_dir.join("state.redb"))?);
     let model = Arc::new(GenAiBackend::new());
     let runtime = Arc::new(Runtime::new(target_dir));
-    let harness = HarnessCore::open(store, model, runtime).await?;
+    let repository_id = target_dir
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .unwrap_or("rivet");
+    let harness = HarnessCore::open(store, model, runtime)
+        .await?
+        .with_repository_id(repository_id);
 
-    let census = CensusRunner::run_census(target_dir).await?;
+    let census = CensusRunner::run_census(&target_dir).await?;
     let frontier = census.active_paths(64);
     harness.set_relevant_files(frontier.clone()).await;
     println!(
@@ -94,12 +103,26 @@ async fn run_chat(target_dir: &Path) -> anyhow::Result<()> {
         census.deferred_count
     );
 
-    let prompt = "Explain repository status and structure.";
-    println!("\n💬 Prompt: {}", prompt);
-    let response = harness.step("Understand repository baseline", prompt).await;
-    match response {
-        Ok(resp) => println!("\n🤖 Rivet Response:\n{}", resp),
-        Err(e) => println!("\n⚠️ Model/session error: {}", e),
+    println!("\n💬 Interactive session. Type :quit to exit.");
+    let stdin = tokio::io::stdin();
+    let mut lines = BufReader::new(stdin).lines();
+    loop {
+        print!("\nrivet> ");
+        std::io::stdout().flush()?;
+        let Some(line) = lines.next_line().await? else {
+            break;
+        };
+        let prompt = line.trim();
+        if matches!(prompt, ":quit" | ":q" | "exit") {
+            break;
+        }
+        if prompt.is_empty() {
+            continue;
+        }
+        match harness.step("Repository engineering session", prompt).await {
+            Ok(response) => println!("\n🤖 Rivet Response:\n{}", response),
+            Err(error) => println!("\n⚠️ Model/session error: {}", error),
+        }
     }
     Ok(())
 }
