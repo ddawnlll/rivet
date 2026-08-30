@@ -196,7 +196,7 @@ remaining_gaps:
     priority: "P1"
     title: "Revision-domain and repository snapshot invalidation"
     status: "IN_PROGRESS"
-    evidence: "Action, verification, task, and completion paths enforce state/repository scopes; verification and authoritative events require known obligations, closure requires a recorded PASS, and direct completion requires all obligations closed; automatic repository snapshot change detection and dependent claim invalidation are not yet wired."
+    evidence: "Action, verification, task, and completion paths enforce state/repository scopes; verification and authoritative events require known obligations, public verification is cycle-serialized, closure requires a recorded PASS, and direct completion requires all obligations closed; automatic repository snapshot change detection and dependent claim invalidation are not yet wired."
   - id: "RG-005"
     priority: "P1"
     title: "Crash-level persistence recovery proof"

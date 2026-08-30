@@ -696,6 +696,51 @@ async fn failed_praxis_verification_keeps_obligation_open() {
 }
 
 #[tokio::test]
+async fn concurrent_verifications_are_serialized_before_execution() {
+    let harness = Arc::new(HarnessCore::new(
+        Arc::new(MemoryStore::new()),
+        Arc::new(ScriptedModelBackend::new(vec![])),
+        Arc::new(Runtime::new(env!("CARGO_MANIFEST_DIR"))),
+    ));
+    let obligation_id = ObligationId::new();
+    harness
+        .record_event(NoesisEvent::ObligationCreated {
+            obligation_id: obligation_id.clone(),
+            description: "concurrent verification must serialize".into(),
+            scope: Scope::global("rivet", Revision::ZERO),
+            timestamp: Utc::now(),
+        })
+        .await
+        .unwrap();
+    let revision = harness.hard_state.lock().await.revision;
+    let request = accp::VerificationRequest {
+        obligation_id,
+        predicate: "cargo test -p praxis --lib".into(),
+        target_scope: Scope::global("rivet", revision),
+        timeout_seconds: 120,
+        timestamp: Utc::now(),
+    };
+    let (first, second) = tokio::join!(
+        harness.run_verification(request.clone()),
+        harness.run_verification(request)
+    );
+    assert!(first.is_ok() ^ second.is_ok());
+    let error = match (first, second) {
+        (Err(error), _) | (_, Err(error)) => error,
+        _ => unreachable!("one same-revision verification must become stale"),
+    };
+    assert!(
+        error
+            .to_string()
+            .contains("current repository or state revision")
+    );
+    assert_eq!(
+        harness.hard_state.lock().await.verification_receipts.len(),
+        1
+    );
+}
+
+#[tokio::test]
 async fn full_verity_pipeline_is_admitted_as_scoped_harness_verification() {
     let tmp_dir = tempfile::tempdir().unwrap();
     let store = Arc::new(MemoryStore::new());

@@ -475,8 +475,16 @@ impl HarnessCore {
         &self,
         request: VerificationRequest,
     ) -> RivetResult<accp::VerificationReceipt> {
+        let _cycle_guard = self.cycle_lock.lock().await;
+        self.set_phase(RunPhase::Verifying).await;
         let current_revision = self.hard_state.lock().await.revision;
-        self.run_verification_at(request, current_revision).await
+        let result = self.run_verification_at(request, current_revision).await;
+        if result.is_err() {
+            self.set_phase(RunPhase::Failed).await;
+        } else {
+            self.set_phase(RunPhase::Idle).await;
+        }
+        result
     }
 
     /// Run the canonical Praxis Verity pipeline behind the Harness boundary.
