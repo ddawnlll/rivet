@@ -41,6 +41,7 @@ fixtures listed below.
 | EVAL-025 | `cargo test -p accp --test accp_invariants_test` plus `cargo clippy -p accp --tests -- -D warnings` | PASS: 8 ontology tests; every current VIEW/QUERY/PROPOSAL/DECISION/RECEIPT/SIGNAL carrier round-trips through canonical JSON with family/kind/scope/revision preserved. |
 | EVAL-026 | `cargo test -p noesis; cargo test -p rivet-repository; cargo test -p rivet-core --test cognitive_cycle_test; cargo clippy --workspace -- -D warnings` | PASS: directory-level census signals reach CognitiveView as non-authoritative context; 6 Noesis, 2 repository, 10 Core tests and workspace clippy pass. |
 | EVAL-027 | `cargo test -p rivet-repository; cargo test -p noesis; cargo test -p rivet-core --test cognitive_cycle_test; cargo clippy --workspace -- -D warnings` | PASS after repository-signal wiring; directory counts/bytes and deferred high-volume signals are bounded to CognitiveView and all targeted tests plus workspace clippy pass. |
+| EVAL-028 | `cargo test -p rivet-core --test cognitive_cycle_test` after unknown-obligation enforcement | PASS: 11 Core tests; verification rejects unknown obligations before command execution, and the end-to-end fixture now creates and verifies a real obligation before completion. |
 
 ## Atomic milestones
 
@@ -53,6 +54,7 @@ fixtures listed below.
 - `4e4ad0e` — child-process crash recovery test and updated persistence gap tracking.
 - `4c088f7` — ACCP carrier round-trip fixtures and schema gap tracking.
 - `76e9710` — hierarchical census summaries and CognitiveView repository-signal wiring.
+- `pending` — known-obligation verification enforcement and corrected end-to-end completion fixture (to be committed after final gate).
 
 ## Interpretation and remaining limits
 

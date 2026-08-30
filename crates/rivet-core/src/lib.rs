@@ -528,6 +528,7 @@ impl HarnessCore {
                 "Verity request is outside the current repository or state revision".into(),
             ));
         }
+        self.ensure_known_obligation(&request.obligation_id).await?;
         let request_message = AccpMessage::VerificationRequest(request.clone());
         AccpEnvelope::from_message(
             format!("verity-verification-{}", request.obligation_id),
@@ -615,6 +616,7 @@ impl HarnessCore {
                 "Verification request is outside the current repository or state revision".into(),
             ));
         }
+        self.ensure_known_obligation(&request.obligation_id).await?;
         let mut parts = request.predicate.split_whitespace();
         let Some(program) = parts.next() else {
             return Err(RivetError::VerificationFailed(
@@ -686,6 +688,18 @@ impl HarnessCore {
             }
         }
         Ok(receipt)
+    }
+
+    async fn ensure_known_obligation(&self, obligation_id: &ObligationId) -> RivetResult<()> {
+        let hard = self.hard_state.lock().await;
+        if hard.obligations.contains_key(obligation_id)
+            || hard.closed_obligations.contains_key(obligation_id)
+        {
+            return Ok(());
+        }
+        Err(RivetError::SemanticViolation(format!(
+            "verification request references unknown obligation {obligation_id}"
+        )))
     }
 
     /// Append and materialize one event in a single Harness ordering point.

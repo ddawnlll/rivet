@@ -130,6 +130,17 @@ async fn test_end_to_end_cognitive_cycle() {
     // A real Praxis run is required before completion. Use a second Harness
     // with the repository runtime so the test exercises Runtime -> Praxis ->
     // Noesis rather than inserting a fake receipt.
+    let obligation_id = ObligationId::new();
+    let obligation_revision = harness.hard_state.lock().await.revision;
+    harness
+        .record_event(NoesisEvent::ObligationCreated {
+            obligation_id: obligation_id.clone(),
+            description: "the repository verification must pass".into(),
+            scope: Scope::global("rivet", obligation_revision),
+            timestamp: Utc::now(),
+        })
+        .await
+        .unwrap();
     let verifier = HarnessCore::open(
         store.clone(),
         Arc::new(ScriptedModelBackend::new(vec![])),
@@ -140,7 +151,7 @@ async fn test_end_to_end_cognitive_cycle() {
     let verification_revision = verifier.hard_state.lock().await.revision;
     let verification = verifier
         .run_verification(accp::VerificationRequest {
-            obligation_id: ObligationId::new(),
+            obligation_id,
             predicate: "cargo test -p praxis --lib".into(),
             target_scope: Scope::global("rivet", verification_revision),
             timeout_seconds: 120,
@@ -318,10 +329,20 @@ async fn verification_cannot_escape_the_exposed_test_runner_capability() {
         Arc::new(ScriptedModelBackend::new(vec![])),
         Arc::new(Runtime::new(directory.path())),
     );
+    let obligation_id = ObligationId::new();
+    harness
+        .record_event(NoesisEvent::ObligationCreated {
+            obligation_id: obligation_id.clone(),
+            description: "capability boundary".into(),
+            scope: Scope::global("rivet", Revision::ZERO),
+            timestamp: Utc::now(),
+        })
+        .await
+        .unwrap();
     let revision = harness.hard_state.lock().await.revision;
     let result = harness
         .run_verification(accp::VerificationRequest {
-            obligation_id: ObligationId::new(),
+            obligation_id,
             predicate: "powershell Write-Output unsafe".into(),
             target_scope: Scope::global("rivet", revision),
             timeout_seconds: 5,
@@ -329,6 +350,28 @@ async fn verification_cannot_escape_the_exposed_test_runner_capability() {
         })
         .await;
     assert!(matches!(result, Err(RivetError::AuthorityDenied(_))));
+}
+
+#[tokio::test]
+async fn verification_cannot_mint_an_unknown_obligation() {
+    let directory = tempfile::tempdir().unwrap();
+    let harness = HarnessCore::new(
+        Arc::new(MemoryStore::new()),
+        Arc::new(ScriptedModelBackend::new(vec![])),
+        Arc::new(Runtime::new(directory.path())),
+    );
+    let revision = harness.hard_state.lock().await.revision;
+    let result = harness
+        .run_verification(accp::VerificationRequest {
+            obligation_id: ObligationId::new(),
+            predicate: "cargo --version".into(),
+            target_scope: Scope::global("rivet", revision),
+            timeout_seconds: 30,
+            timestamp: Utc::now(),
+        })
+        .await;
+    let error = result.expect_err("unknown obligations must be rejected before execution");
+    assert!(error.to_string().contains("unknown obligation"));
 }
 
 #[tokio::test]
