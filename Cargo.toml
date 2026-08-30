@@ -14,6 +14,7 @@ members = [
     "crates/rivet-core",
     "crates/rivet",
     "crates/rivet-eval",
+    "crates/rivet-model-rig",
 ]
 
 [workspace.package]
@@ -32,9 +33,13 @@ hephaestus = { path = "crates/hephaestus" }
 rivet-store = { path = "crates/rivet-store" }
 rivet-model = { path = "crates/rivet-model" }
 rivet-model-genai = { path = "crates/rivet-model-genai" }
+rivet-model-rig = { path = "crates/rivet-model-rig" }
 rivet-runtime = { path = "crates/rivet-runtime" }
 rivet-repository = { path = "crates/rivet-repository" }
 rivet-core = { path = "crates/rivet-core" }
+
+# Rig LLM Framework
+rig = { package = "rig-core", version = "0.42" }
 
 # Common runtime & utilities
 tokio = { version = "1.44", features = ["full"] }

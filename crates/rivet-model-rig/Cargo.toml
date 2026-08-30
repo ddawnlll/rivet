@@ -1,0 +1,23 @@
+[package]
+name = "rivet-model-rig"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+rivet-types = { workspace = true }
+rivet-model = { workspace = true }
+accp = { workspace = true }
+noesis = { workspace = true }
+rig = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+async-trait = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

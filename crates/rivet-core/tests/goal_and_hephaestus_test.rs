@@ -52,7 +52,7 @@ async fn test_goal_compiler_and_hephaestus_reframing_loop() {
         .unwrap()
         .clone();
 
-    for _ in 0..3 {
+    for i in 0..3 {
         let current_rev = harness.hard_state.lock().await.revision;
         let failing_req = VerificationRequest {
             obligation_id: oblg_id.clone(),

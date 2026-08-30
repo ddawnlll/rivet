@@ -15,6 +15,7 @@ rivet-core = { workspace = true }
 rivet-store = { workspace = true }
 rivet-model = { workspace = true }
 rivet-model-genai = { workspace = true }
+rivet-model-rig = { workspace = true }
 rivet-runtime = { workspace = true }
 rivet-repository = { workspace = true }
 noesis = { workspace = true }
