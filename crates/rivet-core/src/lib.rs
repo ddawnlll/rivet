@@ -47,6 +47,7 @@ pub struct HarnessCore {
     pub runtime: Arc<Runtime>,
     repository_id: String,
     relevant_files: Arc<Mutex<Vec<String>>>,
+    cycle_lock: Arc<Mutex<()>>,
 }
 
 impl HarnessCore {
@@ -112,6 +113,7 @@ impl HarnessCore {
             runtime,
             repository_id: std::env::var("RIVET_REPOSITORY_ID").unwrap_or_else(|_| "rivet".into()),
             relevant_files: Arc::new(Mutex::new(Vec::new())),
+            cycle_lock: Arc::new(Mutex::new(())),
         }
     }
 
@@ -135,12 +137,20 @@ impl HarnessCore {
             .map(|(id, description)| format!("{id}: {description}"))
             .collect();
         open_obligations.sort();
+        let mut recent_evidence: Vec<_> = hard
+            .evidence
+            .iter()
+            .map(|(id, summary)| format!("{id}: {summary}"))
+            .collect();
+        recent_evidence.sort();
+        recent_evidence.truncate(32);
 
         CognitiveView {
             hard_revision: hard.revision,
             goal_description: goal.to_string(),
             active_claims,
             open_obligations,
+            recent_evidence,
             unknowns: soft.unknowns.clone(),
             active_hypotheses: soft.hypotheses.clone(),
             active_focus: soft.active_focus.clone(),
@@ -153,7 +163,19 @@ impl HarnessCore {
     /// Execute one model turn while preserving the proposal/execution,
     /// evidence/verification and completion boundaries.
     pub async fn step(&self, goal: &str, user_prompt: &str) -> RivetResult<String> {
+        let _cycle_guard = self.cycle_lock.lock().await;
         let view = self.compile_view(goal).await;
+        let view_message = AccpMessage::View(accp::ViewMessage {
+            kind: "COGNITIVE".into(),
+            payload: serde_json::to_value(&view)
+                .map_err(|error| RivetError::Serialization(error.to_string()))?,
+        });
+        AccpEnvelope::from_message(
+            format!("view-{}-{}", self.task_id, view.hard_revision),
+            accp::ActorRole::Harness,
+            &view_message,
+        )?
+        .validate_direction()?;
         let model_id = std::env::var("RIVET_MODEL_ID")
             .unwrap_or_else(|_| "muse-spark-1.2-contributor-free".into());
         let view_revision = view.hard_revision;
@@ -464,6 +486,44 @@ impl HarnessCore {
     /// Append and materialize one event in a single Harness ordering point.
     pub async fn record_event(&self, event: NoesisEvent) -> RivetResult<Revision> {
         let mut hard = self.hard_state.lock().await;
+        match &event {
+            NoesisEvent::ClaimAsserted {
+                status: EpistemicStatus::Verified,
+                ..
+            }
+            | NoesisEvent::ClaimStatusChanged {
+                new_status: EpistemicStatus::Verified,
+                ..
+            } => {
+                return Err(RivetError::SemanticViolation(
+                    "Harness cannot admit VERIFIED claim status without a Praxis promotion path"
+                        .into(),
+                ));
+            }
+            NoesisEvent::ObligationClosed { receipt_id, .. } => {
+                let verified = hard
+                    .verification_receipts
+                    .values()
+                    .any(|receipt| receipt.receipt_id == *receipt_id && receipt.passed);
+                if !verified {
+                    return Err(RivetError::VerificationFailed(
+                        "obligation closure requires a recorded passing Praxis receipt".into(),
+                    ));
+                }
+            }
+            NoesisEvent::CompletionAccepted { final_receipt, .. } => {
+                let verified = hard
+                    .verification_receipts
+                    .values()
+                    .any(|receipt| receipt.receipt_id == *final_receipt && receipt.passed);
+                if !verified {
+                    return Err(RivetError::VerificationFailed(
+                        "completion acceptance requires a recorded passing Praxis receipt".into(),
+                    ));
+                }
+            }
+            _ => {}
+        }
         let expected = hard.revision.next();
         let revision = self.store.append_event(&event).await?;
         if revision != expected {

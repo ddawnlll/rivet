@@ -79,7 +79,7 @@ async fn identical_action_identity_returns_prior_receipt_without_reexecution() {
     let retry = proposal(
         "file.write",
         "value.txt",
-        serde_json::json!({ "content": "second must not win" }),
+        serde_json::json!({ "content": "first" }),
         "same-action",
     );
     let retry_receipt = runtime.execute_action(&retry).await.unwrap();
@@ -90,6 +90,38 @@ async fn identical_action_identity_returns_prior_receipt_without_reexecution() {
             .unwrap(),
         "first"
     );
+
+    let conflicting_retry = proposal(
+        "file.write",
+        "value.txt",
+        serde_json::json!({ "content": "second must be rejected" }),
+        "same-action",
+    );
+    assert!(matches!(
+        runtime.execute_action(&conflicting_retry).await,
+        Err(RivetError::Runtime(message)) if message.contains("reused")
+    ));
+}
+
+#[tokio::test]
+async fn large_utf8_observation_is_truncated_on_a_character_boundary() {
+    let directory = tempfile::tempdir().unwrap();
+    tokio::fs::write(directory.path().join("unicode.txt"), "é".repeat(40_000))
+        .await
+        .unwrap();
+    let runtime = Runtime::new(directory.path());
+    let read = proposal(
+        "file.read",
+        "unicode.txt",
+        serde_json::json!({}),
+        "unicode-read",
+    );
+    let receipt = runtime.execute_action(&read).await.unwrap();
+    assert!(receipt.success);
+    assert_eq!(receipt.observations["truncated"], true);
+    let observed = receipt.observations["content"].as_str().unwrap();
+    assert!(observed.is_char_boundary(observed.len()));
+    assert!(observed.len() <= 64 * 1024);
 }
 
 #[tokio::test]

@@ -25,6 +25,7 @@ async fn opencode_zen_real_backend_smoke_test_when_configured() {
             goal_description: "Provider connectivity smoke test".into(),
             active_claims: vec![],
             open_obligations: vec![],
+            recent_evidence: vec![],
             unknowns: vec![],
             active_hypotheses: vec![],
             active_focus: vec![],

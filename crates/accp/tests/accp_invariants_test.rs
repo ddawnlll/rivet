@@ -160,3 +160,27 @@ fn envelope_rejects_ontology_mismatch_and_non_object_payloads() {
     envelope.payload = serde_json::json!("model prose");
     assert!(envelope.validate_direction().is_err());
 }
+
+#[test]
+fn family_direction_supports_view_and_query_without_confusing_authority() {
+    let view = AccpMessage::View(ViewMessage {
+        kind: "COGNITIVE".into(),
+        payload: serde_json::json!({ "goal": "inspect" }),
+    });
+    let view_from_harness =
+        AccpEnvelope::from_message("view-1", ActorRole::Harness, &view).unwrap();
+    assert!(view_from_harness.validate_direction().is_ok());
+    let view_from_controller =
+        AccpEnvelope::from_message("view-2", ActorRole::CognitiveController, &view).unwrap();
+    assert!(view_from_controller.validate_direction().is_err());
+
+    let query = AccpMessage::Query(QueryMessage {
+        kind: "ARTIFACT".into(),
+        selector: serde_json::json!({ "path": "src/lib.rs" }),
+        purpose: "resolve implementation context".into(),
+        scope: Scope::global("rivet", Revision::ZERO),
+    });
+    let query_from_controller =
+        AccpEnvelope::from_message("query-1", ActorRole::CognitiveController, &query).unwrap();
+    assert!(query_from_controller.validate_direction().is_ok());
+}

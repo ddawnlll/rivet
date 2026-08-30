@@ -168,10 +168,37 @@ pub struct CompletionDecision {
     pub timestamp: DateTime<Utc>,
 }
 
+/// Typed carriers for the six-family wire ontology. Their payload remains an
+/// opaque JSON object to ACCP; semantic interpretation belongs to the owning
+/// subsystem and never to provider prose.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ViewMessage {
+    pub kind: String,
+    pub payload: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QueryMessage {
+    pub kind: String,
+    pub selector: serde_json::Value,
+    pub purpose: String,
+    pub scope: Scope,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SignalMessage {
+    pub kind: String,
+    pub subject_ref: Option<String>,
+    pub reason: String,
+    pub scope: Option<Scope>,
+}
+
 /// All 9 Normative ACCP 3.0 Message Classes
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "class", content = "payload", rename_all = "snake_case")]
 pub enum AccpMessage {
+    View(ViewMessage),
+    Query(QueryMessage),
     ActionProposal(ActionProposal),
     ActionDecision(ActionDecision),
     ExecutionReceipt(ExecutionReceipt),
@@ -181,21 +208,27 @@ pub enum AccpMessage {
     StateTransitionProposal(StateTransitionProposal),
     CompletionProposal(CompletionProposal),
     CompletionDecision(CompletionDecision),
+    Signal(SignalMessage),
 }
 
 impl AccpMessage {
     /// Return the normative family/kind pair without relying on provider text.
-    pub fn family_kind(&self) -> (MessageFamily, &'static str) {
+    pub fn family_kind(&self) -> (MessageFamily, String) {
         match self {
-            Self::ActionProposal(_) => (MessageFamily::Proposal, "ACTION"),
-            Self::ActionDecision(_) => (MessageFamily::Decision, "ACTION"),
-            Self::ExecutionReceipt(_) => (MessageFamily::Receipt, "EXECUTION"),
-            Self::ClaimProposal(_) => (MessageFamily::Proposal, "CLAIM"),
-            Self::VerificationRequest(_) => (MessageFamily::Proposal, "VERIFICATION"),
-            Self::VerificationReceipt(_) => (MessageFamily::Receipt, "VERIFICATION"),
-            Self::StateTransitionProposal(_) => (MessageFamily::Proposal, "STATE_TRANSITION"),
-            Self::CompletionProposal(_) => (MessageFamily::Proposal, "COMPLETION"),
-            Self::CompletionDecision(_) => (MessageFamily::Decision, "COMPLETION"),
+            Self::View(message) => (MessageFamily::View, message.kind.clone()),
+            Self::Query(message) => (MessageFamily::Query, message.kind.clone()),
+            Self::ActionProposal(_) => (MessageFamily::Proposal, "ACTION".into()),
+            Self::ActionDecision(_) => (MessageFamily::Decision, "ACTION".into()),
+            Self::ExecutionReceipt(_) => (MessageFamily::Receipt, "EXECUTION".into()),
+            Self::ClaimProposal(_) => (MessageFamily::Proposal, "CLAIM".into()),
+            Self::VerificationRequest(_) => (MessageFamily::Proposal, "VERIFICATION".into()),
+            Self::VerificationReceipt(_) => (MessageFamily::Receipt, "VERIFICATION".into()),
+            Self::StateTransitionProposal(_) => {
+                (MessageFamily::Proposal, "STATE_TRANSITION".into())
+            }
+            Self::CompletionProposal(_) => (MessageFamily::Proposal, "COMPLETION".into()),
+            Self::CompletionDecision(_) => (MessageFamily::Decision, "COMPLETION".into()),
+            Self::Signal(message) => (MessageFamily::Signal, message.kind.clone()),
         }
     }
 }
@@ -319,7 +352,14 @@ fn kind_is_valid_for_family(family: MessageFamily, kind: &str) -> bool {
             "VERIFICATION",
             "STATE_TRANSITION",
         ],
-        MessageFamily::Signal => &["INVALIDATION", "CONTRADICTION", "REPLAN", "LIFECYCLE"],
+        MessageFamily::Signal => &[
+            "STALE_STATE",
+            "CONTRADICTION",
+            "REPLAN_REQUIRED",
+            "BUDGET",
+            "CANCELLATION",
+            "LIFECYCLE",
+        ],
     };
     core_kinds.contains(&kind) || kind.starts_with("EXT_")
 }

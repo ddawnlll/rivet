@@ -107,7 +107,9 @@ impl CensusRunner {
             for entry in children.into_iter().rev() {
                 let path = entry.path();
                 let file_name = entry.file_name().to_string_lossy().to_string();
-                if file_name.starts_with('.') && file_name != ".gitignore" {
+                if file_name.starts_with('.')
+                    && !matches!(file_name.as_str(), ".gitignore" | ".github")
+                {
                     continue;
                 }
                 let relative_path = relative_path(&root, &path);

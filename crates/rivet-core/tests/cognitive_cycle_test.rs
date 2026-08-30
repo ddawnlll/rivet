@@ -97,6 +97,16 @@ async fn test_end_to_end_cognitive_cycle() {
         assert_eq!(soft.hypotheses.len(), 1);
         assert_eq!(soft.hypotheses[0], "File hello.txt contains greeting");
     }
+    harness
+        .set_relevant_files(vec!["src/lib.rs".into(), "src/lib.rs".into()])
+        .await;
+    let view = harness.compile_view("Create greeting file").await;
+    assert_eq!(view.relevant_files, vec!["src/lib.rs"]);
+    assert!(view
+        .recent_evidence
+        .iter()
+        .any(|evidence| evidence.contains("Wrote")));
+    assert!(!view.format_prompt_block().contains("Please create hello.txt"));
 
     // A real Praxis run is required before completion. Use a second Harness
     // with the repository runtime so the test exercises Runtime -> Praxis ->
@@ -318,4 +328,87 @@ async fn verification_scope_is_bound_to_the_harness_repository() {
         })
         .await;
     assert!(matches!(result, Err(RivetError::SemanticViolation(_))));
+}
+
+#[tokio::test]
+async fn harness_rejects_unverified_authoritative_state_injection() {
+    let directory = tempfile::tempdir().unwrap();
+    let harness = HarnessCore::new(
+        Arc::new(MemoryStore::new()),
+        Arc::new(ScriptedModelBackend::new(vec![])),
+        Arc::new(Runtime::new(directory.path())),
+    );
+    let claim_result = harness
+        .record_event(NoesisEvent::ClaimAsserted {
+            claim_id: ClaimId::new(),
+            proposition: "model prose is truth".into(),
+            status: EpistemicStatus::Verified,
+            evidence: vec![],
+            scope: Scope::global("rivet", Revision::ZERO),
+            timestamp: Utc::now(),
+        })
+        .await;
+    assert!(matches!(
+        claim_result,
+        Err(RivetError::SemanticViolation(_))
+    ));
+
+    let obligation_id = ObligationId::new();
+    harness
+        .record_event(NoesisEvent::ObligationCreated {
+            obligation_id: obligation_id.clone(),
+            description: "must not close without Praxis".into(),
+            scope: Scope::global("rivet", Revision::ZERO),
+            timestamp: Utc::now(),
+        })
+        .await
+        .unwrap();
+    let close_result = harness
+        .record_event(NoesisEvent::ObligationClosed {
+            obligation_id,
+            receipt_id: ReceiptId::new(),
+            timestamp: Utc::now(),
+        })
+        .await;
+    assert!(matches!(
+        close_result,
+        Err(RivetError::VerificationFailed(_))
+    ));
+}
+
+#[tokio::test]
+async fn concurrent_steps_are_serialized_against_revision_staleness() {
+    let directory = tempfile::tempdir().unwrap();
+    let proposal = ActionProposal {
+        action_id: ActionId::new(),
+        capability: "file.write".into(),
+        target: "serialized.txt".into(),
+        parameters: serde_json::json!({ "content": "one turn" }),
+        estimated_risk: ActionRisk::Material,
+        intent: "serialize concurrent turn".into(),
+        scope: Scope::global("rivet", Revision::ZERO),
+        idempotency_key: None,
+        timestamp: Utc::now(),
+    };
+    let response = ModelResponse {
+        text_content: "write once".into(),
+        actions: vec![CognitiveAction::ToolCall(proposal)],
+        usage: TokenUsage::default(),
+    };
+    let harness = Arc::new(HarnessCore::new(
+        Arc::new(MemoryStore::new()),
+        Arc::new(ScriptedModelBackend::new(vec![response.clone(), response])),
+        Arc::new(Runtime::new(directory.path())),
+    ));
+    let (first, second) = tokio::join!(
+        harness.step("concurrent", "turn one"),
+        harness.step("concurrent", "turn two")
+    );
+    assert!(first.is_ok() ^ second.is_ok());
+    let error = if first.is_err() {
+        first.unwrap_err()
+    } else {
+        second.unwrap_err()
+    };
+    assert!(error.to_string().contains("stale"));
 }

@@ -18,8 +18,14 @@ const MAX_OBSERVATION_BYTES: usize = 64 * 1024;
 
 pub struct Runtime {
     working_dir: PathBuf,
-    executed_actions: Arc<Mutex<HashMap<String, ExecutionReceipt>>>,
+    executed_actions: Arc<Mutex<HashMap<String, CachedAction>>>,
     execution_lock: Arc<Mutex<()>>,
+}
+
+#[derive(Clone)]
+struct CachedAction {
+    fingerprint: String,
+    receipt: ExecutionReceipt,
 }
 
 impl Runtime {
@@ -75,9 +81,19 @@ impl Runtime {
         // otherwise concurrent retries can both pass the cache lookup.
         let _execution_guard = self.execution_lock.lock().await;
         let identity = proposal.idempotency_identity();
+        let fingerprint = action_fingerprint(proposal)?;
         if let Some(previous) = self.executed_actions.lock().await.get(&identity).cloned() {
-            tracing::debug!(action_id = %proposal.action_id, "returning idempotent action receipt");
-            return Ok(previous);
+            if previous.fingerprint == fingerprint {
+                tracing::debug!(
+                    action_id = %proposal.action_id,
+                    "returning idempotent action receipt"
+                );
+                return Ok(previous.receipt);
+            }
+            return Err(RivetError::Runtime(format!(
+                "idempotency key '{}' was reused for a different action",
+                identity
+            )));
         }
 
         let start = Instant::now();
@@ -95,7 +111,11 @@ impl Runtime {
                     Ok(content) => {
                         let truncated = content.len() > MAX_OBSERVATION_BYTES;
                         let observed = if truncated {
-                            content[..MAX_OBSERVATION_BYTES].to_string()
+                            let mut end = MAX_OBSERVATION_BYTES;
+                            while !content.is_char_boundary(end) {
+                                end -= 1;
+                            }
+                            content[..end].to_string()
                         } else {
                             content.clone()
                         };
@@ -211,10 +231,13 @@ impl Runtime {
             execution_duration_ms: start.elapsed().as_millis() as u64,
             timestamp: Utc::now(),
         };
-        self.executed_actions
-            .lock()
-            .await
-            .insert(identity, receipt.clone());
+        self.executed_actions.lock().await.insert(
+            identity,
+            CachedAction {
+                fingerprint,
+                receipt: receipt.clone(),
+            },
+        );
         Ok(receipt)
     }
 
@@ -236,10 +259,13 @@ impl Runtime {
             execution_duration_ms: start.elapsed().as_millis() as u64,
             timestamp: Utc::now(),
         };
-        self.executed_actions
-            .lock()
-            .await
-            .insert(proposal.idempotency_identity(), receipt.clone());
+        self.executed_actions.lock().await.insert(
+            proposal.idempotency_identity(),
+            CachedAction {
+                fingerprint: action_fingerprint(proposal)?,
+                receipt: receipt.clone(),
+            },
+        );
         Ok(receipt)
     }
 
@@ -277,4 +303,16 @@ impl Runtime {
         }
         Ok(candidate)
     }
+}
+
+fn action_fingerprint(proposal: &ActionProposal) -> RivetResult<String> {
+    serde_json::to_string(&serde_json::json!({
+        "capability": proposal.capability,
+        "target": proposal.target,
+        "parameters": proposal.parameters,
+        "estimated_risk": proposal.estimated_risk,
+        "intent": proposal.intent,
+        "scope": proposal.scope,
+    }))
+    .map_err(|error| RivetError::Serialization(error.to_string()))
 }

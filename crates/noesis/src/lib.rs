@@ -321,6 +321,8 @@ pub struct CognitiveView {
     pub goal_description: String,
     pub active_claims: Vec<ClaimRecord>,
     pub open_obligations: Vec<String>,
+    #[serde(default)]
+    pub recent_evidence: Vec<String>,
     pub unknowns: Vec<String>,
     pub active_hypotheses: Vec<String>,
     pub active_focus: Vec<String>,
@@ -359,6 +361,14 @@ impl CognitiveView {
             out.push_str("### OPEN OBLIGATIONS TO VERIFY:\n");
             for o in &self.open_obligations {
                 out.push_str(&format!("- [ ] {}\n", o));
+            }
+            out.push('\n');
+        }
+
+        if !self.recent_evidence.is_empty() {
+            out.push_str("### RECENT AUTHORITATIVE EVIDENCE:\n");
+            for evidence in &self.recent_evidence {
+                out.push_str(&format!("- {evidence}\n"));
             }
             out.push('\n');
         }
