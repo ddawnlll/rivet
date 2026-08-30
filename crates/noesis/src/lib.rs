@@ -20,12 +20,26 @@ pub struct ClaimRecord {
     pub updated_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum InvocationReason {
+    GoalAmbiguity,
+    SemanticDiagnosis,
+    HypothesisConflict,
+    NovelArchitecture,
+    CapabilityDiscoveryFallback,
+    UnexpectedResult,
+    StateContradiction,
+    LongHorizonReframe,
+    ReviewSemantics,
+}
+
 /// Durable, non-semantic accounting record for a model invocation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelInvocationRecord {
     pub invocation_id: ReceiptId,
     pub model_id: String,
-    pub reason: String,
+    pub reason: InvocationReason,
     pub input_tokens: u32,
     pub output_tokens: u32,
     pub latency_ms: u64,
@@ -409,6 +423,16 @@ impl CognitiveView {
             self.model_invocation_count
         ));
 
+        let marker = "\n[view truncated]";
+        let max_bytes = (self.token_budget_hint as usize * 4).max(marker.len());
+        if out.len() > max_bytes {
+            let mut end = max_bytes.saturating_sub(marker.len());
+            while !out.is_char_boundary(end) {
+                end = end.saturating_sub(1);
+            }
+            out.truncate(end);
+            out.push_str(marker);
+        }
         out
     }
 }
@@ -545,5 +569,27 @@ mod tests {
         ]);
         assert!(state.obligations.contains_key(&obligation_id));
         assert!(state.completed_tasks.is_empty());
+    }
+
+    #[test]
+    fn cognitive_view_prompt_obeys_byte_bound_and_utf8_boundary() {
+        let view = CognitiveView {
+            hard_revision: Revision::ZERO,
+            repository_id: "repo".into(),
+            goal_description: "x".repeat(10_000),
+            active_claims: vec![],
+            open_obligations: vec![],
+            recent_evidence: vec![],
+            unknowns: vec![],
+            active_hypotheses: vec![],
+            active_focus: vec![],
+            relevant_files: vec![],
+            token_budget_hint: 64,
+            model_invocation_count: 0,
+        };
+        let prompt = view.format_prompt_block();
+        assert!(prompt.len() <= 64 * 4);
+        assert!(prompt.is_char_boundary(prompt.len()));
+        assert!(prompt.ends_with("[view truncated]"));
     }
 }

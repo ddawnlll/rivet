@@ -193,12 +193,17 @@ fn glob_matches(pattern: &str, value: &str) -> bool {
             }
             match pattern[p] {
                 b'*' => {
-                    dp[p + 1][v] = true;
-                    if v < value.len() {
+                    let recursive = pattern.get(p + 1) == Some(&b'*');
+                    if recursive {
+                        dp[p + 2][v] = true;
+                    } else {
+                        dp[p + 1][v] = true;
+                    }
+                    if v < value.len() && (recursive || value[v] != b'/') {
                         dp[p][v + 1] = true;
                     }
                 }
-                b'?' if v < value.len() => dp[p + 1][v + 1] = true,
+                b'?' if v < value.len() && value[v] != b'/' => dp[p + 1][v + 1] = true,
                 byte if v < value.len() && byte == value[v] => dp[p + 1][v + 1] = true,
                 _ => {}
             }
@@ -265,6 +270,9 @@ mod tests {
         assert!(!scope.allows_path("repo", "tests/lib.rs", Revision(3)));
         assert!(!scope.allows_path("repo", "src/lib.rs", Revision(4)));
         assert!(!scope.allows_path("other", "src/lib.rs", Revision(3)));
+        let shallow = Scope::path("repo", "src/*", Revision(3));
+        assert!(shallow.allows_path("repo", "src/lib.rs", Revision(3)));
+        assert!(!shallow.allows_path("repo", "src/private/lib.rs", Revision(3)));
     }
 
     #[test]

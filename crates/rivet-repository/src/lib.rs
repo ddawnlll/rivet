@@ -274,12 +274,17 @@ fn wildcard_matches(pattern: &str, value: &str) -> bool {
             }
             match pattern[p] {
                 b'*' => {
-                    dp[p + 1][v] = true;
-                    if v < value.len() {
+                    let recursive = pattern.get(p + 1) == Some(&b'*');
+                    if recursive {
+                        dp[p + 2][v] = true;
+                    } else {
+                        dp[p + 1][v] = true;
+                    }
+                    if v < value.len() && (recursive || value[v] != b'/') {
                         dp[p][v + 1] = true;
                     }
                 }
-                b'?' if v < value.len() => dp[p + 1][v + 1] = true,
+                b'?' if v < value.len() && value[v] != b'/' => dp[p + 1][v + 1] = true,
                 byte if v < value.len() && byte == value[v] => dp[p + 1][v + 1] = true,
                 _ => {}
             }

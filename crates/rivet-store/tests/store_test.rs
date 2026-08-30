@@ -63,3 +63,34 @@ async fn test_redb_persistence_and_replay_across_reopen() {
         assert_eq!(events.len(), 2);
     }
 }
+
+#[tokio::test]
+async fn uncheckpointed_events_are_recoverable_from_append_log() {
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let db_path = tmp_dir.path().join("recovery.redb");
+    let claim_id = ClaimId::new();
+    let event = NoesisEvent::ClaimAsserted {
+        claim_id: claim_id.clone(),
+        proposition: "event log survives a stale checkpoint".into(),
+        status: EpistemicStatus::Supported,
+        evidence: vec![],
+        scope: Scope::global("rivet", Revision::ZERO),
+        timestamp: Utc::now(),
+    };
+
+    {
+        let store = RedbStore::open(&db_path).unwrap();
+        assert_eq!(store.append_event(&event).await.unwrap(), Revision(1));
+        // Simulate a process ending after the append and before checkpoint.
+    }
+
+    let reopened = RedbStore::open(&db_path).unwrap();
+    assert!(reopened.load_checkpoint().await.unwrap().is_none());
+    let events = reopened.read_events(Revision::ZERO).await.unwrap();
+    let state = HardState::replay(&events);
+    assert_eq!(state.revision, Revision(1));
+    assert_eq!(
+        state.claims.get(&claim_id).unwrap().proposition,
+        "event log survives a stale checkpoint"
+    );
+}

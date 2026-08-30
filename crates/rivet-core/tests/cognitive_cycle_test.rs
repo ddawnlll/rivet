@@ -2,7 +2,7 @@ use accp::{ActionProposal, ActionRisk};
 use async_trait::async_trait;
 use chrono::Utc;
 use noesis::NoesisEvent;
-use rivet_core::HarnessCore;
+use rivet_core::{HarnessCore, RunPhase};
 use rivet_model::{CognitiveAction, ModelBackend, ModelRequest, ModelResponse, TokenUsage};
 use rivet_runtime::Runtime;
 use rivet_store::{HardStateStore, MemoryStore, RedbStore};
@@ -78,6 +78,7 @@ async fn test_end_to_end_cognitive_cycle() {
         .await
         .unwrap();
     assert!(out1.contains("write hello.txt"));
+    assert_eq!(harness.current_phase().await, RunPhase::Idle);
 
     // Verify file actually written to disk
     let written_content = tokio::fs::read_to_string(tmp_dir.path().join("hello.txt"))
@@ -158,6 +159,7 @@ async fn test_end_to_end_cognitive_cycle() {
         .await
         .unwrap();
     assert!(out2.contains("Task completed"));
+    assert_eq!(completed_harness.current_phase().await, RunPhase::Completed);
 }
 
 #[tokio::test]
@@ -196,6 +198,7 @@ async fn test_completion_rejected_if_obligation_unclosed() {
     assert!(res.is_err());
     let err_msg = res.unwrap_err().to_string();
     assert!(err_msg.contains("obligations remain unverified"));
+    assert_eq!(harness.current_phase().await, RunPhase::Failed);
 
     // Close it only through a real Runtime -> Praxis verification.
     let verifier = HarnessCore::open(
@@ -482,5 +485,44 @@ async fn persisted_action_identity_is_not_reexecuted_after_restart() {
             .await
             .unwrap(),
         "first content"
+    );
+}
+
+#[tokio::test]
+async fn failed_praxis_verification_keeps_obligation_open() {
+    let harness = HarnessCore::new(
+        Arc::new(MemoryStore::new()),
+        Arc::new(ScriptedModelBackend::new(vec![])),
+        Arc::new(Runtime::new(env!("CARGO_MANIFEST_DIR"))),
+    );
+    let obligation_id = ObligationId::new();
+    harness
+        .record_event(NoesisEvent::ObligationCreated {
+            obligation_id: obligation_id.clone(),
+            description: "a failing verification must not close this".into(),
+            scope: Scope::global("rivet", Revision::ZERO),
+            timestamp: Utc::now(),
+        })
+        .await
+        .unwrap();
+    let revision = harness.hard_state.lock().await.revision;
+    let receipt = harness
+        .run_verification(accp::VerificationRequest {
+            obligation_id: obligation_id.clone(),
+            predicate: "cargo test -p package_that_does_not_exist --lib".into(),
+            target_scope: Scope::global("rivet", revision),
+            timeout_seconds: 30,
+            timestamp: Utc::now(),
+        })
+        .await
+        .unwrap();
+    assert!(!receipt.passed);
+    assert!(
+        harness
+            .hard_state
+            .lock()
+            .await
+            .obligations
+            .contains_key(&obligation_id)
     );
 }

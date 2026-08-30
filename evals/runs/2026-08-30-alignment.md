@@ -30,6 +30,9 @@ fixtures listed below.
 | EVAL-014 | `cargo test --workspace` after receipt metadata, persisted idempotency, REPL, and invalidation changes | PASS: all unit, integration, and doc tests. |
 | EVAL-015 | `cargo clippy --workspace -- -D warnings` after the same changes | PASS. |
 | EVAL-016 | `cargo test -p rivet-core --test cognitive_cycle_test` | PASS: 8 tests, including restart idempotency and serialized concurrent steps. |
+| EVAL-017 | `cargo test -p rivet-core --test cognitive_cycle_test` after phase/invalidation additions | PASS: 9 tests, including explicit `RunPhase` outcomes and failed Praxis verification reopening its obligation. |
+| EVAL-018 | `cargo test --workspace` after strict scope matching, prompt bounds, append-log recovery, and phase changes | PASS: all workspace unit, integration, and doc tests. |
+| EVAL-019 | `cargo clippy --workspace -- -D warnings` after the same changes | PASS. |
 
 ## Atomic milestones
 
@@ -37,7 +40,7 @@ fixtures listed below.
 - `1000ccd` — enforce ACCP runtime verification boundaries.
 - `bbcc519` — harden repository and verification boundaries, OpenCode adapter/native stream path, CLI persistence/frontier.
 - `97e68f3` — close state/retry semantic gaps, strict ontology carriers, CognitiveView evidence/repository identity, concurrency and invalidation tests.
-- pending milestone — receipt scope/fingerprint metadata, persisted retry protection, CLI REPL, and recorded evaluation/TASKS gaps (to be committed after final gate).
+- `pending` — strict scope glob semantics, CognitiveView UTF-8/token bounds, append-log recovery, post-completion invalidation, and explicit RunPhase outcomes (to be committed after final gate).
 
 ## Interpretation and remaining limits
 

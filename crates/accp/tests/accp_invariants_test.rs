@@ -155,6 +155,16 @@ fn action_policy_is_scope_revision_and_risk_bound() {
     let decision = AccpSemanticGate::authorize_action(&action, &policy);
     assert_eq!(decision.verdict, ActionDecisionVerdict::Allow);
 
+    let mut shallow = action.clone();
+    shallow.target = "src/private/lib.rs".into();
+    shallow.scope = Scope::path("rivet", "src/*", Revision(4));
+    let shallow_policy = ActionAuthorizationPolicy {
+        allowed_scope: Scope::path("rivet", "src/*", Revision(4)),
+        ..policy.clone()
+    };
+    let decision = AccpSemanticGate::authorize_action(&shallow, &shallow_policy);
+    assert_eq!(decision.verdict, ActionDecisionVerdict::Block);
+
     let mut destructive = action.clone();
     destructive.estimated_risk = ActionRisk::Destructive;
     let decision = AccpSemanticGate::authorize_action(&destructive, &policy);

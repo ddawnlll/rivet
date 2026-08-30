@@ -9,7 +9,9 @@ use accp::{
     AccpEnvelope, AccpMessage, AccpSemanticGate, ActionAuthorizationPolicy, CompletionProposal,
     VerificationRequest,
 };
-use noesis::{CognitiveView, HardState, ModelInvocationRecord, NoesisEvent, SoftWorkspace};
+use noesis::{
+    CognitiveView, HardState, InvocationReason, ModelInvocationRecord, NoesisEvent, SoftWorkspace,
+};
 use praxis::{
     CargoTestParser, GoTestParser, JestParser, ParsedTestReport, PraxisEngine, PytestParser,
     TestRunReport,
@@ -48,6 +50,7 @@ pub struct HarnessCore {
     repository_id: String,
     relevant_files: Arc<Mutex<Vec<String>>>,
     cycle_lock: Arc<Mutex<()>>,
+    phase: Arc<Mutex<RunPhase>>,
 }
 
 impl HarnessCore {
@@ -114,6 +117,7 @@ impl HarnessCore {
             repository_id: std::env::var("RIVET_REPOSITORY_ID").unwrap_or_else(|_| "rivet".into()),
             relevant_files: Arc::new(Mutex::new(Vec::new())),
             cycle_lock: Arc::new(Mutex::new(())),
+            phase: Arc::new(Mutex::new(RunPhase::Idle)),
         }
     }
 
@@ -126,6 +130,14 @@ impl HarnessCore {
     pub fn with_repository_id(mut self, repository_id: impl Into<String>) -> Self {
         self.repository_id = repository_id.into();
         self
+    }
+
+    pub async fn current_phase(&self) -> RunPhase {
+        *self.phase.lock().await
+    }
+
+    async fn set_phase(&self, phase: RunPhase) {
+        *self.phase.lock().await = phase;
     }
 
     /// Compile a bounded, deterministic task-conditioned Cognitive View.
@@ -170,6 +182,17 @@ impl HarnessCore {
     /// evidence/verification and completion boundaries.
     pub async fn step(&self, goal: &str, user_prompt: &str) -> RivetResult<String> {
         let _cycle_guard = self.cycle_lock.lock().await;
+        let result = self.step_inner(goal, user_prompt).await;
+        if result.is_err() {
+            self.set_phase(RunPhase::Failed).await;
+        } else if self.current_phase().await != RunPhase::Completed {
+            self.set_phase(RunPhase::Idle).await;
+        }
+        result
+    }
+
+    async fn step_inner(&self, goal: &str, user_prompt: &str) -> RivetResult<String> {
+        self.set_phase(RunPhase::PreparingView).await;
         let view = self.compile_view(goal).await;
         let view_message = AccpMessage::View(accp::ViewMessage {
             kind: "COGNITIVE".into(),
@@ -182,6 +205,7 @@ impl HarnessCore {
             &view_message,
         )?
         .validate_direction()?;
+        self.set_phase(RunPhase::InvokingModel).await;
         let model_id = std::env::var("RIVET_MODEL_ID")
             .unwrap_or_else(|_| "muse-spark-1.2-contributor-free".into());
         let view_revision = view.hard_revision;
@@ -202,7 +226,7 @@ impl HarnessCore {
             record: ModelInvocationRecord {
                 invocation_id: ReceiptId::new(),
                 model_id,
-                reason: "SEMANTIC_DIAGNOSIS".into(),
+                reason: InvocationReason::SemanticDiagnosis,
                 input_tokens: response.usage.input_tokens,
                 output_tokens: response.usage.output_tokens,
                 latency_ms: invocation_start.elapsed().as_millis() as u64,
@@ -211,12 +235,14 @@ impl HarnessCore {
         })
         .await?;
 
+        self.set_phase(RunPhase::DecodingActions).await;
         for action in response.actions {
             match action {
                 CognitiveAction::Thought(thought) => {
                     tracing::info!("Model thought: {}", thought);
                 }
                 CognitiveAction::ToolCall(proposal) => {
+                    self.set_phase(RunPhase::Authorizing).await;
                     let proposal_message = AccpMessage::ActionProposal(proposal.clone());
                     AccpEnvelope::from_message(
                         proposal.action_id.to_string(),
@@ -272,6 +298,7 @@ impl HarnessCore {
                     .validate_direction()?;
                     AccpSemanticGate::ensure_execution_authorized(&decision)?;
 
+                    self.set_phase(RunPhase::Executing).await;
                     let receipt = self.runtime.execute_action(&proposal).await?;
                     let receipt_message = AccpMessage::ExecutionReceipt(receipt.clone());
                     AccpEnvelope::from_message(
@@ -303,6 +330,7 @@ impl HarnessCore {
                     }
                 }
                 CognitiveAction::VerificationRequest(request) => {
+                    self.set_phase(RunPhase::Verifying).await;
                     let proposal_message = AccpMessage::VerificationRequest(request.clone());
                     AccpEnvelope::from_message(
                         format!("verification-{}", request.obligation_id),
@@ -315,6 +343,7 @@ impl HarnessCore {
                         .await?;
                 }
                 CognitiveAction::ClaimProposal(proposal) => {
+                    self.set_phase(RunPhase::RevisingState).await;
                     let proposal_message = AccpMessage::ClaimProposal(proposal.clone());
                     AccpEnvelope::from_message(
                         format!("claim-{}", proposal.claim_id),
@@ -330,6 +359,7 @@ impl HarnessCore {
                     ));
                 }
                 CognitiveAction::StateTransitionProposal(proposal) => {
+                    self.set_phase(RunPhase::RevisingState).await;
                     let proposal_message = AccpMessage::StateTransitionProposal(proposal.clone());
                     AccpEnvelope::from_message(
                         format!("transition-{}", self.task_id),
@@ -356,6 +386,7 @@ impl HarnessCore {
                     }
                 }
                 CognitiveAction::CompletionRequest { summary } => {
+                    self.set_phase(RunPhase::Verifying).await;
                     let hard = self.hard_state.lock().await;
                     if hard.completed_tasks.contains_key(&self.task_id) {
                         return Err(RivetError::SemanticViolation(
@@ -409,6 +440,7 @@ impl HarnessCore {
                         timestamp: chrono::Utc::now(),
                     })
                     .await?;
+                    self.set_phase(RunPhase::Completed).await;
                     return Ok(format!("Task completed: {summary}"));
                 }
             }
