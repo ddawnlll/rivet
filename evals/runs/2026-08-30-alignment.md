@@ -56,6 +56,7 @@ fixtures listed below.
 | EVAL-040 | `cargo test --workspace --release` after all current changes | PASS: optimized workspace unit, integration, and doc tests; 14 Core, 8 ACCP, 6 Noesis, 4 Runtime, and 4 process-persistence tests pass. |
 | EVAL-041 | `cargo test -p rivet-core --test cognitive_cycle_test` plus `cargo clippy -p rivet-core --tests -- -D warnings` after durable obligation scope enforcement | PASS: 15 Core tests; obligation scopes survive restart and broader repository/path verification scopes are rejected before subprocess execution. |
 | EVAL-042 | `cargo test --workspace` and `cargo clippy --workspace -- -D warnings` after durable obligation scope enforcement | PASS: final debug workspace unit, integration, and doc suite; strict workspace clippy passes. |
+| EVAL-043 | `cargo test --workspace --release` after durable obligation scope enforcement | PASS: optimized final workspace unit, integration, and doc suite; 15 Core tests and process-persistence tests pass. |
 
 ## Atomic milestones
 
@@ -80,7 +81,8 @@ fixtures listed below.
 - `cecc8ca` — obligation scope and receipt identity hardening.
 - `63b5e36` — optimized release workspace regression evidence.
 - `4b8c65e` — durable obligation scope map and path-broadening verification guard.
-- `pending` — final debug workspace regression evidence after durable scope enforcement (to be committed after final gate).
+- `b7d59af` — final debug workspace regression evidence after durable scope enforcement.
+- `pending` — optimized final workspace regression evidence (to be committed after final gate).
 
 ## Interpretation and remaining limits
 
