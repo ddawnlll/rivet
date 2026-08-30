@@ -22,6 +22,7 @@ async fn opencode_zen_real_backend_smoke_test_when_configured() {
         system_prompt: Arc::from("Return a concise plain-text health check."),
         cognitive_view: Arc::new(CognitiveView {
             hard_revision: rivet_types::Revision::ZERO,
+            repository_id: "smoke-test".into(),
             goal_description: "Provider connectivity smoke test".into(),
             active_claims: vec![],
             open_obligations: vec![],

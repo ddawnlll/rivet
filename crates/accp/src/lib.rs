@@ -73,6 +73,18 @@ impl ActionProposal {
             .clone()
             .unwrap_or_else(|| self.action_id.to_string())
     }
+
+    pub fn idempotency_fingerprint(&self) -> RivetResult<String> {
+        serde_json::to_string(&serde_json::json!({
+            "capability": &self.capability,
+            "target": &self.target,
+            "parameters": &self.parameters,
+            "estimated_risk": self.estimated_risk,
+            "intent": &self.intent,
+            "scope": &self.scope,
+        }))
+        .map_err(|error| RivetError::Serialization(error.to_string()))
+    }
 }
 
 /// 2. Action Decision emitted by Authoritative Harness
@@ -90,9 +102,14 @@ pub struct ActionDecision {
 pub struct ExecutionReceipt {
     pub receipt_id: ReceiptId,
     pub action_id: ActionId,
+    pub idempotency_key: String,
+    pub action_fingerprint: String,
     pub capability: String,
     pub success: bool,
     pub exit_code: Option<i32>,
+    pub scope: Scope,
+    pub risk: ActionRisk,
+    pub human_approved: bool,
     pub output_summary: String,
     /// Structured observation produced by the Harness/runtime. Model prose is
     /// never copied into this field as an authoritative receipt.
@@ -260,16 +277,17 @@ impl AccpEnvelope {
         let (family, kind) = message.family_kind();
         let payload = serde_json::to_value(message)
             .map_err(|error| RivetError::Serialization(error.to_string()))?;
+        let (scope, revision) = message_scope_revision(message);
         Ok(Self {
             accp_version: ACCP_VERSION.into(),
             message_id: message_id.into(),
             sender,
             family,
-            kind: kind.into(),
+            kind,
             payload,
             correlation_id: None,
-            scope: None,
-            revision: None,
+            scope,
+            revision,
         })
     }
 
@@ -329,6 +347,36 @@ impl AccpEnvelope {
             )));
         }
         Ok(())
+    }
+}
+
+fn message_scope_revision(message: &AccpMessage) -> (Option<Scope>, Option<Revision>) {
+    match message {
+        AccpMessage::View(_) | AccpMessage::Query(_) | AccpMessage::Signal(_) => (None, None),
+        AccpMessage::ActionProposal(message) => {
+            (Some(message.scope.clone()), Some(message.scope.revision))
+        }
+        AccpMessage::ActionDecision(message) => (
+            Some(message.authorized_scope.clone()),
+            Some(message.authorized_scope.revision),
+        ),
+        AccpMessage::ExecutionReceipt(message) => {
+            (Some(message.scope.clone()), Some(message.scope.revision))
+        }
+        AccpMessage::ClaimProposal(message) => {
+            (Some(message.scope.clone()), Some(message.scope.revision))
+        }
+        AccpMessage::VerificationRequest(message) => (
+            Some(message.target_scope.clone()),
+            Some(message.target_scope.revision),
+        ),
+        AccpMessage::VerificationReceipt(message) => (
+            Some(message.verified_scope.clone()),
+            Some(message.verified_scope.revision),
+        ),
+        AccpMessage::StateTransitionProposal(message) => (None, Some(message.base_revision)),
+        AccpMessage::CompletionProposal(message) => (None, Some(message.base_revision)),
+        AccpMessage::CompletionDecision(_) => (None, None),
     }
 }
 
@@ -439,6 +487,7 @@ impl AccpSemanticGate {
                 &proposal.target,
                 policy.current_revision,
             )
+            || !is_safe_relative_path(&proposal.target)
         {
             return blocked(
                 ActionDecisionVerdict::Block,

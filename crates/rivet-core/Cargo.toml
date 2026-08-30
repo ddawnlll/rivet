@@ -25,3 +25,4 @@ async-trait = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+rivet-model-genai = { workspace = true }

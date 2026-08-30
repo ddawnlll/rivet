@@ -102,11 +102,16 @@ async fn test_end_to_end_cognitive_cycle() {
         .await;
     let view = harness.compile_view("Create greeting file").await;
     assert_eq!(view.relevant_files, vec!["src/lib.rs"]);
-    assert!(view
-        .recent_evidence
-        .iter()
-        .any(|evidence| evidence.contains("Wrote")));
-    assert!(!view.format_prompt_block().contains("Please create hello.txt"));
+    assert!(
+        view.recent_evidence
+            .iter()
+            .any(|evidence| evidence.contains("Wrote"))
+    );
+    assert!(
+        !view
+            .format_prompt_block()
+            .contains("Please create hello.txt")
+    );
 
     // A real Praxis run is required before completion. Use a second Harness
     // with the repository runtime so the test exercises Runtime -> Praxis ->
@@ -392,12 +397,19 @@ async fn concurrent_steps_are_serialized_against_revision_staleness() {
     };
     let response = ModelResponse {
         text_content: "write once".into(),
-        actions: vec![CognitiveAction::ToolCall(proposal)],
+        actions: vec![CognitiveAction::ToolCall(proposal.clone())],
+        usage: TokenUsage::default(),
+    };
+    let mut second_proposal = proposal;
+    second_proposal.action_id = ActionId::new();
+    let second_response = ModelResponse {
+        text_content: "write once".into(),
+        actions: vec![CognitiveAction::ToolCall(second_proposal)],
         usage: TokenUsage::default(),
     };
     let harness = Arc::new(HarnessCore::new(
         Arc::new(MemoryStore::new()),
-        Arc::new(ScriptedModelBackend::new(vec![response.clone(), response])),
+        Arc::new(ScriptedModelBackend::new(vec![response, second_response])),
         Arc::new(Runtime::new(directory.path())),
     ));
     let (first, second) = tokio::join!(
@@ -411,4 +423,64 @@ async fn concurrent_steps_are_serialized_against_revision_staleness() {
         second.unwrap_err()
     };
     assert!(error.to_string().contains("stale"));
+}
+
+#[tokio::test]
+async fn persisted_action_identity_is_not_reexecuted_after_restart() {
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let db_path = tmp_dir.path().join("state.redb");
+    let action_key = "persisted-write";
+    let response = ModelResponse {
+        text_content: "write once".into(),
+        actions: vec![CognitiveAction::ToolCall(ActionProposal {
+            action_id: ActionId::new(),
+            capability: "file.write".into(),
+            target: "persisted.txt".into(),
+            parameters: serde_json::json!({ "content": "first content" }),
+            estimated_risk: ActionRisk::Material,
+            intent: "persist idempotency".into(),
+            scope: Scope::global("rivet", Revision::ZERO),
+            idempotency_key: Some(action_key.into()),
+            timestamp: Utc::now(),
+        })],
+        usage: TokenUsage::default(),
+    };
+    let model = Arc::new(ScriptedModelBackend::new(vec![response.clone(), response]));
+    let store: Arc<dyn HardStateStore> = Arc::new(RedbStore::open(&db_path).unwrap());
+    let harness = HarnessCore::open(
+        store.clone(),
+        model.clone(),
+        Arc::new(Runtime::new(tmp_dir.path())),
+    )
+    .await
+    .unwrap();
+    harness.step("persist action", "write").await.unwrap();
+    assert_eq!(
+        tokio::fs::read_to_string(tmp_dir.path().join("persisted.txt"))
+            .await
+            .unwrap(),
+        "first content"
+    );
+    drop(harness);
+    drop(store);
+
+    let reopened_store: Arc<dyn HardStateStore> = Arc::new(RedbStore::open(&db_path).unwrap());
+    let reopened = HarnessCore::open(
+        reopened_store,
+        model,
+        Arc::new(Runtime::new(tmp_dir.path())),
+    )
+    .await
+    .unwrap();
+    reopened
+        .step("persist action", "retry write")
+        .await
+        .unwrap();
+    assert_eq!(reopened.hard_state.lock().await.execution_receipts.len(), 1);
+    assert_eq!(
+        tokio::fs::read_to_string(tmp_dir.path().join("persisted.txt"))
+            .await
+            .unwrap(),
+        "first content"
+    );
 }

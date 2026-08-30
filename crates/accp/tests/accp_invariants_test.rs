@@ -60,9 +60,14 @@ fn controller_cannot_emit_authoritative_receipt() {
     let receipt = AccpMessage::ExecutionReceipt(ExecutionReceipt {
         receipt_id: ReceiptId::new(),
         action_id: ActionId::new(),
+        idempotency_key: "receipt-key".into(),
+        action_fingerprint: "receipt-fingerprint".into(),
         capability: "file.read".into(),
         success: true,
         exit_code: Some(0),
+        scope: Scope::global("rivet", Revision::ZERO),
+        risk: ActionRisk::Inspect,
+        human_approved: false,
         output_summary: "model says it worked".into(),
         observations: serde_json::json!({}),
         evidence_id: EvidenceId::new(),
@@ -77,6 +82,29 @@ fn controller_cannot_emit_authoritative_receipt() {
         AccpEnvelope::from_message("message-2", ActorRole::Harness, &receipt).unwrap();
     assert!(harness_envelope.validate_direction().is_ok());
     assert_eq!(harness_envelope.accp_version, ACCP_VERSION);
+
+    let action = ActionProposal {
+        action_id: ActionId::new(),
+        capability: "file.read".into(),
+        target: "src/lib.rs".into(),
+        parameters: serde_json::json!({}),
+        estimated_risk: ActionRisk::Inspect,
+        intent: "metadata test".into(),
+        scope: Scope::path("rivet", "src/**", Revision(8)),
+        idempotency_key: None,
+        timestamp: Utc::now(),
+    };
+    let action_envelope = AccpEnvelope::from_message(
+        "action-metadata",
+        ActorRole::CognitiveController,
+        &AccpMessage::ActionProposal(action),
+    )
+    .unwrap();
+    assert_eq!(action_envelope.revision, Some(Revision(8)));
+    assert_eq!(
+        action_envelope.scope.unwrap().path_pattern,
+        Some("src/**".into())
+    );
 }
 
 #[test]
@@ -138,6 +166,21 @@ fn action_policy_is_scope_revision_and_risk_bound() {
     let mut stale = action;
     stale.scope.revision = Revision(3);
     let decision = AccpSemanticGate::authorize_action(&stale, &policy);
+    assert_eq!(decision.verdict, ActionDecisionVerdict::Block);
+
+    let mut traversal = ActionProposal {
+        action_id: ActionId::new(),
+        capability: "file.write".into(),
+        target: "../outside.txt".into(),
+        parameters: serde_json::json!({ "content": "unsafe" }),
+        estimated_risk: ActionRisk::Material,
+        intent: "escape test".into(),
+        scope: Scope::global("rivet", Revision(4)),
+        idempotency_key: None,
+        timestamp: Utc::now(),
+    };
+    traversal.scope = policy.allowed_scope.clone();
+    let decision = AccpSemanticGate::authorize_action(&traversal, &policy);
     assert_eq!(decision.verdict, ActionDecisionVerdict::Block);
 }
 

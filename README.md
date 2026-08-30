@@ -1,6 +1,6 @@
 # Rivet — Generalist Epistemic Software Engineering Agent Runtime
 
-**Status: RESEARCH DRAFT 0.3 · PRE-IMPLEMENTATION / EVIDENCE-BOUND.**
+**Status: EXPERIMENTAL IMPLEMENTATION 0.3 · EVIDENCE-BOUND.**
 
 Rivet couples a frontier LLM (as active cognitive controller) to persistent evidence-bound hard epistemic state (Noesis), a bounded task-conditioned soft workspace, and a cognitive view compiler.
 
@@ -22,6 +22,24 @@ tools/                 # monograph compiler and build tooling
   build_monograph.py   #   monograph compiler
   heads/               #   HTML head templates & styles
 ```
+
+## Running the implementation
+
+```bash
+cargo test --workspace
+cargo clippy --workspace -- -D warnings
+cargo run -p rivet -- census .
+cargo run -p rivet -- .
+```
+
+The CLI stores resumable Hard State under `.rivet/state.redb`, keeps the
+repository census frontier bounded, and accepts `:quit` in the terminal loop.
+The default model adapter uses the OpenCode Zen OpenAI-compatible endpoint when
+`OPENCODE_API_KEY` (or `OPENCODE_ZEN_API_KEY`) is configured; `RIVET_MODEL_ID`
+can select the provider model and defaults to `muse-spark-1.2-contributor-free`.
+
+Alignment test/evaluation evidence is recorded under `evals/runs/`, while
+unimplemented high-priority gaps remain explicit in `TASKS.yaml`.
 
 ## Rebuilding the Monograph
 

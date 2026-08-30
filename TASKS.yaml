@@ -1,6 +1,6 @@
 version: "0.3.0"
 status: "EXECUTION_READY"
-active_phase: 1
+active_phase: 6
 
 rules:
   - "Implement against frozen types in crates/ only"
@@ -171,7 +171,39 @@ tasks:
     title: "Interactive Terminal REPL (rivet)"
     description: "Implement the CLI entrypoint (clap) and interactive chat/work loop."
     crates: ["rivet"]
-    status: "TODO"
+    status: "DONE"
     acceptance_criteria:
       - "rivet . starts interactive session on current directory"
       - "Supports session resume from persistent redb store"
+
+remaining_gaps:
+  - id: "RG-001"
+    priority: "P0"
+    title: "LLM-led hierarchical repository relevance"
+    status: "IN_PROGRESS"
+    evidence: "Deterministic .gitignore-aware census and bounded signal frontier are implemented; model-selected recursive DESCEND/MAYBE/DEFER is not yet wired."
+  - id: "RG-002"
+    priority: "P0"
+    title: "Full Praxis Verity pipeline through Harness verification"
+    status: "TODO"
+    evidence: "Harness VerificationRequest uses Runtime plus real framework parsers and Praxis receipt evaluation; PlanSpec-driven 8-gate VerityPipeline is not yet the completion path."
+  - id: "RG-003"
+    priority: "P0"
+    title: "Credentialed real-provider evaluation"
+    status: "TODO"
+    evidence: "OpenCode/Zen endpoint, invoke, native stream, and credential-aware live tests exist; this environment has no OPENCODE_API_KEY or OPENCODE_ZEN_API_KEY, so no network run was recorded."
+  - id: "RG-004"
+    priority: "P1"
+    title: "Revision-domain and repository snapshot invalidation"
+    status: "IN_PROGRESS"
+    evidence: "Action, verification, task, and completion paths enforce state/repository scopes; automatic repository snapshot change detection and dependent claim invalidation are not yet wired."
+  - id: "RG-005"
+    priority: "P1"
+    title: "Crash-level persistence recovery proof"
+    status: "TODO"
+    evidence: "Redb checkpoint/event replay and restart integration tests pass; a process-crash/kill-and-reopen test remains."
+  - id: "RG-006"
+    priority: "P1"
+    title: "ACCP wire payload schema coverage"
+    status: "IN_PROGRESS"
+    evidence: "Strict 3.0 envelope, producer matrix, family/kind validation, and typed VIEW/QUERY/SIGNAL carriers exist; all normative payload schemas and wire round-trip fixtures remain."

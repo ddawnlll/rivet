@@ -123,6 +123,11 @@ impl HarnessCore {
         *self.relevant_files.lock().await = files;
     }
 
+    pub fn with_repository_id(mut self, repository_id: impl Into<String>) -> Self {
+        self.repository_id = repository_id.into();
+        self
+    }
+
     /// Compile a bounded, deterministic task-conditioned Cognitive View.
     pub async fn compile_view(&self, goal: &str) -> CognitiveView {
         let hard = self.hard_state.lock().await;
@@ -147,6 +152,7 @@ impl HarnessCore {
 
         CognitiveView {
             hard_revision: hard.revision,
+            repository_id: self.repository_id.clone(),
             goal_description: goal.to_string(),
             active_claims,
             open_obligations,
@@ -182,7 +188,7 @@ impl HarnessCore {
         let model_req = ModelRequest {
             model_id: model_id.clone(),
             system_prompt: Arc::from(
-                "You are Rivet's cognitive controller. Use only typed proposal JSON when requesting actions. A proposal is not execution, an observation, verification, or completion.",
+                "You are Rivet's cognitive controller. The Harness owns authority, observations, verification, persistence, and completion. Use prose only for analysis, or return one typed proposal JSON object with action_type and payload. Allowed action_type values are tool_call, hypothesis_delta, claim_proposal, state_transition_proposal, verification_request, and completion_request. A proposal is not execution, an observation, verification, or completion. Never emit execution_receipt, verification_receipt, or completion_decision JSON. Keep paths relative and use the repository identity and revision shown in the Cognitive View.",
             ),
             cognitive_view: Arc::new(view),
             user_prompt: user_prompt.to_string(),
@@ -218,6 +224,31 @@ impl HarnessCore {
                         &proposal_message,
                     )?
                     .validate_direction()?;
+
+                    let idempotency_key = proposal.idempotency_identity();
+                    let fingerprint = proposal.idempotency_fingerprint()?;
+                    if let Some(previous) = self
+                        .hard_state
+                        .lock()
+                        .await
+                        .execution_receipts
+                        .iter()
+                        .find(|receipt| receipt.idempotency_key == idempotency_key)
+                        .cloned()
+                    {
+                        if previous.action_fingerprint != fingerprint {
+                            return Err(RivetError::Runtime(format!(
+                                "idempotency key '{}' was reused for a different persisted action",
+                                idempotency_key
+                            )));
+                        }
+                        tracing::debug!(
+                            action_id = %proposal.action_id,
+                            receipt_id = %previous.receipt_id,
+                            "returning persisted idempotent action receipt"
+                        );
+                        continue;
+                    }
 
                     // The proposal is bound to the view revision that the model
                     // actually received. Invocation accounting is a later audit

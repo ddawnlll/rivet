@@ -1494,6 +1494,7 @@ dependencies = [
  "noesis",
  "praxis",
  "rivet-model",
+ "rivet-model-genai",
  "rivet-repository",
  "rivet-runtime",
  "rivet-store",

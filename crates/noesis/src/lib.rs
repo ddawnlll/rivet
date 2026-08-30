@@ -182,17 +182,21 @@ impl HardState {
             NoesisEvent::VerificationRecorded { receipt, .. } => {
                 self.verification_receipts
                     .insert(receipt.obligation_id.clone(), receipt.clone());
-                if !receipt.passed
-                    && let Some(previous_receipt) =
+                if !receipt.passed {
+                    // A failed re-check invalidates terminal completion for the
+                    // current materialized task; work must re-enter the gate.
+                    self.completed_tasks.clear();
+                    if let Some(previous_receipt) =
                         self.closed_obligations.remove(&receipt.obligation_id)
-                {
-                    self.obligations.insert(
-                        receipt.obligation_id.clone(),
-                        format!(
-                            "Reopened after failed verification receipt {} (previously closed by {})",
-                            receipt.receipt_id, previous_receipt
-                        ),
-                    );
+                    {
+                        self.obligations.insert(
+                            receipt.obligation_id.clone(),
+                            format!(
+                                "Reopened after failed verification receipt {} (previously closed by {})",
+                                receipt.receipt_id, previous_receipt
+                            ),
+                        );
+                    }
                 }
             }
             NoesisEvent::ObligationReopened {
@@ -318,6 +322,8 @@ impl SoftWorkspace {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CognitiveView {
     pub hard_revision: Revision,
+    #[serde(default)]
+    pub repository_id: String,
     pub goal_description: String,
     pub active_claims: Vec<ClaimRecord>,
     pub open_obligations: Vec<String>,
@@ -339,6 +345,7 @@ impl CognitiveView {
             "### CURRENT GOAL (Revision: {})\n",
             self.hard_revision
         ));
+        out.push_str(&format!("Repository: {}\n", self.repository_id));
         out.push_str(&format!("{}\n\n", self.goal_description));
 
         if !self.active_claims.is_empty() {
@@ -485,5 +492,58 @@ mod tests {
         let state = HardState::replay(&events);
         assert!(state.obligations.contains_key(&obligation_id));
         assert!(!state.closed_obligations.contains_key(&obligation_id));
+    }
+
+    #[test]
+    fn failed_recheck_invalidates_previous_completion() {
+        let obligation_id = ObligationId::new();
+        let passing_id = ReceiptId::new();
+        let task_id = TaskId::new();
+        let passing = accp::VerificationReceipt {
+            receipt_id: passing_id.clone(),
+            obligation_id: obligation_id.clone(),
+            passed: true,
+            evidence_id: EvidenceId::new(),
+            verified_scope: Scope::global("rivet", Revision::ZERO),
+            diagnostics: None,
+            timestamp: Utc::now(),
+        };
+        let failed = accp::VerificationReceipt {
+            receipt_id: ReceiptId::new(),
+            obligation_id: obligation_id.clone(),
+            passed: false,
+            evidence_id: EvidenceId::new(),
+            verified_scope: Scope::global("rivet", Revision::ZERO),
+            diagnostics: Some("regression".into()),
+            timestamp: Utc::now(),
+        };
+        let state = HardState::replay(&[
+            NoesisEvent::ObligationCreated {
+                obligation_id: obligation_id.clone(),
+                description: "must remain valid".into(),
+                scope: Scope::global("rivet", Revision::ZERO),
+                timestamp: Utc::now(),
+            },
+            NoesisEvent::VerificationRecorded {
+                receipt: passing,
+                timestamp: Utc::now(),
+            },
+            NoesisEvent::ObligationClosed {
+                obligation_id: obligation_id.clone(),
+                receipt_id: passing_id.clone(),
+                timestamp: Utc::now(),
+            },
+            NoesisEvent::CompletionAccepted {
+                task_id,
+                final_receipt: passing_id,
+                timestamp: Utc::now(),
+            },
+            NoesisEvent::VerificationRecorded {
+                receipt: failed,
+                timestamp: Utc::now(),
+            },
+        ]);
+        assert!(state.obligations.contains_key(&obligation_id));
+        assert!(state.completed_tasks.is_empty());
     }
 }

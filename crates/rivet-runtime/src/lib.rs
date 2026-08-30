@@ -81,7 +81,7 @@ impl Runtime {
         // otherwise concurrent retries can both pass the cache lookup.
         let _execution_guard = self.execution_lock.lock().await;
         let identity = proposal.idempotency_identity();
-        let fingerprint = action_fingerprint(proposal)?;
+        let fingerprint = proposal.idempotency_fingerprint()?;
         if let Some(previous) = self.executed_actions.lock().await.get(&identity).cloned() {
             if previous.fingerprint == fingerprint {
                 tracing::debug!(
@@ -222,9 +222,14 @@ impl Runtime {
         let receipt = ExecutionReceipt {
             receipt_id: ReceiptId::new(),
             action_id: proposal.action_id.clone(),
+            idempotency_key: proposal.idempotency_identity(),
+            action_fingerprint: proposal.idempotency_fingerprint()?,
             capability: proposal.capability.clone(),
             success,
             exit_code,
+            scope: proposal.scope.clone(),
+            risk: proposal.estimated_risk,
+            human_approved: false,
             output_summary: summary,
             observations,
             evidence_id: EvidenceId::new(),
@@ -250,9 +255,14 @@ impl Runtime {
         let receipt = ExecutionReceipt {
             receipt_id: ReceiptId::new(),
             action_id: proposal.action_id.clone(),
+            idempotency_key: proposal.idempotency_identity(),
+            action_fingerprint: proposal.idempotency_fingerprint()?,
             capability: proposal.capability.clone(),
             success: false,
             exit_code: Some(1),
+            scope: proposal.scope.clone(),
+            risk: proposal.estimated_risk,
+            human_approved: false,
             output_summary: summary,
             observations: serde_json::json!({ "kind": "runtime.rejected" }),
             evidence_id: EvidenceId::new(),
@@ -262,7 +272,7 @@ impl Runtime {
         self.executed_actions.lock().await.insert(
             proposal.idempotency_identity(),
             CachedAction {
-                fingerprint: action_fingerprint(proposal)?,
+                fingerprint: proposal.idempotency_fingerprint()?,
                 receipt: receipt.clone(),
             },
         );
@@ -303,16 +313,4 @@ impl Runtime {
         }
         Ok(candidate)
     }
-}
-
-fn action_fingerprint(proposal: &ActionProposal) -> RivetResult<String> {
-    serde_json::to_string(&serde_json::json!({
-        "capability": proposal.capability,
-        "target": proposal.target,
-        "parameters": proposal.parameters,
-        "estimated_risk": proposal.estimated_risk,
-        "intent": proposal.intent,
-        "scope": proposal.scope,
-    }))
-    .map_err(|error| RivetError::Serialization(error.to_string()))
 }

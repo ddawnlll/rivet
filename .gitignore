@@ -24,3 +24,4 @@ target/
 # Scratch & Temporary
 tmp/
 scratch/
+.rivet/
