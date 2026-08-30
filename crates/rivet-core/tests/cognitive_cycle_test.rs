@@ -57,6 +57,7 @@ async fn test_end_to_end_cognitive_cycle() {
                 estimated_risk: ActionRisk::Material,
                 intent: "Create greeting file".into(),
                 scope: Scope::global("rivet", Revision::ZERO),
+                idempotency_key: None,
                 timestamp: Utc::now(),
             }),
             CognitiveAction::HypothesisDelta {
@@ -67,19 +68,7 @@ async fn test_end_to_end_cognitive_cycle() {
         usage: TokenUsage::default(),
     };
 
-    // Step 2 response: Attempt completion
-    let step2_response = ModelResponse {
-        text_content: "Task is ready for completion.".into(),
-        actions: vec![CognitiveAction::CompletionRequest {
-            summary: "Greeting file was created successfully.".into(),
-        }],
-        usage: TokenUsage::default(),
-    };
-
-    let model = Arc::new(ScriptedModelBackend::new(vec![
-        step1_response,
-        step2_response,
-    ]));
+    let model = Arc::new(ScriptedModelBackend::new(vec![step1_response]));
 
     let harness = HarnessCore::new(store.clone(), model, runtime);
 
@@ -109,8 +98,47 @@ async fn test_end_to_end_cognitive_cycle() {
         assert_eq!(soft.hypotheses[0], "File hello.txt contains greeting");
     }
 
-    // Step 2: Completion succeeds because there are no open unverified obligations
-    let out2 = harness
+    // A real Praxis run is required before completion. Use a second Harness
+    // with the repository runtime so the test exercises Runtime -> Praxis ->
+    // Noesis rather than inserting a fake receipt.
+    let verifier = HarnessCore::open(
+        store.clone(),
+        Arc::new(ScriptedModelBackend::new(vec![])),
+        Arc::new(Runtime::new(env!("CARGO_MANIFEST_DIR"))),
+    )
+    .await
+    .unwrap();
+    let verification_revision = verifier.hard_state.lock().await.revision;
+    let verification = verifier
+        .run_verification(accp::VerificationRequest {
+            obligation_id: ObligationId::new(),
+            predicate: "cargo test -p praxis --lib".into(),
+            target_scope: Scope::global("rivet", verification_revision),
+            timeout_seconds: 120,
+            timestamp: Utc::now(),
+        })
+        .await
+        .unwrap();
+    assert!(
+        verification.passed,
+        "real Praxis verification must pass: {verification:?}"
+    );
+
+    let completion_model = Arc::new(ScriptedModelBackend::new(vec![ModelResponse {
+        text_content: "Task is ready for completion.".into(),
+        actions: vec![CognitiveAction::CompletionRequest {
+            summary: "Greeting file was created successfully.".into(),
+        }],
+        usage: TokenUsage::default(),
+    }]));
+    let completed_harness = HarnessCore::open(
+        store.clone(),
+        completion_model,
+        Arc::new(Runtime::new(tmp_dir.path())),
+    )
+    .await
+    .unwrap();
+    let out2 = completed_harness
         .step("Create greeting file", "Are you done?")
         .await
         .unwrap();
@@ -154,15 +182,26 @@ async fn test_completion_rejected_if_obligation_unclosed() {
     let err_msg = res.unwrap_err().to_string();
     assert!(err_msg.contains("obligations remain unverified"));
 
-    // Now close the obligation with a receipt
-    harness
-        .record_event(NoesisEvent::ObligationClosed {
-            obligation_id: oblg_id,
-            receipt_id: ReceiptId::new(),
+    // Close it only through a real Runtime -> Praxis verification.
+    let verifier = HarnessCore::open(
+        store.clone(),
+        Arc::new(ScriptedModelBackend::new(vec![])),
+        Arc::new(Runtime::new(env!("CARGO_MANIFEST_DIR"))),
+    )
+    .await
+    .unwrap();
+    let verification_revision = verifier.hard_state.lock().await.revision;
+    let verification = verifier
+        .run_verification(accp::VerificationRequest {
+            obligation_id: oblg_id.clone(),
+            predicate: "cargo test -p praxis --lib".into(),
+            target_scope: Scope::global("rivet", verification_revision),
+            timeout_seconds: 120,
             timestamp: Utc::now(),
         })
         .await
         .unwrap();
+    assert!(verification.passed);
 
     // Now completion model response can succeed
     let model2 = Arc::new(ScriptedModelBackend::new(vec![ModelResponse {
@@ -173,11 +212,13 @@ async fn test_completion_rejected_if_obligation_unclosed() {
         usage: TokenUsage::default(),
     }]));
 
-    let harness2 = HarnessCore::new(
+    let harness2 = HarnessCore::open(
         store.clone(),
         model2,
         Arc::new(Runtime::new(tmp_dir.path())),
-    );
+    )
+    .await
+    .unwrap();
     let res2 = harness2.step("Fix issue", "Finish the task").await;
     assert!(res2.is_ok());
     assert!(res2.unwrap().contains("Task completed"));

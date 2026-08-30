@@ -7,6 +7,29 @@ use chrono::{DateTime, Utc};
 use rivet_types::*;
 use serde::{Deserialize, Serialize};
 
+pub const ACCP_VERSION: &str = "3.0";
+
+/// ACCP protocol role. Only the Harness may authoritatively emit decisions,
+/// receipts and signals.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum ActorRole {
+    CognitiveController,
+    Harness,
+}
+
+/// ACCP 3.0 core message families and their directionality.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "UPPERCASE")]
+pub enum MessageFamily {
+    View,
+    Query,
+    Proposal,
+    Decision,
+    Receipt,
+    Signal,
+}
+
 /// Action risk level defined by ACCP 3.0
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -38,7 +61,18 @@ pub struct ActionProposal {
     pub estimated_risk: ActionRisk,
     pub intent: String,
     pub scope: Scope,
+    /// Retries with the same identity must not repeat an authoritative side effect.
+    #[serde(default)]
+    pub idempotency_key: Option<String>,
     pub timestamp: DateTime<Utc>,
+}
+
+impl ActionProposal {
+    pub fn idempotency_identity(&self) -> String {
+        self.idempotency_key
+            .clone()
+            .unwrap_or_else(|| self.action_id.to_string())
+    }
 }
 
 /// 2. Action Decision emitted by Authoritative Harness
@@ -60,6 +94,10 @@ pub struct ExecutionReceipt {
     pub success: bool,
     pub exit_code: Option<i32>,
     pub output_summary: String,
+    /// Structured observation produced by the Harness/runtime. Model prose is
+    /// never copied into this field as an authoritative receipt.
+    #[serde(default)]
+    pub observations: serde_json::Value,
     pub evidence_id: EvidenceId,
     pub execution_duration_ms: u64,
     pub timestamp: DateTime<Utc>,
@@ -114,6 +152,8 @@ pub struct CompletionProposal {
     pub task_id: TaskId,
     pub summary: String,
     pub claims_addressed: Vec<ClaimId>,
+    #[serde(default)]
+    pub base_revision: Revision,
     pub timestamp: DateTime<Utc>,
 }
 
@@ -143,10 +183,228 @@ pub enum AccpMessage {
     CompletionDecision(CompletionDecision),
 }
 
+impl AccpMessage {
+    /// Return the normative family/kind pair without relying on provider text.
+    pub fn family_kind(&self) -> (MessageFamily, &'static str) {
+        match self {
+            Self::ActionProposal(_) => (MessageFamily::Proposal, "ACTION"),
+            Self::ActionDecision(_) => (MessageFamily::Decision, "ACTION"),
+            Self::ExecutionReceipt(_) => (MessageFamily::Receipt, "EXECUTION"),
+            Self::ClaimProposal(_) => (MessageFamily::Proposal, "CLAIM"),
+            Self::VerificationRequest(_) => (MessageFamily::Proposal, "VERIFICATION"),
+            Self::VerificationReceipt(_) => (MessageFamily::Receipt, "VERIFICATION"),
+            Self::StateTransitionProposal(_) => (MessageFamily::Proposal, "STATE_TRANSITION"),
+            Self::CompletionProposal(_) => (MessageFamily::Proposal, "COMPLETION"),
+            Self::CompletionDecision(_) => (MessageFamily::Decision, "COMPLETION"),
+        }
+    }
+}
+
+/// Canonical JSON interchange envelope. Internal Rust calls may remain typed,
+/// but crossing the controller/harness boundary always carries this metadata.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AccpEnvelope {
+    pub accp_version: String,
+    pub message_id: String,
+    pub sender: ActorRole,
+    pub family: MessageFamily,
+    pub kind: String,
+    pub payload: serde_json::Value,
+    #[serde(default)]
+    pub correlation_id: Option<String>,
+    #[serde(default)]
+    pub scope: Option<Scope>,
+    #[serde(default)]
+    pub revision: Option<Revision>,
+}
+
+impl AccpEnvelope {
+    pub fn from_message(
+        message_id: impl Into<String>,
+        sender: ActorRole,
+        message: &AccpMessage,
+    ) -> RivetResult<Self> {
+        let (family, kind) = message.family_kind();
+        let payload = serde_json::to_value(message)
+            .map_err(|error| RivetError::Serialization(error.to_string()))?;
+        Ok(Self {
+            accp_version: ACCP_VERSION.into(),
+            message_id: message_id.into(),
+            sender,
+            family,
+            kind: kind.into(),
+            payload,
+            correlation_id: None,
+            scope: None,
+            revision: None,
+        })
+    }
+
+    /// Enforce the producer matrix in ACCP 3.0.
+    pub fn validate_direction(&self) -> RivetResult<()> {
+        if self.accp_version != ACCP_VERSION {
+            return Err(RivetError::SemanticViolation(format!(
+                "Unsupported ACCP version '{}', expected {}",
+                self.accp_version, ACCP_VERSION
+            )));
+        }
+        if self.message_id.trim().is_empty() || self.kind.trim().is_empty() {
+            return Err(RivetError::SemanticViolation(
+                "ACCP envelope requires message_id and kind".into(),
+            ));
+        }
+
+        let controller_allowed =
+            matches!(self.family, MessageFamily::Query | MessageFamily::Proposal);
+        let harness_allowed = matches!(
+            self.family,
+            MessageFamily::View
+                | MessageFamily::Decision
+                | MessageFamily::Receipt
+                | MessageFamily::Signal
+        );
+        let allowed = match self.sender {
+            ActorRole::CognitiveController => controller_allowed,
+            ActorRole::Harness => harness_allowed,
+        };
+        if !allowed {
+            return Err(RivetError::SemanticViolation(format!(
+                "{} cannot emit {} message",
+                match self.sender {
+                    ActorRole::CognitiveController => "COGNITIVE_CONTROLLER",
+                    ActorRole::Harness => "HARNESS",
+                },
+                match self.family {
+                    MessageFamily::View => "VIEW",
+                    MessageFamily::Query => "QUERY",
+                    MessageFamily::Proposal => "PROPOSAL",
+                    MessageFamily::Decision => "DECISION",
+                    MessageFamily::Receipt => "RECEIPT",
+                    MessageFamily::Signal => "SIGNAL",
+                }
+            )));
+        }
+        Ok(())
+    }
+}
+
+/// Harness-owned action authorization policy. A model proposal cannot widen it.
+#[derive(Debug, Clone)]
+pub struct ActionAuthorizationPolicy {
+    pub repository: String,
+    pub current_revision: Revision,
+    pub allowed_scope: Scope,
+    pub allowed_capabilities: Vec<String>,
+    pub allow_material: bool,
+    pub human_approved: bool,
+}
+
+impl ActionAuthorizationPolicy {
+    pub fn read_only(repository: impl Into<String>, revision: Revision, scope: Scope) -> Self {
+        Self {
+            repository: repository.into(),
+            current_revision: revision,
+            allowed_scope: scope,
+            allowed_capabilities: vec!["file.read".into()],
+            allow_material: false,
+            human_approved: false,
+        }
+    }
+}
+
 /// Invariant Gate Enforcement
 pub struct AccpSemanticGate;
 
 impl AccpSemanticGate {
+    /// Validate a message before it is interpreted by the Harness.
+    pub fn validate_message(message: &AccpEnvelope) -> RivetResult<()> {
+        message.validate_direction()
+    }
+
+    /// A controller may propose evidence-backed support, but it cannot mint a
+    /// mechanically verified claim by setting a status field.
+    pub fn validate_claim_proposal(proposal: &ClaimProposal) -> RivetResult<()> {
+        if proposal.proposition.trim().is_empty() {
+            return Err(RivetError::SemanticViolation(
+                "Claim proposal proposition must not be empty".into(),
+            ));
+        }
+        if proposal.proposed_status == EpistemicStatus::Verified {
+            return Err(RivetError::SemanticViolation(
+                "Controller cannot mint VERIFIED claim status".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Apply Harness-owned capability, scope, revision and risk policy.
+    pub fn authorize_action(
+        proposal: &ActionProposal,
+        policy: &ActionAuthorizationPolicy,
+    ) -> ActionDecision {
+        let blocked = |verdict: ActionDecisionVerdict, reason: &str| ActionDecision {
+            action_id: proposal.action_id.clone(),
+            verdict,
+            reason: reason.into(),
+            authorized_scope: policy.allowed_scope.clone(),
+            timestamp: Utc::now(),
+        };
+
+        if proposal.scope.revision != policy.current_revision {
+            return blocked(
+                ActionDecisionVerdict::Block,
+                "Action proposal is stale for the current state revision",
+            );
+        }
+        if proposal.scope.repository != policy.repository
+            || !policy.allowed_scope.contains_scope(&proposal.scope)
+            || !policy.allowed_scope.allows_path(
+                &policy.repository,
+                &proposal.target,
+                policy.current_revision,
+            )
+        {
+            return blocked(
+                ActionDecisionVerdict::Block,
+                "Action target or declared scope is outside Harness authority",
+            );
+        }
+        if !policy
+            .allowed_capabilities
+            .iter()
+            .any(|capability| capability == &proposal.capability)
+        {
+            return blocked(
+                ActionDecisionVerdict::Block,
+                "Requested capability is not exposed for this task",
+            );
+        }
+        match proposal.estimated_risk {
+            ActionRisk::Inspect => ActionDecision {
+                action_id: proposal.action_id.clone(),
+                verdict: ActionDecisionVerdict::Allow,
+                reason: "Read-only capability allowed within declared scope".into(),
+                authorized_scope: policy.allowed_scope.clone(),
+                timestamp: Utc::now(),
+            },
+            ActionRisk::Material if policy.allow_material => ActionDecision {
+                action_id: proposal.action_id.clone(),
+                verdict: ActionDecisionVerdict::Allow,
+                reason: "Material capability allowed within Harness policy".into(),
+                authorized_scope: policy.allowed_scope.clone(),
+                timestamp: Utc::now(),
+            },
+            ActionRisk::Destructive if !policy.human_approved => blocked(
+                ActionDecisionVerdict::RequireHumanApproval,
+                "Destructive action requires explicit human approval",
+            ),
+            _ => blocked(
+                ActionDecisionVerdict::Block,
+                "Action risk is not authorized",
+            ),
+        }
+    }
+
     /// Invariant 6.2: Proposal is not execution
     pub fn ensure_execution_authorized(decision: &ActionDecision) -> RivetResult<()> {
         match decision.verdict {
@@ -170,6 +428,27 @@ impl AccpSemanticGate {
             )));
         }
         Ok(())
+    }
+
+    /// Completion is a Harness decision and requires at least one passing Praxis
+    /// receipt in addition to closed obligations.
+    pub fn evaluate_completion(
+        proposal: &CompletionProposal,
+        current_revision: Revision,
+        unclosed_obligations: Vec<ObligationId>,
+        passing_receipts: &[ReceiptId],
+    ) -> CompletionDecision {
+        let obligations_satisfied = unclosed_obligations.is_empty();
+        let revision_matches = proposal.base_revision == current_revision;
+        let completed = obligations_satisfied && revision_matches && !passing_receipts.is_empty();
+        CompletionDecision {
+            task_id: proposal.task_id.clone(),
+            completed,
+            required_obligations_satisfied: obligations_satisfied && revision_matches,
+            unclosed_obligations,
+            final_receipt: passing_receipts.last().cloned(),
+            timestamp: Utc::now(),
+        }
     }
 }
 

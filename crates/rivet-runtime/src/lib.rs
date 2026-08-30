@@ -1,26 +1,39 @@
 //! # rivet-runtime (Execution & Environment Runtime)
 //!
-//! Sandboxed process execution, file mutations, and environment observations.
+//! Sandboxed process execution, scoped file mutations, and authoritative
+//! observations. Runtime checks are deliberately repeated below ACCP so a
+//! caller cannot bypass the boundary by invoking the adapter directly.
 
 use accp::{ActionProposal, ExecutionReceipt};
 use chrono::Utc;
 use rivet_types::*;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Instant;
 use tokio::process::Command;
+use tokio::sync::Mutex;
+
+const MAX_OBSERVATION_BYTES: usize = 64 * 1024;
 
 pub struct Runtime {
     working_dir: PathBuf,
+    executed_actions: Arc<Mutex<HashMap<String, ExecutionReceipt>>>,
 }
 
 impl Runtime {
     pub fn new(working_dir: impl AsRef<Path>) -> Self {
         Self {
             working_dir: working_dir.as_ref().to_path_buf(),
+            executed_actions: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
-    /// Execute a command in the environment
+    pub fn working_dir(&self) -> &Path {
+        &self.working_dir
+    }
+
+    /// Execute a command in the environment with a bounded wall-clock time.
     pub async fn execute_command(
         &self,
         cmd: &str,
@@ -53,54 +66,209 @@ impl Runtime {
         Ok((exit_code, stdout, stderr, duration_ms))
     }
 
-    /// Execute an authorized action proposal and emit an ExecutionReceipt
+    /// Execute an authorized action proposal and emit an ExecutionReceipt.
     pub async fn execute_action(&self, proposal: &ActionProposal) -> RivetResult<ExecutionReceipt> {
-        let start = Instant::now();
+        let identity = proposal.idempotency_identity();
+        if let Some(previous) = self.executed_actions.lock().await.get(&identity).cloned() {
+            tracing::debug!(action_id = %proposal.action_id, "returning idempotent action receipt");
+            return Ok(previous);
+        }
 
-        // Dispatch based on capability
-        let (success, exit_code, summary) = match proposal.capability.as_str() {
+        let start = Instant::now();
+        let result = match proposal.capability.as_str() {
             "file.read" => {
-                let path = self.working_dir.join(&proposal.target);
+                let path = match self.resolve_target(&proposal.target).await {
+                    Ok(path) => path,
+                    Err(error) => {
+                        return self
+                            .failed_receipt(proposal, start, error.to_string())
+                            .await;
+                    }
+                };
                 match tokio::fs::read_to_string(&path).await {
-                    Ok(content) => (true, Some(0), format!("Read {} bytes", content.len())),
-                    Err(e) => (false, Some(1), format!("Failed to read: {}", e)),
+                    Ok(content) => {
+                        let truncated = content.len() > MAX_OBSERVATION_BYTES;
+                        let observed = if truncated {
+                            content[..MAX_OBSERVATION_BYTES].to_string()
+                        } else {
+                            content.clone()
+                        };
+                        (
+                            true,
+                            Some(0),
+                            format!(
+                                "Read {} bytes{}",
+                                content.len(),
+                                if truncated { " (truncated)" } else { "" }
+                            ),
+                            serde_json::json!({
+                                "kind": "file.read",
+                                "target": proposal.target,
+                                "content": observed,
+                                "truncated": truncated,
+                            }),
+                        )
+                    }
+                    Err(error) => (
+                        false,
+                        Some(1),
+                        format!("Failed to read: {error}"),
+                        serde_json::json!({ "kind": "file.read", "target": proposal.target }),
+                    ),
                 }
             }
             "file.write" => {
-                let path = self.working_dir.join(&proposal.target);
-                let content = proposal
-                    .parameters
-                    .get("content")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
-                match tokio::fs::write(&path, content).await {
-                    Ok(_) => (
-                        true,
-                        Some(0),
-                        format!("Wrote {} bytes to {}", content.len(), proposal.target),
+                let path = match self.resolve_target(&proposal.target).await {
+                    Ok(path) => path,
+                    Err(error) => {
+                        return self
+                            .failed_receipt(proposal, start, error.to_string())
+                            .await;
+                    }
+                };
+                let Some(content) = proposal.parameters.get("content").and_then(|v| v.as_str())
+                else {
+                    return self
+                        .failed_receipt(
+                            proposal,
+                            start,
+                            "file.write requires a string content parameter".into(),
+                        )
+                        .await;
+                };
+                let parent = path.parent().unwrap_or(&self.working_dir);
+                if let Err(error) = tokio::fs::create_dir_all(parent).await {
+                    return self
+                        .failed_receipt(
+                            proposal,
+                            start,
+                            format!("Failed to create parent: {error}"),
+                        )
+                        .await;
+                }
+                let temp_name = format!(
+                    ".{}.rivet-tmp-{}",
+                    path.file_name()
+                        .and_then(|name| name.to_str())
+                        .unwrap_or("file"),
+                    ActionId::new()
+                );
+                let temp_path = parent.join(temp_name);
+                match tokio::fs::write(&temp_path, content).await {
+                    Ok(_) => match tokio::fs::rename(&temp_path, &path).await {
+                        Ok(_) => (
+                            true,
+                            Some(0),
+                            format!("Wrote {} bytes to {}", content.len(), proposal.target),
+                            serde_json::json!({
+                                "kind": "file.write",
+                                "target": proposal.target,
+                                "bytes": content.len(),
+                            }),
+                        ),
+                        Err(error) => {
+                            let _ = tokio::fs::remove_file(&temp_path).await;
+                            (
+                                false,
+                                Some(1),
+                                format!("Failed to atomically replace file: {error}"),
+                                serde_json::json!({ "kind": "file.write", "target": proposal.target }),
+                            )
+                        }
+                    },
+                    Err(error) => (
+                        false,
+                        Some(1),
+                        format!("Failed to write temporary file: {error}"),
+                        serde_json::json!({ "kind": "file.write", "target": proposal.target }),
                     ),
-                    Err(e) => (false, Some(1), format!("Failed to write: {}", e)),
                 }
             }
             _ => (
                 false,
                 Some(1),
                 format!("Unknown capability: {}", proposal.capability),
+                serde_json::json!({ "kind": "unknown", "capability": proposal.capability }),
             ),
         };
 
-        let duration_ms = start.elapsed().as_millis() as u64;
-
-        Ok(ExecutionReceipt {
+        let (success, exit_code, summary, observations) = result;
+        let receipt = ExecutionReceipt {
             receipt_id: ReceiptId::new(),
             action_id: proposal.action_id.clone(),
             capability: proposal.capability.clone(),
             success,
             exit_code,
             output_summary: summary,
+            observations,
             evidence_id: EvidenceId::new(),
-            execution_duration_ms: duration_ms,
+            execution_duration_ms: start.elapsed().as_millis() as u64,
             timestamp: Utc::now(),
-        })
+        };
+        self.executed_actions
+            .lock()
+            .await
+            .insert(identity, receipt.clone());
+        Ok(receipt)
+    }
+
+    async fn failed_receipt(
+        &self,
+        proposal: &ActionProposal,
+        start: Instant,
+        summary: String,
+    ) -> RivetResult<ExecutionReceipt> {
+        let receipt = ExecutionReceipt {
+            receipt_id: ReceiptId::new(),
+            action_id: proposal.action_id.clone(),
+            capability: proposal.capability.clone(),
+            success: false,
+            exit_code: Some(1),
+            output_summary: summary,
+            observations: serde_json::json!({ "kind": "runtime.rejected" }),
+            evidence_id: EvidenceId::new(),
+            execution_duration_ms: start.elapsed().as_millis() as u64,
+            timestamp: Utc::now(),
+        };
+        self.executed_actions
+            .lock()
+            .await
+            .insert(proposal.idempotency_identity(), receipt.clone());
+        Ok(receipt)
+    }
+
+    async fn resolve_target(&self, target: &str) -> RivetResult<PathBuf> {
+        if target.trim().is_empty() || !is_safe_relative_path(target) {
+            return Err(RivetError::InvalidPath(target.into()));
+        }
+        let root = tokio::fs::canonicalize(&self.working_dir)
+            .await
+            .map_err(|error| {
+                RivetError::Runtime(format!("working directory is unavailable: {error}"))
+            })?;
+        let candidate = root.join(target);
+        let check_path = if tokio::fs::try_exists(&candidate).await.unwrap_or(false) {
+            tokio::fs::canonicalize(&candidate)
+                .await
+                .map_err(|error| RivetError::Runtime(error.to_string()))?
+        } else {
+            let mut ancestor = candidate.as_path();
+            while !tokio::fs::try_exists(ancestor).await.unwrap_or(false) {
+                ancestor = ancestor
+                    .parent()
+                    .ok_or_else(|| RivetError::InvalidPath(target.into()))?;
+            }
+            let canonical_ancestor = tokio::fs::canonicalize(ancestor)
+                .await
+                .map_err(|error| RivetError::Runtime(error.to_string()))?;
+            let suffix = candidate
+                .strip_prefix(ancestor)
+                .map_err(|error| RivetError::InvalidPath(error.to_string()))?;
+            canonical_ancestor.join(suffix)
+        };
+        if !check_path.starts_with(&root) {
+            return Err(RivetError::InvalidPath(target.into()));
+        }
+        Ok(candidate)
     }
 }

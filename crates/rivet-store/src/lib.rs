@@ -74,18 +74,39 @@ impl HardStateStore for MemoryStore {
 /// Durable redb embedded ACID store
 pub struct RedbStore {
     db: Arc<Database>,
+    write_lock: Arc<Mutex<()>>,
 }
 
 impl RedbStore {
     pub fn open(path: impl AsRef<Path>) -> RivetResult<Self> {
         let db = Database::create(path).map_err(|e| RivetError::Storage(e.to_string()))?;
-        Ok(Self { db: Arc::new(db) })
+        let db = Arc::new(db);
+        let write_txn = db
+            .begin_write()
+            .map_err(|e| RivetError::Storage(e.to_string()))?;
+        write_txn
+            .open_table(EVENTS_TABLE)
+            .map_err(|e| RivetError::Storage(e.to_string()))?;
+        write_txn
+            .open_table(STATE_TABLE)
+            .map_err(|e| RivetError::Storage(e.to_string()))?;
+        write_txn
+            .commit()
+            .map_err(|e| RivetError::Storage(e.to_string()))?;
+        Ok(Self {
+            db,
+            write_lock: Arc::new(Mutex::new(())),
+        })
     }
 }
 
 #[async_trait]
 impl HardStateStore for RedbStore {
     async fn append_event(&self, event: &NoesisEvent) -> RivetResult<Revision> {
+        let _guard = self
+            .write_lock
+            .lock()
+            .map_err(|_| RivetError::Storage("redb write lock poisoned".into()))?;
         let serialized =
             serde_json::to_vec(event).map_err(|e| RivetError::Serialization(e.to_string()))?;
 
@@ -148,6 +169,10 @@ impl HardStateStore for RedbStore {
     }
 
     async fn save_checkpoint(&self, state: &HardState) -> RivetResult<()> {
+        let _guard = self
+            .write_lock
+            .lock()
+            .map_err(|_| RivetError::Storage("redb write lock poisoned".into()))?;
         let serialized =
             serde_json::to_vec(state).map_err(|e| RivetError::Serialization(e.to_string()))?;
         let write_txn = self

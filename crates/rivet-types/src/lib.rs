@@ -5,6 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::fmt;
+use std::path::Path;
 use uuid::Uuid;
 
 /// Macro to generate type-safe prefixed string IDs
@@ -136,6 +137,85 @@ impl Scope {
             revision: rev,
         }
     }
+
+    /// Return whether this scope admits a concrete repository path at a revision.
+    ///
+    /// Scope matching is intentionally conservative: repository and revision must
+    /// match exactly, and an absent path pattern means the whole repository.
+    pub fn allows_path(&self, repository: &str, path: &str, revision: Revision) -> bool {
+        if self.repository != repository || self.revision != revision {
+            return false;
+        }
+
+        let normalized = normalize_relative_path(path);
+        match &self.path_pattern {
+            None => true,
+            Some(pattern) => glob_matches(&normalize_relative_path(pattern), &normalized),
+        }
+    }
+
+    /// Return whether `narrower` is contained by this scope.
+    pub fn contains_scope(&self, narrower: &Scope) -> bool {
+        if self.repository != narrower.repository || self.revision != narrower.revision {
+            return false;
+        }
+
+        match (&self.path_pattern, &narrower.path_pattern) {
+            (None, _) => true,
+            (Some(outer), Some(inner)) => {
+                outer == inner
+                    || outer.ends_with("/**") && inner.starts_with(&outer[..outer.len() - 3])
+            }
+            (Some(_), None) => false,
+        }
+    }
+}
+
+fn normalize_relative_path(path: &str) -> String {
+    path.replace('\\', "/")
+        .trim_start_matches("./")
+        .trim_matches('/')
+        .to_string()
+}
+
+fn glob_matches(pattern: &str, value: &str) -> bool {
+    let pattern = pattern.as_bytes();
+    let value = value.as_bytes();
+    let mut dp = vec![vec![false; value.len() + 1]; pattern.len() + 1];
+    dp[0][0] = true;
+
+    for p in 0..pattern.len() {
+        for v in 0..=value.len() {
+            if !dp[p][v] {
+                continue;
+            }
+            match pattern[p] {
+                b'*' => {
+                    dp[p + 1][v] = true;
+                    if v < value.len() {
+                        dp[p][v + 1] = true;
+                    }
+                }
+                b'?' if v < value.len() => dp[p + 1][v + 1] = true,
+                byte if v < value.len() && byte == value[v] => dp[p + 1][v + 1] = true,
+                _ => {}
+            }
+        }
+    }
+
+    dp[pattern.len()][value.len()]
+}
+
+/// Reject absolute paths and parent traversal before a runtime joins a target
+/// with its working directory.
+pub fn is_safe_relative_path(path: impl AsRef<Path>) -> bool {
+    let path = path.as_ref();
+    if path.is_absolute() {
+        return false;
+    }
+    !path
+        .components()
+        .any(|component| matches!(component, std::path::Component::ParentDir))
 }
 
 /// Standard error taxonomy for Rivet
@@ -164,6 +244,31 @@ pub enum RivetError {
 
     #[error("Protocol serialization error: {0}")]
     Serialization(String),
+
+    #[error("Invalid or unsafe path: {0}")]
+    InvalidPath(String),
 }
 
 pub type RivetResult<T> = Result<T, RivetError>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scope_matching_is_revision_and_path_bound() {
+        let scope = Scope::path("repo", "src/**", Revision(3));
+        assert!(scope.allows_path("repo", "src/lib.rs", Revision(3)));
+        assert!(scope.allows_path("repo", "src/nested/mod.rs", Revision(3)));
+        assert!(!scope.allows_path("repo", "tests/lib.rs", Revision(3)));
+        assert!(!scope.allows_path("repo", "src/lib.rs", Revision(4)));
+        assert!(!scope.allows_path("other", "src/lib.rs", Revision(3)));
+    }
+
+    #[test]
+    fn unsafe_relative_paths_are_rejected() {
+        assert!(is_safe_relative_path("src/lib.rs"));
+        assert!(!is_safe_relative_path("../secrets.env"));
+        assert!(!is_safe_relative_path("C:\\secrets.env"));
+    }
+}
