@@ -237,3 +237,167 @@ fn family_direction_supports_view_and_query_without_confusing_authority() {
         AccpEnvelope::from_message("query-1", ActorRole::CognitiveController, &query).unwrap();
     assert!(query_from_controller.validate_direction().is_ok());
 }
+
+#[test]
+fn every_wire_carrier_round_trips_with_its_frozen_family_and_kind() {
+    let action_id = ActionId::new();
+    let claim_id = ClaimId::new();
+    let obligation_id = ObligationId::new();
+    let task_id = TaskId::new();
+    let scope = Scope::path("rivet", "src/**", Revision(7));
+    let action = ActionProposal {
+        action_id: action_id.clone(),
+        capability: "file.read".into(),
+        target: "src/lib.rs".into(),
+        parameters: serde_json::json!({}),
+        estimated_risk: ActionRisk::Inspect,
+        intent: "wire fixture".into(),
+        scope: scope.clone(),
+        idempotency_key: Some("wire-action".into()),
+        timestamp: Utc::now(),
+    };
+    let claim = ClaimProposal {
+        claim_id: claim_id.clone(),
+        proposition: "wire carriers preserve typed payloads".into(),
+        proposed_status: EpistemicStatus::Supported,
+        supporting_evidence: vec![EvidenceId::new()],
+        scope: scope.clone(),
+        timestamp: Utc::now(),
+    };
+    let verification_request = VerificationRequest {
+        obligation_id: obligation_id.clone(),
+        predicate: "cargo test".into(),
+        target_scope: scope.clone(),
+        timeout_seconds: 30,
+        timestamp: Utc::now(),
+    };
+    let messages = vec![
+        (
+            ActorRole::Harness,
+            AccpMessage::View(ViewMessage {
+                kind: "COGNITIVE".into(),
+                payload: serde_json::json!({"goal": "wire"}),
+            }),
+        ),
+        (
+            ActorRole::CognitiveController,
+            AccpMessage::Query(QueryMessage {
+                kind: "ARTIFACT".into(),
+                selector: serde_json::json!({"path": "src/lib.rs"}),
+                purpose: "wire fixture".into(),
+                scope: scope.clone(),
+            }),
+        ),
+        (
+            ActorRole::CognitiveController,
+            AccpMessage::ActionProposal(action.clone()),
+        ),
+        (
+            ActorRole::Harness,
+            AccpMessage::ActionDecision(ActionDecision {
+                action_id: action_id.clone(),
+                verdict: ActionDecisionVerdict::Allow,
+                reason: "fixture allowed".into(),
+                authorized_scope: scope.clone(),
+                timestamp: Utc::now(),
+            }),
+        ),
+        (
+            ActorRole::Harness,
+            AccpMessage::ExecutionReceipt(ExecutionReceipt {
+                receipt_id: ReceiptId::new(),
+                action_id: action_id.clone(),
+                idempotency_key: "wire-action".into(),
+                action_fingerprint: "fingerprint".into(),
+                capability: "file.read".into(),
+                success: true,
+                exit_code: Some(0),
+                scope: scope.clone(),
+                risk: ActionRisk::Inspect,
+                human_approved: false,
+                output_summary: "read fixture".into(),
+                observations: serde_json::json!({"bytes": 1}),
+                evidence_id: EvidenceId::new(),
+                execution_duration_ms: 1,
+                timestamp: Utc::now(),
+            }),
+        ),
+        (
+            ActorRole::CognitiveController,
+            AccpMessage::ClaimProposal(claim.clone()),
+        ),
+        (
+            ActorRole::CognitiveController,
+            AccpMessage::VerificationRequest(verification_request.clone()),
+        ),
+        (
+            ActorRole::Harness,
+            AccpMessage::VerificationReceipt(VerificationReceipt {
+                receipt_id: ReceiptId::new(),
+                obligation_id: obligation_id.clone(),
+                passed: true,
+                evidence_id: EvidenceId::new(),
+                verified_scope: scope.clone(),
+                diagnostics: None,
+                timestamp: Utc::now(),
+            }),
+        ),
+        (
+            ActorRole::CognitiveController,
+            AccpMessage::StateTransitionProposal(StateTransitionProposal {
+                base_revision: Revision(7),
+                claims_to_assert: vec![claim],
+                claims_to_reject: vec![],
+                obligations_to_create: vec!["wire obligation".into()],
+                timestamp: Utc::now(),
+            }),
+        ),
+        (
+            ActorRole::CognitiveController,
+            AccpMessage::CompletionProposal(CompletionProposal {
+                task_id: task_id.clone(),
+                summary: "wire completion".into(),
+                claims_addressed: vec![claim_id],
+                base_revision: Revision(7),
+                timestamp: Utc::now(),
+            }),
+        ),
+        (
+            ActorRole::Harness,
+            AccpMessage::CompletionDecision(CompletionDecision {
+                task_id,
+                completed: true,
+                required_obligations_satisfied: true,
+                unclosed_obligations: vec![],
+                final_receipt: Some(ReceiptId::new()),
+                timestamp: Utc::now(),
+            }),
+        ),
+        (
+            ActorRole::Harness,
+            AccpMessage::Signal(SignalMessage {
+                kind: "REPLAN_REQUIRED".into(),
+                subject_ref: Some("task".into()),
+                reason: "wire fixture".into(),
+                scope: Some(scope),
+            }),
+        ),
+    ];
+
+    for (index, (sender, message)) in messages.iter().enumerate() {
+        let envelope =
+            AccpEnvelope::from_message(format!("wire-{index}"), *sender, message).unwrap();
+        envelope.validate_direction().unwrap();
+        let expected_payload = serde_json::to_value(message).unwrap();
+        assert_eq!(envelope.payload, expected_payload);
+
+        let encoded = serde_json::to_vec(&envelope).unwrap();
+        let decoded: AccpEnvelope = serde_json::from_slice(&encoded).unwrap();
+        assert_eq!(decoded.family, envelope.family);
+        assert_eq!(decoded.kind, envelope.kind);
+        assert_eq!(decoded.payload, envelope.payload);
+        assert_eq!(decoded.scope, envelope.scope);
+        assert_eq!(decoded.revision, envelope.revision);
+        decoded.validate_direction().unwrap();
+    }
+}

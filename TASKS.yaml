@@ -206,4 +206,4 @@ remaining_gaps:
     priority: "P1"
     title: "ACCP wire payload schema coverage"
     status: "IN_PROGRESS"
-    evidence: "Strict 3.0 envelope, producer matrix, family/kind validation, and typed VIEW/QUERY/SIGNAL carriers exist; all normative payload schemas and wire round-trip fixtures remain."
+    evidence: "Strict 3.0 envelope, producer matrix, family/kind validation, typed VIEW/QUERY/SIGNAL carriers, and round-trip fixtures for every current AccpMessage carrier now pass; broader normative schema/fixture compatibility remains."
