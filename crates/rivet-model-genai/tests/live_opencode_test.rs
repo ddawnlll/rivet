@@ -40,8 +40,16 @@ async fn opencode_zen_real_backend_smoke_test_when_configured() {
         max_tokens: Some(32),
     };
     let response = backend
-        .invoke(request)
+        .invoke(request.clone())
         .await
         .expect("configured OpenCode backend should answer");
     assert!(!response.text_content.trim().is_empty());
+    let stream_chunks = backend
+        .stream(request)
+        .await
+        .expect("configured OpenCode native stream should answer");
+    assert!(
+        !stream_chunks.is_empty()
+            && stream_chunks.iter().any(|chunk| !chunk.trim().is_empty())
+    );
 }
