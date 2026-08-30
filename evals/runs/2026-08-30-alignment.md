@@ -45,6 +45,9 @@ fixtures listed below.
 | EVAL-029 | `cargo test -p rivet-core --test cognitive_cycle_test` plus `cargo clippy -p rivet-core --tests -- -D warnings` after completion-event hardening | PASS: 12 Core tests; direct completion events reject open obligations/unclosed receipts and accept only after recorded PASS plus closure. |
 | EVAL-030 | `cargo test -p rivet-core --test cognitive_cycle_test` plus `cargo clippy -p rivet-core --tests -- -D warnings` after authoritative event hardening | PASS: 13 Core tests; direct verification and closure events cannot mint unknown obligations. |
 | EVAL-031 | `cargo test -p rivet-core --test cognitive_cycle_test` plus `cargo clippy -p rivet-core --tests -- -D warnings` after verification serialization | PASS: 14 Core tests; two same-revision real Praxis requests yield one subprocess verification and one stale rejection before execution. |
+| EVAL-032 | `cargo run -q -p rivet -- census .` and `":quit" | cargo run -q -p rivet -- chat .` after repository-signal wiring | PASS: CLI census observes 122 files, 49 bounded directory signals, and 1 deferred tree; persistent chat opens and exits cleanly. |
+| EVAL-033 | `cargo test -p rivet-core --test cognitive_cycle_test -- --nocapture` after Verity failure-path coverage | PASS: 14 Core tests; a missing evidence ledger yields HOLD, persists a failed verification receipt, and reopens the previously closed obligation. |
+| EVAL-034 | `cargo test --workspace` and `cargo clippy --workspace -- -D warnings` after all current changes | PASS: complete workspace test/doc suite and strict clippy. |
 
 ## Atomic milestones
 
@@ -60,7 +63,8 @@ fixtures listed below.
 - `0581e03` — known-obligation verification enforcement and corrected end-to-end completion fixture.
 - `8e418a6` — direct completion-event hardening and updated semantic gap tracking.
 - `98e5b1b` — authoritative verification/closure event hardening.
-- `pending` — cycle-serialized public verification and concurrency proof (to be committed after final gate).
+- `c06a13d` — cycle-serialized public verification and concurrency proof.
+- `pending` — Verity failure-path coverage and final full-gate ledger update (to be committed after final gate).
 
 ## Interpretation and remaining limits
 

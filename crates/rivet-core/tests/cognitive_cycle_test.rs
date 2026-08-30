@@ -850,4 +850,35 @@ async fn full_verity_pipeline_is_admitted_as_scoped_harness_verification() {
     assert!(hard.closed_obligations.contains_key(&receipt.obligation_id));
     assert_eq!(hard.verification_receipts.len(), 1);
     assert_eq!(harness.current_phase().await, RunPhase::Idle);
+    drop(hard);
+
+    let failed_revision = harness.hard_state.lock().await.revision;
+    let failed = harness
+        .run_verity_plan(
+            accp::VerificationRequest {
+                obligation_id: receipt.obligation_id.clone(),
+                predicate: "cargo --version".into(),
+                target_scope: Scope::global("rivet", failed_revision),
+                timeout_seconds: 30,
+                timestamp: Utc::now(),
+            },
+            &plan,
+            None,
+            &[],
+            None,
+            "core-verity-hold",
+        )
+        .await
+        .unwrap();
+    assert_eq!(failed.overall_verdict, praxis::GateVerdict::Hold);
+    assert!(failed.final_receipt.is_none());
+    let reopened = harness.hard_state.lock().await;
+    assert!(reopened.obligations.contains_key(&receipt.obligation_id));
+    assert!(
+        !reopened
+            .verification_receipts
+            .get(&receipt.obligation_id)
+            .unwrap()
+            .passed
+    );
 }
