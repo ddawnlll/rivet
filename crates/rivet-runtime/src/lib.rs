@@ -19,6 +19,7 @@ const MAX_OBSERVATION_BYTES: usize = 64 * 1024;
 pub struct Runtime {
     working_dir: PathBuf,
     executed_actions: Arc<Mutex<HashMap<String, ExecutionReceipt>>>,
+    execution_lock: Arc<Mutex<()>>,
 }
 
 impl Runtime {
@@ -26,6 +27,7 @@ impl Runtime {
         Self {
             working_dir: working_dir.as_ref().to_path_buf(),
             executed_actions: Arc::new(Mutex::new(HashMap::new())),
+            execution_lock: Arc::new(Mutex::new(())),
         }
     }
 
@@ -47,6 +49,7 @@ impl Runtime {
             Command::new(cmd)
                 .args(args)
                 .current_dir(&self.working_dir)
+                .kill_on_drop(true)
                 .output(),
         )
         .await
@@ -68,6 +71,9 @@ impl Runtime {
 
     /// Execute an authorized action proposal and emit an ExecutionReceipt.
     pub async fn execute_action(&self, proposal: &ActionProposal) -> RivetResult<ExecutionReceipt> {
+        // The identity check and side effect must be one critical section;
+        // otherwise concurrent retries can both pass the cache lookup.
+        let _execution_guard = self.execution_lock.lock().await;
         let identity = proposal.idempotency_identity();
         if let Some(previous) = self.executed_actions.lock().await.get(&identity).cloned() {
             tracing::debug!(action_id = %proposal.action_id, "returning idempotent action receipt");

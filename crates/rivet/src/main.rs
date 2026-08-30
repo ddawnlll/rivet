@@ -7,8 +7,8 @@ use rivet_core::HarnessCore;
 use rivet_model_genai::GenAiBackend;
 use rivet_repository::CensusRunner;
 use rivet_runtime::Runtime;
-use rivet_store::MemoryStore;
-use std::path::PathBuf;
+use rivet_store::{HardStateStore, RedbStore};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tracing_subscriber::EnvFilter;
 
@@ -66,30 +66,40 @@ async fn main() -> anyhow::Result<()> {
             );
             println!("⏸️  Deferred Trees: {}", census.deferred_count);
         }
+        Some(Commands::Chat { path }) => run_chat(&path).await?,
         _ => {
-            println!("\n🧠 Initializing Noesis Hard State & ACCP Engine...");
-            let store = Arc::new(MemoryStore::new());
-            let model = Arc::new(GenAiBackend::new());
-            let runtime = Arc::new(Runtime::new(&target_dir));
-
-            let harness = HarnessCore::new(store, model, runtime);
-
-            // Run an initial deterministic census
-            let census = CensusRunner::run_census(&target_dir).await?;
-            println!(
-                "📊 Census complete: {} active files, {} deferred trees.",
-                census.total_files, census.deferred_count
-            );
-
-            let prompt = "Explain repository status and structure.";
-            println!("\n💬 Prompt: {}", prompt);
-            let response = harness.step("Understand repository baseline", prompt).await;
-            match response {
-                Ok(resp) => println!("\n🤖 Rivet Response:\n{}", resp),
-                Err(e) => println!("\n⚠️ Note: No active LLM provider configured yet: {}", e),
-            }
+            run_chat(&target_dir).await?;
         }
     }
 
+    Ok(())
+}
+
+async fn run_chat(target_dir: &Path) -> anyhow::Result<()> {
+    println!("\n🧠 Initializing Noesis Hard State & ACCP Engine...");
+    let state_dir = target_dir.join(".rivet");
+    tokio::fs::create_dir_all(&state_dir).await?;
+    let store: Arc<dyn HardStateStore> = Arc::new(RedbStore::open(state_dir.join("state.redb"))?);
+    let model = Arc::new(GenAiBackend::new());
+    let runtime = Arc::new(Runtime::new(target_dir));
+    let harness = HarnessCore::open(store, model, runtime).await?;
+
+    let census = CensusRunner::run_census(target_dir).await?;
+    let frontier = census.active_paths(64);
+    harness.set_relevant_files(frontier.clone()).await;
+    println!(
+        "📊 Census complete: {} files, {} frontier files, {} deferred trees.",
+        census.total_files,
+        frontier.len(),
+        census.deferred_count
+    );
+
+    let prompt = "Explain repository status and structure.";
+    println!("\n💬 Prompt: {}", prompt);
+    let response = harness.step("Understand repository baseline", prompt).await;
+    match response {
+        Ok(resp) => println!("\n🤖 Rivet Response:\n{}", resp),
+        Err(e) => println!("\n⚠️ Model/session error: {}", e),
+    }
     Ok(())
 }

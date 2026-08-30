@@ -94,8 +94,13 @@ impl HarnessCore {
         runtime: Arc<Runtime>,
         session_id: SessionId,
         task_id: TaskId,
-        hard_state: HardState,
+        mut hard_state: HardState,
     ) -> Self {
+        let task_id = hard_state
+            .active_task_id
+            .clone()
+            .unwrap_or_else(|| task_id.clone());
+        hard_state.active_task_id = Some(task_id.clone());
         let base_revision = hard_state.revision;
         Self {
             session_id: session_id.clone(),
@@ -245,9 +250,25 @@ impl HarnessCore {
                     }
                 }
                 CognitiveAction::VerificationRequest(request) => {
-                    self.run_verification(request).await?;
+                    let proposal_message = AccpMessage::VerificationRequest(request.clone());
+                    AccpEnvelope::from_message(
+                        format!("verification-{}", request.obligation_id),
+                        accp::ActorRole::CognitiveController,
+                        &proposal_message,
+                    )?
+                    .validate_direction()?;
+                    let invocation_revision = view_revision.next();
+                    self.run_verification_at(request, invocation_revision)
+                        .await?;
                 }
                 CognitiveAction::ClaimProposal(proposal) => {
+                    let proposal_message = AccpMessage::ClaimProposal(proposal.clone());
+                    AccpEnvelope::from_message(
+                        format!("claim-{}", proposal.claim_id),
+                        accp::ActorRole::CognitiveController,
+                        &proposal_message,
+                    )?
+                    .validate_direction()?;
                     AccpSemanticGate::validate_claim_proposal(&proposal)?;
                     let mut soft = self.soft_workspace.lock().await;
                     soft.add_hypothesis(format!(
@@ -256,8 +277,17 @@ impl HarnessCore {
                     ));
                 }
                 CognitiveAction::StateTransitionProposal(proposal) => {
+                    let proposal_message = AccpMessage::StateTransitionProposal(proposal.clone());
+                    AccpEnvelope::from_message(
+                        format!("transition-{}", self.task_id),
+                        accp::ActorRole::CognitiveController,
+                        &proposal_message,
+                    )?
+                    .validate_direction()?;
                     let current_revision = self.hard_state.lock().await.revision;
-                    if proposal.base_revision != current_revision {
+                    if proposal.base_revision != view_revision
+                        || current_revision != view_revision.next()
+                    {
                         return Err(RivetError::SemanticViolation(
                             "State transition proposal has a stale base revision".into(),
                         ));
@@ -274,6 +304,11 @@ impl HarnessCore {
                 }
                 CognitiveAction::CompletionRequest { summary } => {
                     let hard = self.hard_state.lock().await;
+                    if hard.completed_tasks.contains_key(&self.task_id) {
+                        return Err(RivetError::SemanticViolation(
+                            "Task has already been completed and cannot be completed again".into(),
+                        ));
+                    }
                     let proposal = CompletionProposal {
                         task_id: self.task_id.clone(),
                         summary: summary.clone(),
@@ -281,6 +316,13 @@ impl HarnessCore {
                         base_revision: hard.revision,
                         timestamp: chrono::Utc::now(),
                     };
+                    let proposal_message = AccpMessage::CompletionProposal(proposal.clone());
+                    AccpEnvelope::from_message(
+                        format!("completion-{}", self.task_id),
+                        accp::ActorRole::CognitiveController,
+                        &proposal_message,
+                    )?
+                    .validate_direction()?;
                     let decision = AccpSemanticGate::evaluate_completion(
                         &proposal,
                         hard.revision,
@@ -329,9 +371,21 @@ impl HarnessCore {
         request: VerificationRequest,
     ) -> RivetResult<accp::VerificationReceipt> {
         let current_revision = self.hard_state.lock().await.revision;
-        if request.target_scope.revision != current_revision {
+        self.run_verification_at(request, current_revision).await
+    }
+
+    async fn run_verification_at(
+        &self,
+        request: VerificationRequest,
+        expected_revision: Revision,
+    ) -> RivetResult<accp::VerificationReceipt> {
+        let current_revision = self.hard_state.lock().await.revision;
+        if request.target_scope.repository != self.repository_id
+            || request.target_scope.revision != expected_revision
+            || current_revision != expected_revision
+        {
             return Err(RivetError::SemanticViolation(
-                "Verification request is stale for the current state revision".into(),
+                "Verification request is outside the current repository or state revision".into(),
             ));
         }
         let mut parts = request.predicate.split_whitespace();
@@ -341,6 +395,23 @@ impl HarnessCore {
             ));
         };
         let args: Vec<_> = parts.collect();
+        if !is_allowed_verification_program(program) {
+            return Err(RivetError::AuthorityDenied(format!(
+                "verification program '{program}' is not exposed by the Harness"
+            )));
+        }
+        if args.iter().any(|arg| {
+            let path = std::path::Path::new(arg);
+            path.is_absolute()
+                || path.has_root()
+                || path
+                    .components()
+                    .any(|component| matches!(component, std::path::Component::ParentDir))
+        }) {
+            return Err(RivetError::AuthorityDenied(
+                "verification arguments cannot address an absolute or parent path".into(),
+            ));
+        }
         let (exit_code, stdout, stderr, _duration_ms) = self
             .runtime
             .execute_command(program, &args, request.timeout_seconds as u64)
@@ -359,6 +430,13 @@ impl HarnessCore {
             receipt.diagnostics =
                 Some(format!("verification command exited with code {exit_code}"));
         }
+        let receipt_message = AccpMessage::VerificationReceipt(receipt.clone());
+        AccpEnvelope::from_message(
+            receipt.receipt_id.to_string(),
+            accp::ActorRole::Harness,
+            &receipt_message,
+        )?
+        .validate_direction()?;
         self.record_event(NoesisEvent::VerificationRecorded {
             receipt: receipt.clone(),
             timestamp: chrono::Utc::now(),
@@ -398,6 +476,13 @@ impl HarnessCore {
         self.store.save_checkpoint(&hard).await?;
         Ok(revision)
     }
+}
+
+fn is_allowed_verification_program(program: &str) -> bool {
+    matches!(
+        program,
+        "cargo" | "pytest" | "go" | "npm" | "pnpm" | "yarn" | "jest" | "vitest"
+    )
 }
 
 fn parse_report(program: &str, stdout: &str, stderr: &str) -> ParsedTestReport {

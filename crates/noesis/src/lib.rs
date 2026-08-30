@@ -94,6 +94,9 @@ pub enum NoesisEvent {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct HardState {
     pub revision: Revision,
+    /// Stable task identity used by a resumed Harness session.
+    #[serde(default)]
+    pub active_task_id: Option<TaskId>,
     pub claims: HashMap<ClaimId, ClaimRecord>,
     pub obligations: HashMap<ObligationId, String>,
     pub closed_obligations: HashMap<ObligationId, ReceiptId>,

@@ -140,3 +140,23 @@ fn action_policy_is_scope_revision_and_risk_bound() {
     let decision = AccpSemanticGate::authorize_action(&stale, &policy);
     assert_eq!(decision.verdict, ActionDecisionVerdict::Block);
 }
+
+#[test]
+fn envelope_rejects_ontology_mismatch_and_non_object_payloads() {
+    let mut envelope = AccpEnvelope {
+        accp_version: ACCP_VERSION.into(),
+        message_id: "message-ontology".into(),
+        sender: ActorRole::Harness,
+        family: MessageFamily::Receipt,
+        kind: "ACTION".into(),
+        payload: serde_json::json!({}),
+        correlation_id: None,
+        scope: None,
+        revision: None,
+    };
+    assert!(envelope.validate_direction().is_err());
+
+    envelope.kind = "EXECUTION".into();
+    envelope.payload = serde_json::json!("model prose");
+    assert!(envelope.validate_direction().is_err());
+}

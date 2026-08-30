@@ -5,7 +5,7 @@ use noesis::NoesisEvent;
 use rivet_core::HarnessCore;
 use rivet_model::{CognitiveAction, ModelBackend, ModelRequest, ModelResponse, TokenUsage};
 use rivet_runtime::Runtime;
-use rivet_store::MemoryStore;
+use rivet_store::{HardStateStore, MemoryStore, RedbStore};
 use rivet_types::*;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -222,4 +222,100 @@ async fn test_completion_rejected_if_obligation_unclosed() {
     let res2 = harness2.step("Fix issue", "Finish the task").await;
     assert!(res2.is_ok());
     assert!(res2.unwrap().contains("Task completed"));
+}
+
+#[tokio::test]
+async fn persisted_harness_reopens_checkpointed_noesis_state() {
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let db_path = tmp_dir.path().join(".rivet/state.redb");
+    tokio::fs::create_dir_all(db_path.parent().unwrap())
+        .await
+        .unwrap();
+    let obligation_id = ObligationId::new();
+
+    {
+        let store: Arc<dyn HardStateStore> = Arc::new(RedbStore::open(&db_path).unwrap());
+        let harness = HarnessCore::open(
+            store,
+            Arc::new(ScriptedModelBackend::new(vec![])),
+            Arc::new(Runtime::new(tmp_dir.path())),
+        )
+        .await
+        .unwrap();
+        let revision = harness
+            .record_event(NoesisEvent::ObligationCreated {
+                obligation_id: obligation_id.clone(),
+                description: "restart must preserve obligations".into(),
+                scope: Scope::global("rivet", Revision::ZERO),
+                timestamp: Utc::now(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(revision, Revision(1));
+        assert!(
+            harness
+                .hard_state
+                .lock()
+                .await
+                .obligations
+                .contains_key(&obligation_id)
+        );
+    }
+
+    let reopened_store: Arc<dyn HardStateStore> = Arc::new(RedbStore::open(&db_path).unwrap());
+    let reopened = HarnessCore::open(
+        reopened_store,
+        Arc::new(ScriptedModelBackend::new(vec![])),
+        Arc::new(Runtime::new(tmp_dir.path())),
+    )
+    .await
+    .unwrap();
+    let hard = reopened.hard_state.lock().await;
+    assert_eq!(hard.revision, Revision(1));
+    assert_eq!(reopened.task_id, hard.active_task_id.clone().unwrap());
+    assert_eq!(
+        hard.obligations.get(&obligation_id).unwrap(),
+        "restart must preserve obligations"
+    );
+}
+
+#[tokio::test]
+async fn verification_cannot_escape_the_exposed_test_runner_capability() {
+    let directory = tempfile::tempdir().unwrap();
+    let harness = HarnessCore::new(
+        Arc::new(MemoryStore::new()),
+        Arc::new(ScriptedModelBackend::new(vec![])),
+        Arc::new(Runtime::new(directory.path())),
+    );
+    let revision = harness.hard_state.lock().await.revision;
+    let result = harness
+        .run_verification(accp::VerificationRequest {
+            obligation_id: ObligationId::new(),
+            predicate: "powershell Write-Output unsafe".into(),
+            target_scope: Scope::global("rivet", revision),
+            timeout_seconds: 5,
+            timestamp: Utc::now(),
+        })
+        .await;
+    assert!(matches!(result, Err(RivetError::AuthorityDenied(_))));
+}
+
+#[tokio::test]
+async fn verification_scope_is_bound_to_the_harness_repository() {
+    let directory = tempfile::tempdir().unwrap();
+    let harness = HarnessCore::new(
+        Arc::new(MemoryStore::new()),
+        Arc::new(ScriptedModelBackend::new(vec![])),
+        Arc::new(Runtime::new(directory.path())),
+    );
+    let result = harness
+        .run_verification(accp::VerificationRequest {
+            obligation_id: ObligationId::new(),
+            predicate: "cargo test -p praxis --lib".into(),
+            target_scope: Scope::global("other-repository", Revision::ZERO),
+            timeout_seconds: 5,
+            timestamp: Utc::now(),
+        })
+        .await;
+    assert!(matches!(result, Err(RivetError::SemanticViolation(_))));
 }

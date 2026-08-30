@@ -253,6 +253,17 @@ impl AccpEnvelope {
                 "ACCP envelope requires message_id and kind".into(),
             ));
         }
+        if !self.payload.is_object() {
+            return Err(RivetError::SemanticViolation(
+                "ACCP envelope payload must be a JSON object".into(),
+            ));
+        }
+        if !kind_is_valid_for_family(self.family, &self.kind) {
+            return Err(RivetError::SemanticViolation(format!(
+                "ACCP kind '{}' is not valid for family {:?}",
+                self.kind, self.family
+            )));
+        }
 
         let controller_allowed =
             matches!(self.family, MessageFamily::Query | MessageFamily::Proposal);
@@ -286,6 +297,31 @@ impl AccpEnvelope {
         }
         Ok(())
     }
+}
+
+fn kind_is_valid_for_family(family: MessageFamily, kind: &str) -> bool {
+    let core_kinds: &[&str] = match family {
+        MessageFamily::View => &["COGNITIVE", "STATE", "CAPABILITY", "CONSTRAINT"],
+        MessageFamily::Query => &["STATE", "EVIDENCE", "ARTIFACT", "CAPABILITY"],
+        MessageFamily::Proposal => &[
+            "CLAIM",
+            "ACTION",
+            "WORKSPACE_DELTA",
+            "STATE_TRANSITION",
+            "VERIFICATION",
+            "COMPLETION",
+        ],
+        MessageFamily::Decision => &["ACTION", "STATE_TRANSITION", "COMPLETION"],
+        MessageFamily::Receipt => &[
+            "EXECUTION",
+            "OBSERVATION",
+            "EVIDENCE",
+            "VERIFICATION",
+            "STATE_TRANSITION",
+        ],
+        MessageFamily::Signal => &["INVALIDATION", "CONTRADICTION", "REPLAN", "LIFECYCLE"],
+    };
+    core_kinds.contains(&kind) || kind.starts_with("EXT_")
 }
 
 /// Harness-owned action authorization policy. A model proposal cannot widen it.

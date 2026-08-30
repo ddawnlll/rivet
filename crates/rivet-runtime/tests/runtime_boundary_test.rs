@@ -2,6 +2,7 @@ use accp::{ActionProposal, ActionRisk};
 use chrono::Utc;
 use rivet_runtime::Runtime;
 use rivet_types::*;
+use std::sync::Arc;
 
 fn proposal(
     capability: &str,
@@ -88,5 +89,31 @@ async fn identical_action_identity_returns_prior_receipt_without_reexecution() {
             .await
             .unwrap(),
         "first"
+    );
+}
+
+#[tokio::test]
+async fn concurrent_retries_share_one_authoritative_receipt() {
+    let directory = tempfile::tempdir().unwrap();
+    let runtime = Arc::new(Runtime::new(directory.path()));
+    let write = proposal(
+        "file.write",
+        "concurrent.txt",
+        serde_json::json!({ "content": "first writer only" }),
+        "concurrent-action",
+    );
+
+    let (left, right) = tokio::join!(
+        runtime.execute_action(&write),
+        runtime.execute_action(&write)
+    );
+    let left = left.unwrap();
+    let right = right.unwrap();
+    assert_eq!(left.receipt_id, right.receipt_id);
+    assert_eq!(
+        tokio::fs::read_to_string(directory.path().join("concurrent.txt"))
+            .await
+            .unwrap(),
+        "first writer only"
     );
 }

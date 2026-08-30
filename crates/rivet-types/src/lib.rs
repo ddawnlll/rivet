@@ -164,7 +164,9 @@ impl Scope {
             (None, _) => true,
             (Some(outer), Some(inner)) => {
                 outer == inner
-                    || outer.ends_with("/**") && inner.starts_with(&outer[..outer.len() - 3])
+                    || outer.strip_suffix("/**").is_some_and(|prefix| {
+                        inner == prefix || inner.starts_with(&format!("{prefix}/"))
+                    })
             }
             (Some(_), None) => false,
         }
@@ -210,7 +212,7 @@ fn glob_matches(pattern: &str, value: &str) -> bool {
 /// with its working directory.
 pub fn is_safe_relative_path(path: impl AsRef<Path>) -> bool {
     let path = path.as_ref();
-    if path.is_absolute() {
+    if path.is_absolute() || path.has_root() {
         return false;
     }
     !path

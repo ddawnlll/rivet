@@ -78,13 +78,35 @@ impl ExecGate {
                 ));
             }
 
-            // Execute command
-            let timeout_secs = cmd.timeout_seconds.unwrap_or(300);
             let cwd = if let Some(ref sub) = cmd.cwd {
-                repo_root.join(sub)
+                match safe_cwd(repo_root, sub) {
+                    Ok(path) => path,
+                    Err(reason) => {
+                        reason_codes.push(reason_codes::COMMAND_NOT_ALLOWED.to_string());
+                        diagnostics.push(Diagnostic::error(
+                            "COMMAND_NOT_ALLOWED",
+                            format!("Command '{}' has an unsafe cwd: {reason}", cmd.command),
+                        ));
+                        run_results.push(CommandRunResult {
+                            command_id: cmd.id.clone(),
+                            command: cmd.command.clone(),
+                            exit_code: None,
+                            stdout: String::new(),
+                            stderr: reason,
+                            duration_ms: 0,
+                            timed_out: false,
+                            passed: false,
+                            reason_codes: vec![reason_codes::COMMAND_NOT_ALLOWED.to_string()],
+                        });
+                        continue;
+                    }
+                }
             } else {
                 repo_root.to_path_buf()
             };
+
+            // Execute command
+            let timeout_secs = cmd.timeout_seconds.unwrap_or(300);
 
             let start = Instant::now();
             let mut parts = cmd.command.split_whitespace();
@@ -93,7 +115,11 @@ impl ExecGate {
 
             let res = tokio::time::timeout(
                 std::time::Duration::from_secs(timeout_secs),
-                Command::new(program).args(&args).current_dir(&cwd).output(),
+                Command::new(program)
+                    .args(&args)
+                    .current_dir(&cwd)
+                    .kill_on_drop(true)
+                    .output(),
             )
             .await;
 
@@ -196,5 +222,32 @@ impl ExecGate {
         };
 
         (result, run_results)
+    }
+}
+
+fn safe_cwd(repo_root: &Path, subdirectory: &str) -> Result<std::path::PathBuf, String> {
+    let relative = Path::new(subdirectory);
+    if relative.is_absolute()
+        || relative.has_root()
+        || relative
+            .components()
+            .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
+        return Err("cwd must be a relative path within the repository".into());
+    }
+    Ok(repo_root.join(relative))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[test]
+    fn safe_cwd_rejects_parent_and_absolute_paths() {
+        let root = PathBuf::from("repo");
+        assert!(safe_cwd(&root, "crates/praxis").is_ok());
+        assert!(safe_cwd(&root, "../outside").is_err());
+        assert!(safe_cwd(&root, "/outside").is_err());
     }
 }

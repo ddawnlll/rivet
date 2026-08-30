@@ -3,8 +3,9 @@
 //! Bridges Rivet's ModelBackend trait with the `genai` multi-provider client.
 
 use async_trait::async_trait;
+use futures_util::StreamExt;
 use genai::adapter::AdapterKind;
-use genai::chat::{ChatMessage, ChatOptions, ChatRequest};
+use genai::chat::{ChatMessage, ChatOptions, ChatRequest, ChatStreamEvent};
 use genai::resolver::{AuthData, Endpoint};
 use genai::{Client, ServiceTarget};
 use rivet_model::{ModelBackend, ModelRequest, ModelResponse, TokenUsage};
@@ -96,5 +97,47 @@ impl ModelBackend for GenAiBackend {
         // Keep the adapter's mapping explicit: provider output is only a
         // controller proposal, never an execution/verification receipt.
         Ok(ModelResponse::from_text(text_content, usage))
+    }
+
+    async fn stream(&self, request: ModelRequest) -> RivetResult<Vec<String>> {
+        let chat_req = ChatRequest::new(vec![
+            ChatMessage::system(request.system_prompt.to_string()),
+            ChatMessage::user(format!(
+                "{}\n\nUser Request: {}",
+                request.cognitive_view.format_prompt_block(),
+                request.user_prompt
+            )),
+        ]);
+        let mut chat_options = ChatOptions::default()
+            .with_capture_content(true)
+            .with_capture_usage(true);
+        if let Some(t) = request.temperature {
+            chat_options = chat_options.with_temperature(t as f64);
+        }
+        if let Some(max_tokens) = request.max_tokens {
+            chat_options = chat_options.with_max_tokens(max_tokens);
+        }
+
+        let response = self
+            .client
+            .exec_chat_stream(&request.model_id, chat_req, Some(&chat_options))
+            .await
+            .map_err(|e| RivetError::Model(e.to_string()))?;
+        let mut stream = response.stream;
+        let mut chunks = Vec::new();
+        while let Some(event) = stream.next().await {
+            match event.map_err(|e| RivetError::Model(e.to_string()))? {
+                ChatStreamEvent::Chunk(chunk) if !chunk.content.is_empty() => {
+                    chunks.push(chunk.content);
+                }
+                // Reasoning chunks are intentionally not exposed as model
+                // content; they cannot become proposals or authority.
+                ChatStreamEvent::Start
+                | ChatStreamEvent::ReasoningChunk(_)
+                | ChatStreamEvent::End(_) => {}
+                ChatStreamEvent::Chunk(_) => {}
+            }
+        }
+        Ok(chunks)
     }
 }

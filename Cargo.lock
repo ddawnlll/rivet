@@ -1527,12 +1527,15 @@ name = "rivet-model-genai"
 version = "0.3.0"
 dependencies = [
  "async-trait",
+ "futures-util",
  "genai",
+ "noesis",
  "rivet-model",
  "rivet-types",
  "serde",
  "serde_json",
  "thiserror 2.0.20",
+ "tokio",
  "tracing",
 ]
 
@@ -1543,6 +1546,7 @@ dependencies = [
  "rivet-types",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.20",
  "tokio",
  "tracing",
