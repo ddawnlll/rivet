@@ -96,8 +96,8 @@ fixtures listed below.
 - `226fa95` — optimized focused Core and repeated locked workspace regression evidence.
 - `cda83f8` — all-target clippy repair and full debug workspace regression evidence.
 - `55fd77d` — focused final regression and rustfmt compliance.
-- `pending` — lockfile-constrained all-target workspace regression (to be committed after final gate).
-- `pending` — focused Praxis/Runtime/Repository regression and normal workspace clippy (to be committed after final gate).
+- `4bbabe5` — lockfile-constrained all-target workspace regression.
+- `5273332` — focused Praxis/Runtime/Repository regression and normal workspace clippy.
 - `4c4322c` — final post-timebox workspace, clippy, format, diff, and doc-test gates.
 
 ## Interpretation and remaining limits
