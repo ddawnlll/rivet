@@ -168,7 +168,7 @@ mod tests {
 
     #[test]
     fn test_merkle_tree_and_proofs() {
-        let records = vec![
+        let records = [
             b"record-1".as_slice(),
             b"record-2".as_slice(),
             b"record-3".as_slice(),
