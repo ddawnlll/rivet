@@ -87,8 +87,8 @@ fixtures listed below.
 - `b7d59af` — final debug workspace regression evidence after durable scope enforcement.
 - `86c052e` — optimized final workspace regression evidence.
 - `01c2b49` — lockfile-constrained workspace regression evidence.
-- `pending` — optimized focused Core and repeated locked workspace regression evidence (to be committed after final gate).
-- `pending` — all-target clippy repair and full debug workspace regression evidence (to be committed after final gate).
+- `226fa95` — optimized focused Core and repeated locked workspace regression evidence.
+- `cda83f8` — all-target clippy repair and full debug workspace regression evidence.
 
 ## Interpretation and remaining limits
 
