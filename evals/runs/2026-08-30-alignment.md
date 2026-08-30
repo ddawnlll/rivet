@@ -33,6 +33,7 @@ fixtures listed below.
 | EVAL-017 | `cargo test -p rivet-core --test cognitive_cycle_test` after phase/invalidation additions | PASS: 9 tests, including explicit `RunPhase` outcomes and failed Praxis verification reopening its obligation. |
 | EVAL-018 | `cargo test --workspace` after strict scope matching, prompt bounds, append-log recovery, and phase changes | PASS: all workspace unit, integration, and doc tests. |
 | EVAL-019 | `cargo clippy --workspace -- -D warnings` after the same changes | PASS. |
+| EVAL-020 | `cargo test -p rivet-core --test cognitive_cycle_test` plus `cargo clippy -p rivet-core -- -D warnings` after canonical lifecycle phase completion | PASS: 9 core tests and strict core clippy; `Observing` and `Responding` transitions now exist alongside the documented lifecycle states. |
 
 ## Atomic milestones
 
@@ -40,7 +41,7 @@ fixtures listed below.
 - `1000ccd` — enforce ACCP runtime verification boundaries.
 - `bbcc519` — harden repository and verification boundaries, OpenCode adapter/native stream path, CLI persistence/frontier.
 - `97e68f3` — close state/retry semantic gaps, strict ontology carriers, CognitiveView evidence/repository identity, concurrency and invalidation tests.
-- `pending` — strict scope glob semantics, CognitiveView UTF-8/token bounds, append-log recovery, post-completion invalidation, and explicit RunPhase outcomes (to be committed after final gate).
+- `867dc90` — strict scope glob semantics, CognitiveView UTF-8/token bounds, append-log recovery, post-completion invalidation, and explicit RunPhase outcomes.
 
 ## Interpretation and remaining limits
 

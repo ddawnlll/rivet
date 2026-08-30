@@ -25,7 +25,7 @@ use std::time::Instant;
 use tokio::sync::Mutex;
 
 /// Explicit phase state machine for a single cognitive cycle.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum RunPhase {
     Idle,
     PreparingView,
@@ -33,9 +33,13 @@ pub enum RunPhase {
     DecodingActions,
     Authorizing,
     Executing,
+    Observing,
     Verifying,
     RevisingState,
+    WaitingForUser,
+    Responding,
     Completed,
+    Cancelled,
     Failed,
 }
 
@@ -300,6 +304,7 @@ impl HarnessCore {
 
                     self.set_phase(RunPhase::Executing).await;
                     let receipt = self.runtime.execute_action(&proposal).await?;
+                    self.set_phase(RunPhase::Observing).await;
                     let receipt_message = AccpMessage::ExecutionReceipt(receipt.clone());
                     AccpEnvelope::from_message(
                         receipt.receipt_id.to_string(),
@@ -446,6 +451,7 @@ impl HarnessCore {
             }
         }
 
+        self.set_phase(RunPhase::Responding).await;
         Ok(response.text_content)
     }
 
