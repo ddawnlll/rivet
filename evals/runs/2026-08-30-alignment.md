@@ -39,6 +39,7 @@ fixtures listed below.
 | EVAL-023 | `cargo clippy --workspace -- -D warnings` after Harness Verity bridge | PASS. |
 | EVAL-024 | `cargo test -p rivet-store --test store_test -- --nocapture` plus `cargo clippy -p rivet-store --tests -- -D warnings` | PASS: 4 persistence tests; a real child test process exits before checkpoint and its append-log event is recovered after reopen. |
 | EVAL-025 | `cargo test -p accp --test accp_invariants_test` plus `cargo clippy -p accp --tests -- -D warnings` | PASS: 8 ontology tests; every current VIEW/QUERY/PROPOSAL/DECISION/RECEIPT/SIGNAL carrier round-trips through canonical JSON with family/kind/scope/revision preserved. |
+| EVAL-026 | `cargo test -p noesis; cargo test -p rivet-repository; cargo test -p rivet-core --test cognitive_cycle_test; cargo clippy --workspace -- -D warnings` | PASS: directory-level census signals reach CognitiveView as non-authoritative context; 6 Noesis, 2 repository, 10 Core tests and workspace clippy pass. |
 
 ## Atomic milestones
 
@@ -49,7 +50,8 @@ fixtures listed below.
 - `867dc90` — strict scope glob semantics, CognitiveView UTF-8/token bounds, append-log recovery, post-completion invalidation, and explicit RunPhase outcomes.
 - `02c75aa` — Harness bridge for PlanSpec-driven VerityPipeline verification, with a real subprocess integration test and test clippy repair.
 - `4e4ad0e` — child-process crash recovery test and updated persistence gap tracking.
-- `pending` — ACCP carrier round-trip fixtures and schema gap tracking (to be committed after final gate).
+- `4c088f7` — ACCP carrier round-trip fixtures and schema gap tracking.
+- `pending` — hierarchical census summaries and CognitiveView repository-signal wiring (to be committed after final gate).
 
 ## Interpretation and remaining limits
 

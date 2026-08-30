@@ -181,7 +181,7 @@ remaining_gaps:
     priority: "P0"
     title: "LLM-led hierarchical repository relevance"
     status: "IN_PROGRESS"
-    evidence: "Deterministic .gitignore-aware census and bounded signal frontier are implemented; model-selected recursive DESCEND/MAYBE/DEFER is not yet wired."
+    evidence: "Deterministic .gitignore-aware census now includes bounded directory summaries (file count, bytes, relevance, high-volume signal) and Core/CLI pass them into CognitiveView as explicitly non-authoritative context; model-selected recursive DESCEND/MAYBE/DEFER is not yet wired."
   - id: "RG-002"
     priority: "P0"
     title: "Full Praxis Verity pipeline through Harness verification"

@@ -53,6 +53,7 @@ pub struct HarnessCore {
     pub runtime: Arc<Runtime>,
     repository_id: String,
     relevant_files: Arc<Mutex<Vec<String>>>,
+    repository_signals: Arc<Mutex<Vec<String>>>,
     cycle_lock: Arc<Mutex<()>>,
     phase: Arc<Mutex<RunPhase>>,
 }
@@ -120,6 +121,7 @@ impl HarnessCore {
             runtime,
             repository_id: std::env::var("RIVET_REPOSITORY_ID").unwrap_or_else(|_| "rivet".into()),
             relevant_files: Arc::new(Mutex::new(Vec::new())),
+            repository_signals: Arc::new(Mutex::new(Vec::new())),
             cycle_lock: Arc::new(Mutex::new(())),
             phase: Arc::new(Mutex::new(RunPhase::Idle)),
         }
@@ -129,6 +131,16 @@ impl HarnessCore {
         files.sort();
         files.dedup();
         *self.relevant_files.lock().await = files;
+    }
+
+    /// Install bounded deterministic repository observations for the next
+    /// Cognitive View. They inform semantic induction but never authorize a
+    /// path or mutate hard state by themselves.
+    pub async fn set_repository_signals(&self, mut signals: Vec<String>) {
+        signals.sort();
+        signals.dedup();
+        signals.truncate(64);
+        *self.repository_signals.lock().await = signals;
     }
 
     pub fn with_repository_id(mut self, repository_id: impl Into<String>) -> Self {
@@ -149,6 +161,7 @@ impl HarnessCore {
         let hard = self.hard_state.lock().await;
         let soft = self.soft_workspace.lock().await;
         let relevant_files = self.relevant_files.lock().await.clone();
+        let repository_signals = self.repository_signals.lock().await.clone();
 
         let mut active_claims: Vec<_> = hard.claims.values().cloned().collect();
         active_claims.sort_by(|left, right| left.id.cmp(&right.id));
@@ -173,6 +186,7 @@ impl HarnessCore {
             active_claims,
             open_obligations,
             recent_evidence,
+            repository_signals,
             unknowns: soft.unknowns.clone(),
             active_hypotheses: soft.hypotheses.clone(),
             active_focus: soft.active_focus.clone(),

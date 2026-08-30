@@ -105,8 +105,17 @@ async fn test_end_to_end_cognitive_cycle() {
     harness
         .set_relevant_files(vec!["src/lib.rs".into(), "src/lib.rs".into()])
         .await;
+    harness
+        .set_repository_signals(vec![
+            "src files=1 bytes=42 relevance=Active".into(),
+            "target files=0 bytes=0 relevance=Deferred(\"target\")".into(),
+            "src files=1 bytes=42 relevance=Active".into(),
+        ])
+        .await;
     let view = harness.compile_view("Create greeting file").await;
     assert_eq!(view.relevant_files, vec!["src/lib.rs"]);
+    assert_eq!(view.repository_signals.len(), 2);
+    assert!(view.format_prompt_block().contains("target files=0"));
     assert!(
         view.recent_evidence
             .iter()

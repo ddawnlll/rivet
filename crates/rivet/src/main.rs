@@ -95,11 +95,28 @@ async fn run_chat(target_dir: &Path) -> anyhow::Result<()> {
 
     let census = CensusRunner::run_census(&target_dir).await?;
     let frontier = census.active_paths(64);
+    let repository_signals = census
+        .directories
+        .iter()
+        .take(64)
+        .map(|directory| {
+            format!(
+                "{} files={} bytes={} relevance={:?} signals={:?}",
+                directory.relative_path,
+                directory.file_count,
+                directory.total_bytes,
+                directory.relevance,
+                directory.signals
+            )
+        })
+        .collect();
     harness.set_relevant_files(frontier.clone()).await;
+    harness.set_repository_signals(repository_signals).await;
     println!(
-        "📊 Census complete: {} files, {} frontier files, {} deferred trees.",
+        "📊 Census complete: {} files, {} frontier files, {} directory signals, {} deferred trees.",
         census.total_files,
         frontier.len(),
+        census.directories.len(),
         census.deferred_count
     );
 

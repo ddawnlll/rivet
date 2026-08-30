@@ -26,6 +26,18 @@ pub struct FileEntry {
     pub relevance: PathRelevance,
 }
 
+/// Deterministic directory-level signals supplied to the semantic relevance
+/// layer. These are observations, not an assertion that a directory is
+/// permanently irrelevant to a future goal.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DirectorySummary {
+    pub relative_path: String,
+    pub file_count: usize,
+    pub total_bytes: u64,
+    pub relevance: PathRelevance,
+    pub signals: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RepositoryCensus {
     pub root_path: PathBuf,
@@ -33,6 +45,8 @@ pub struct RepositoryCensus {
     pub total_bytes: u64,
     pub entries: Vec<FileEntry>,
     pub deferred_count: usize,
+    #[serde(default)]
+    pub directories: Vec<DirectorySummary>,
 }
 
 impl RepositoryCensus {
@@ -63,6 +77,25 @@ impl RepositoryCensus {
             .map(|entry| entry.relative_path)
             .collect()
     }
+
+    /// Select a bounded directory frontier for later semantic induction.
+    /// Directory ranking is only a deterministic signal; it does not replace
+    /// a model's goal-conditioned DESCEND/MAYBE/DEFER judgment.
+    pub fn active_directory_frontier(&self, max_entries: usize) -> Vec<DirectorySummary> {
+        let mut active: Vec<_> = self
+            .directories
+            .iter()
+            .filter(|directory| matches!(directory.relevance, PathRelevance::Active))
+            .cloned()
+            .collect();
+        active.sort_by(|left, right| {
+            frontier_score(&right.relative_path)
+                .cmp(&frontier_score(&left.relative_path))
+                .then_with(|| left.relative_path.cmp(&right.relative_path))
+        });
+        active.truncate(max_entries);
+        active
+    }
 }
 
 pub struct CensusRunner;
@@ -88,6 +121,8 @@ impl CensusRunner {
         let mut total_bytes = 0;
         let mut deferred_count = 0;
         let mut stack = vec![root.clone()];
+        let mut directory_paths: Vec<(String, PathRelevance)> = Vec::new();
+        let mut file_records: Vec<(String, u64)> = Vec::new();
 
         while let Some(dir) = stack.pop() {
             let mut children = Vec::new();
@@ -134,18 +169,24 @@ impl CensusRunner {
                         .map(|name| (*name).to_string())
                     {
                         deferred_count += 1;
+                        directory_paths.push((
+                            relative_path.clone(),
+                            PathRelevance::Deferred(reason.clone()),
+                        ));
                         entries.push(FileEntry {
                             relative_path,
                             size_bytes: 0,
                             relevance: PathRelevance::Deferred(reason),
                         });
                     } else if ignore_rules.matches(&relative_path, true) {
+                        directory_paths.push((relative_path.clone(), PathRelevance::Ignored));
                         entries.push(FileEntry {
                             relative_path,
                             size_bytes: 0,
                             relevance: PathRelevance::Ignored,
                         });
                     } else {
+                        directory_paths.push((relative_path, PathRelevance::Active));
                         stack.push(path);
                     }
                     continue;
@@ -159,6 +200,7 @@ impl CensusRunner {
                     let size = meta.len();
                     total_files += 1;
                     total_bytes += size;
+                    file_records.push((relative_path.clone(), size));
                     let relevance = if ignore_rules.matches(&relative_path, false) {
                         PathRelevance::Ignored
                     } else {
@@ -174,12 +216,37 @@ impl CensusRunner {
         }
 
         entries.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
+        let mut directories: Vec<_> = directory_paths
+            .into_iter()
+            .map(|(relative_path, relevance)| {
+                let prefix = format!("{relative_path}/");
+                let (file_count, total_bytes) = file_records
+                    .iter()
+                    .filter(|(path, _)| path.starts_with(&prefix))
+                    .fold((0, 0), |(count, bytes), (_, size)| {
+                        (count + 1, bytes + size)
+                    });
+                let mut signals = Vec::new();
+                if matches!(relevance, PathRelevance::Deferred(_)) {
+                    signals.push("high_volume".into());
+                }
+                DirectorySummary {
+                    relative_path,
+                    file_count,
+                    total_bytes,
+                    relevance,
+                    signals,
+                }
+            })
+            .collect();
+        directories.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
         Ok(RepositoryCensus {
             root_path: root,
             total_files,
             total_bytes,
             entries,
             deferred_count,
+            directories,
         })
     }
 }
@@ -370,6 +437,21 @@ mod tests {
             PathRelevance::Deferred(_)
         ));
         assert_eq!(census.active_paths(2), vec!["Cargo.toml", "src/lib.rs"]);
+        let src_summary = census
+            .directories
+            .iter()
+            .find(|directory| directory.relative_path == "src")
+            .unwrap();
+        assert_eq!(src_summary.file_count, 1);
+        assert_eq!(src_summary.total_bytes, "pub fn ok() {}\n".len() as u64);
+        assert_eq!(census.active_directory_frontier(1)[0].relative_path, "src");
+        let target_summary = census
+            .directories
+            .iter()
+            .find(|directory| directory.relative_path == "target")
+            .unwrap();
+        assert_eq!(target_summary.file_count, 0);
+        assert_eq!(target_summary.signals, vec!["high_volume"]);
     }
 
     #[tokio::test]

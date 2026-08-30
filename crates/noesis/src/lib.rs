@@ -343,6 +343,10 @@ pub struct CognitiveView {
     pub open_obligations: Vec<String>,
     #[serde(default)]
     pub recent_evidence: Vec<String>,
+    /// Bounded deterministic repository observations. These are signals for
+    /// semantic induction, never pre-authorized relevance decisions.
+    #[serde(default)]
+    pub repository_signals: Vec<String>,
     pub unknowns: Vec<String>,
     pub active_hypotheses: Vec<String>,
     pub active_focus: Vec<String>,
@@ -414,6 +418,14 @@ impl CognitiveView {
             out.push_str("### RELEVANT ARTIFACT FRONTIER:\n");
             for path in &self.relevant_files {
                 out.push_str(&format!("- {}\n", path));
+            }
+            out.push('\n');
+        }
+
+        if !self.repository_signals.is_empty() {
+            out.push_str("### REPOSITORY CENSUS SIGNALS (not semantic decisions):\n");
+            for signal in &self.repository_signals {
+                out.push_str(&format!("- {}\n", signal));
             }
             out.push('\n');
         }
@@ -580,6 +592,7 @@ mod tests {
             active_claims: vec![],
             open_obligations: vec![],
             recent_evidence: vec![],
+            repository_signals: vec![],
             unknowns: vec![],
             active_hypotheses: vec![],
             active_focus: vec![],
@@ -591,5 +604,27 @@ mod tests {
         assert!(prompt.len() <= 64 * 4);
         assert!(prompt.is_char_boundary(prompt.len()));
         assert!(prompt.ends_with("[view truncated]"));
+    }
+
+    #[test]
+    fn cognitive_view_exposes_repository_signals_as_non_authoritative_context() {
+        let view = CognitiveView {
+            hard_revision: Revision::ZERO,
+            repository_id: "repo".into(),
+            goal_description: "inspect repository".into(),
+            active_claims: vec![],
+            open_obligations: vec![],
+            recent_evidence: vec![],
+            repository_signals: vec!["src files=3 bytes=120 relevance=Active".into()],
+            unknowns: vec![],
+            active_hypotheses: vec![],
+            active_focus: vec![],
+            relevant_files: vec![],
+            token_budget_hint: 256,
+            model_invocation_count: 0,
+        };
+        let prompt = view.format_prompt_block();
+        assert!(prompt.contains("REPOSITORY CENSUS SIGNALS (not semantic decisions)"));
+        assert!(prompt.contains("src files=3 bytes=120 relevance=Active"));
     }
 }
