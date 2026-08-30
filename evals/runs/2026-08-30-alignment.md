@@ -42,6 +42,7 @@ fixtures listed below.
 | EVAL-026 | `cargo test -p noesis; cargo test -p rivet-repository; cargo test -p rivet-core --test cognitive_cycle_test; cargo clippy --workspace -- -D warnings` | PASS: directory-level census signals reach CognitiveView as non-authoritative context; 6 Noesis, 2 repository, 10 Core tests and workspace clippy pass. |
 | EVAL-027 | `cargo test -p rivet-repository; cargo test -p noesis; cargo test -p rivet-core --test cognitive_cycle_test; cargo clippy --workspace -- -D warnings` | PASS after repository-signal wiring; directory counts/bytes and deferred high-volume signals are bounded to CognitiveView and all targeted tests plus workspace clippy pass. |
 | EVAL-028 | `cargo test -p rivet-core --test cognitive_cycle_test` after unknown-obligation enforcement | PASS: 11 Core tests; verification rejects unknown obligations before command execution, and the end-to-end fixture now creates and verifies a real obligation before completion. |
+| EVAL-029 | `cargo test -p rivet-core --test cognitive_cycle_test` plus `cargo clippy -p rivet-core --tests -- -D warnings` after completion-event hardening | PASS: 12 Core tests; direct completion events reject open obligations/unclosed receipts and accept only after recorded PASS plus closure. |
 
 ## Atomic milestones
 
@@ -54,7 +55,8 @@ fixtures listed below.
 - `4e4ad0e` — child-process crash recovery test and updated persistence gap tracking.
 - `4c088f7` — ACCP carrier round-trip fixtures and schema gap tracking.
 - `76e9710` — hierarchical census summaries and CognitiveView repository-signal wiring.
-- `pending` — known-obligation verification enforcement and corrected end-to-end completion fixture (to be committed after final gate).
+- `0581e03` — known-obligation verification enforcement and corrected end-to-end completion fixture.
+- `pending` — direct completion-event hardening and updated semantic gap tracking (to be committed after final gate).
 
 ## Interpretation and remaining limits
 

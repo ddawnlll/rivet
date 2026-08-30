@@ -735,9 +735,13 @@ impl HarnessCore {
                     .verification_receipts
                     .values()
                     .any(|receipt| receipt.receipt_id == *final_receipt && receipt.passed);
-                if !verified {
+                let closed = hard
+                    .closed_obligations
+                    .values()
+                    .any(|receipt_id| receipt_id == final_receipt);
+                if !hard.obligations.is_empty() || !verified || !closed {
                     return Err(RivetError::VerificationFailed(
-                        "completion acceptance requires a recorded passing Praxis receipt".into(),
+                        "completion acceptance requires closed obligations and a recorded passing Praxis receipt".into(),
                     ));
                 }
             }

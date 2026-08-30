@@ -375,6 +375,82 @@ async fn verification_cannot_mint_an_unknown_obligation() {
 }
 
 #[tokio::test]
+async fn direct_completion_event_requires_closed_obligations() {
+    let harness = HarnessCore::new(
+        Arc::new(MemoryStore::new()),
+        Arc::new(ScriptedModelBackend::new(vec![])),
+        Arc::new(Runtime::new(env!("CARGO_MANIFEST_DIR"))),
+    );
+    let obligation_id = ObligationId::new();
+    harness
+        .record_event(NoesisEvent::ObligationCreated {
+            obligation_id: obligation_id.clone(),
+            description: "direct completion guard".into(),
+            scope: Scope::global("rivet", Revision::ZERO),
+            timestamp: Utc::now(),
+        })
+        .await
+        .unwrap();
+    let receipt = accp::VerificationReceipt {
+        receipt_id: ReceiptId::new(),
+        obligation_id: obligation_id.clone(),
+        passed: true,
+        evidence_id: EvidenceId::new(),
+        verified_scope: Scope::global("rivet", Revision(1)),
+        diagnostics: None,
+        timestamp: Utc::now(),
+    };
+    harness
+        .record_event(NoesisEvent::VerificationRecorded {
+            receipt: receipt.clone(),
+            timestamp: Utc::now(),
+        })
+        .await
+        .unwrap();
+    let rejected = harness
+        .record_event(NoesisEvent::CompletionAccepted {
+            task_id: harness.task_id.clone(),
+            final_receipt: receipt.receipt_id.clone(),
+            timestamp: Utc::now(),
+        })
+        .await;
+    assert!(matches!(rejected, Err(RivetError::VerificationFailed(_))));
+    assert!(
+        harness
+            .hard_state
+            .lock()
+            .await
+            .obligations
+            .contains_key(&obligation_id)
+    );
+
+    harness
+        .record_event(NoesisEvent::ObligationClosed {
+            obligation_id: obligation_id.clone(),
+            receipt_id: receipt.receipt_id.clone(),
+            timestamp: Utc::now(),
+        })
+        .await
+        .unwrap();
+    harness
+        .record_event(NoesisEvent::CompletionAccepted {
+            task_id: harness.task_id.clone(),
+            final_receipt: receipt.receipt_id,
+            timestamp: Utc::now(),
+        })
+        .await
+        .unwrap();
+    assert!(
+        harness
+            .hard_state
+            .lock()
+            .await
+            .completed_tasks
+            .contains_key(&harness.task_id)
+    );
+}
+
+#[tokio::test]
 async fn verification_scope_is_bound_to_the_harness_repository() {
     let directory = tempfile::tempdir().unwrap();
     let harness = HarnessCore::new(
