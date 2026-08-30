@@ -451,6 +451,43 @@ async fn direct_completion_event_requires_closed_obligations() {
 }
 
 #[tokio::test]
+async fn authoritative_events_cannot_mint_unknown_obligations() {
+    let harness = HarnessCore::new(
+        Arc::new(MemoryStore::new()),
+        Arc::new(ScriptedModelBackend::new(vec![])),
+        Arc::new(Runtime::new(env!("CARGO_MANIFEST_DIR"))),
+    );
+    let unknown = ObligationId::new();
+    let receipt = accp::VerificationReceipt {
+        receipt_id: ReceiptId::new(),
+        obligation_id: unknown.clone(),
+        passed: true,
+        evidence_id: EvidenceId::new(),
+        verified_scope: Scope::global("rivet", Revision::ZERO),
+        diagnostics: None,
+        timestamp: Utc::now(),
+    };
+    let verification = harness
+        .record_event(NoesisEvent::VerificationRecorded {
+            receipt: receipt.clone(),
+            timestamp: Utc::now(),
+        })
+        .await;
+    assert!(matches!(
+        verification,
+        Err(RivetError::SemanticViolation(_))
+    ));
+    let closure = harness
+        .record_event(NoesisEvent::ObligationClosed {
+            obligation_id: unknown,
+            receipt_id: receipt.receipt_id,
+            timestamp: Utc::now(),
+        })
+        .await;
+    assert!(matches!(closure, Err(RivetError::SemanticViolation(_))));
+}
+
+#[tokio::test]
 async fn verification_scope_is_bound_to_the_harness_repository() {
     let directory = tempfile::tempdir().unwrap();
     let harness = HarnessCore::new(

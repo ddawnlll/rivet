@@ -719,7 +719,16 @@ impl HarnessCore {
                         .into(),
                 ));
             }
-            NoesisEvent::ObligationClosed { receipt_id, .. } => {
+            NoesisEvent::ObligationClosed {
+                obligation_id,
+                receipt_id,
+                ..
+            } => {
+                if !hard.obligations.contains_key(obligation_id) {
+                    return Err(RivetError::SemanticViolation(
+                        "obligation closure requires an open known obligation".into(),
+                    ));
+                }
                 let verified = hard
                     .verification_receipts
                     .values()
@@ -727,6 +736,15 @@ impl HarnessCore {
                 if !verified {
                     return Err(RivetError::VerificationFailed(
                         "obligation closure requires a recorded passing Praxis receipt".into(),
+                    ));
+                }
+            }
+            NoesisEvent::VerificationRecorded { receipt, .. } => {
+                if !hard.obligations.contains_key(&receipt.obligation_id)
+                    && !hard.closed_obligations.contains_key(&receipt.obligation_id)
+                {
+                    return Err(RivetError::SemanticViolation(
+                        "verification receipt requires a known open or closed obligation".into(),
                     ));
                 }
             }
