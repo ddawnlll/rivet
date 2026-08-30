@@ -13,8 +13,8 @@ use noesis::{
     CognitiveView, HardState, InvocationReason, ModelInvocationRecord, NoesisEvent, SoftWorkspace,
 };
 use praxis::{
-    CargoTestParser, GoTestParser, JestParser, ParsedTestReport, PraxisEngine, PytestParser,
-    TestRunReport,
+    CargoTestParser, ChangedFile, GateVerdict, GoTestParser, JestParser, Ledger, ParsedTestReport,
+    PlanSpec, PraxisEngine, PytestParser, TestRunReport, VerityPipeline,
 };
 use rivet_model::{CognitiveAction, ModelBackend, ModelRequest};
 use rivet_runtime::Runtime;
@@ -463,6 +463,128 @@ impl HarnessCore {
     ) -> RivetResult<accp::VerificationReceipt> {
         let current_revision = self.hard_state.lock().await.revision;
         self.run_verification_at(request, current_revision).await
+    }
+
+    /// Run the canonical Praxis Verity pipeline behind the Harness boundary.
+    /// The pipeline's mechanical verdict is converted into a scoped ACCP
+    /// receipt before it can affect Noesis obligations.
+    pub async fn run_verity_plan(
+        &self,
+        request: VerificationRequest,
+        plan: &PlanSpec,
+        ledger: Option<&Ledger>,
+        changed_files: &[ChangedFile],
+        coverage_file: Option<&std::path::Path>,
+        attempt_id: &str,
+    ) -> RivetResult<praxis::VerityPipelineResult> {
+        let _cycle_guard = self.cycle_lock.lock().await;
+        self.set_phase(RunPhase::Verifying).await;
+        let result = self
+            .run_verity_plan_inner(
+                request,
+                plan,
+                ledger,
+                changed_files,
+                coverage_file,
+                attempt_id,
+            )
+            .await;
+        if result.is_err() {
+            self.set_phase(RunPhase::Failed).await;
+        } else {
+            self.set_phase(RunPhase::Idle).await;
+        }
+        result
+    }
+
+    async fn run_verity_plan_inner(
+        &self,
+        request: VerificationRequest,
+        plan: &PlanSpec,
+        ledger: Option<&Ledger>,
+        changed_files: &[ChangedFile],
+        coverage_file: Option<&std::path::Path>,
+        attempt_id: &str,
+    ) -> RivetResult<praxis::VerityPipelineResult> {
+        let current_revision = self.hard_state.lock().await.revision;
+        if request.target_scope.repository != self.repository_id
+            || request.target_scope.revision != current_revision
+        {
+            return Err(RivetError::SemanticViolation(
+                "Verity request is outside the current repository or state revision".into(),
+            ));
+        }
+        let request_message = AccpMessage::VerificationRequest(request.clone());
+        AccpEnvelope::from_message(
+            format!("verity-verification-{}", request.obligation_id),
+            accp::ActorRole::CognitiveController,
+            &request_message,
+        )?
+        .validate_direction()?;
+
+        let mut result = VerityPipeline::new(self.runtime.working_dir())
+            .run(plan, ledger, changed_files, coverage_file, attempt_id)
+            .await;
+        let passed = result.overall_verdict == GateVerdict::Pass;
+        let diagnostics = if passed {
+            None
+        } else {
+            Some(
+                result
+                    .gate_results
+                    .iter()
+                    .filter(|gate| gate.verdict != GateVerdict::Pass)
+                    .map(|gate| format!("{}: {}", gate.gate_name, gate.verdict))
+                    .collect::<Vec<_>>()
+                    .join("; "),
+            )
+        };
+        let receipt = accp::VerificationReceipt {
+            receipt_id: ReceiptId::new(),
+            obligation_id: request.obligation_id.clone(),
+            passed,
+            evidence_id: result
+                .final_receipt
+                .as_ref()
+                .map(|receipt| receipt.evidence_id.clone())
+                .unwrap_or_else(EvidenceId::new),
+            verified_scope: request.target_scope.clone(),
+            diagnostics,
+            timestamp: chrono::Utc::now(),
+        };
+        let receipt_message = AccpMessage::VerificationReceipt(receipt.clone());
+        AccpEnvelope::from_message(
+            receipt.receipt_id.to_string(),
+            accp::ActorRole::Harness,
+            &receipt_message,
+        )?
+        .validate_direction()?;
+        self.record_event(NoesisEvent::VerificationRecorded {
+            receipt: receipt.clone(),
+            timestamp: chrono::Utc::now(),
+        })
+        .await?;
+        if passed
+            && self
+                .hard_state
+                .lock()
+                .await
+                .obligations
+                .contains_key(&request.obligation_id)
+        {
+            self.record_event(NoesisEvent::ObligationClosed {
+                obligation_id: request.obligation_id,
+                receipt_id: receipt.receipt_id.clone(),
+                timestamp: chrono::Utc::now(),
+            })
+            .await?;
+        }
+        if passed {
+            result.final_receipt = Some(receipt);
+        } else {
+            result.final_receipt = None;
+        }
+        Ok(result)
     }
 
     async fn run_verification_at(

@@ -34,6 +34,7 @@ fixtures listed below.
 | EVAL-018 | `cargo test --workspace` after strict scope matching, prompt bounds, append-log recovery, and phase changes | PASS: all workspace unit, integration, and doc tests. |
 | EVAL-019 | `cargo clippy --workspace -- -D warnings` after the same changes | PASS. |
 | EVAL-020 | `cargo test -p rivet-core --test cognitive_cycle_test` plus `cargo clippy -p rivet-core -- -D warnings` after canonical lifecycle phase completion | PASS: 9 core tests and strict core clippy; `Observing` and `Responding` transitions now exist alongside the documented lifecycle states. |
+| EVAL-021 | `cargo test -p rivet-core --test cognitive_cycle_test` plus `cargo clippy -p rivet-core --tests -- -D warnings` after the Verity bridge | PASS: 10 core tests; a real `cargo --version` subprocess traverses the 8-gate PlanSpec pipeline and becomes a scoped, persisted Harness verification receipt. |
 
 ## Atomic milestones
 
@@ -42,6 +43,7 @@ fixtures listed below.
 - `bbcc519` — harden repository and verification boundaries, OpenCode adapter/native stream path, CLI persistence/frontier.
 - `97e68f3` — close state/retry semantic gaps, strict ontology carriers, CognitiveView evidence/repository identity, concurrency and invalidation tests.
 - `867dc90` — strict scope glob semantics, CognitiveView UTF-8/token bounds, append-log recovery, post-completion invalidation, and explicit RunPhase outcomes.
+- `pending` — Harness bridge for PlanSpec-driven VerityPipeline verification, with a real subprocess integration test and test clippy repair (to be committed after final gate).
 
 ## Interpretation and remaining limits
 

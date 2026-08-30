@@ -2,6 +2,10 @@ use accp::{ActionProposal, ActionRisk};
 use async_trait::async_trait;
 use chrono::Utc;
 use noesis::NoesisEvent;
+use praxis::{
+    AcceptanceCriterion, CriterionVerification, ExactAllowedCommand, Ledger, LedgerRecord,
+    PlanCommands, PlanMetadata, PlanSpec, PlanTask, PlanWorkspace,
+};
 use rivet_core::{HarnessCore, RunPhase};
 use rivet_model::{CognitiveAction, ModelBackend, ModelRequest, ModelResponse, TokenUsage};
 use rivet_runtime::Runtime;
@@ -420,10 +424,9 @@ async fn concurrent_steps_are_serialized_against_revision_staleness() {
         harness.step("concurrent", "turn two")
     );
     assert!(first.is_ok() ^ second.is_ok());
-    let error = if first.is_err() {
-        first.unwrap_err()
-    } else {
-        second.unwrap_err()
+    let error = match (first, second) {
+        (Err(error), _) | (_, Err(error)) => error,
+        _ => unreachable!("one concurrent turn must be rejected as stale"),
     };
     assert!(error.to_string().contains("stale"));
 }
@@ -525,4 +528,116 @@ async fn failed_praxis_verification_keeps_obligation_open() {
             .obligations
             .contains_key(&obligation_id)
     );
+}
+
+#[tokio::test]
+async fn full_verity_pipeline_is_admitted_as_scoped_harness_verification() {
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let store = Arc::new(MemoryStore::new());
+    let harness = HarnessCore::new(
+        store,
+        Arc::new(ScriptedModelBackend::new(vec![])),
+        Arc::new(Runtime::new(tmp_dir.path())),
+    );
+    tokio::fs::create_dir_all(tmp_dir.path().join("src"))
+        .await
+        .unwrap();
+    tokio::fs::write(tmp_dir.path().join("src/lib.rs"), "pub fn stable() {}\n")
+        .await
+        .unwrap();
+
+    let obligation_id = ObligationId::new();
+    harness
+        .record_event(NoesisEvent::ObligationCreated {
+            obligation_id: obligation_id.clone(),
+            description: "the full Verity pipeline must pass".into(),
+            scope: Scope::global("rivet", Revision::ZERO),
+            timestamp: Utc::now(),
+        })
+        .await
+        .unwrap();
+    let revision = harness.hard_state.lock().await.revision;
+
+    let ledger_path = tmp_dir.path().join(".praxis").join("evidence.ledger.jsonl");
+    let mut ledger = Ledger::open(&ledger_path, "core-verity-plan").unwrap();
+    ledger
+        .append(LedgerRecord {
+            record_id: "core-verity-evidence".into(),
+            captured_at: Utc::now().to_rfc3339(),
+            payload: serde_json::json!({"type": "command", "commandId": "cargo-version"}),
+        })
+        .unwrap();
+
+    let plan = PlanSpec {
+        metadata: PlanMetadata {
+            plan_id: "core-verity-plan".into(),
+            title: "Core Verity bridge".into(),
+            version: "1.0.0".into(),
+        },
+        workspace: PlanWorkspace {
+            allowed_files: vec!["src/**".into()],
+            forbidden_files: vec!["secrets/**".into()],
+        },
+        commands: PlanCommands {
+            exact_allowed_commands: vec![ExactAllowedCommand {
+                id: "cargo-version".into(),
+                command: "cargo --version".into(),
+                cwd: None,
+                kind: "test".into(),
+                timeout_seconds: Some(30),
+                expected_exit_code: Some(0),
+                shell_allowed: Some(false),
+                no_tests_found_is_failure: Some(false),
+                expected_output_patterns: vec!["cargo".into()],
+            }],
+            hard_denied_commands: vec!["git reset --hard".into()],
+        },
+        tasks: vec![PlanTask {
+            id: "core-task".into(),
+            name: "run cargo version".into(),
+            description: "Prove the pipeline can execute the declared check".into(),
+            dependencies: vec![],
+            acceptance_criteria: vec![AcceptanceCriterion {
+                id: "cargo-version-pass".into(),
+                description: "cargo is available".into(),
+                verification: CriterionVerification {
+                    r#type: "command".into(),
+                    command_ref: Some("cargo-version".into()),
+                    deterministic: true,
+                    advisory_only: false,
+                },
+            }],
+        }],
+    };
+    let target_scope = Scope::global("rivet", revision);
+    let result = harness
+        .run_verity_plan(
+            accp::VerificationRequest {
+                obligation_id: obligation_id.clone(),
+                predicate: "cargo --version".into(),
+                target_scope: target_scope.clone(),
+                timeout_seconds: 30,
+                timestamp: Utc::now(),
+            },
+            &plan,
+            Some(&ledger),
+            &[praxis::ChangedFile {
+                path: "src/lib.rs".into(),
+                status: "modified".into(),
+            }],
+            None,
+            "core-verity-attempt",
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(result.overall_verdict, praxis::GateVerdict::Pass);
+    let receipt = result.final_receipt.unwrap();
+    assert!(receipt.passed);
+    assert_eq!(receipt.obligation_id, obligation_id);
+    assert_eq!(receipt.verified_scope, target_scope);
+    let hard = harness.hard_state.lock().await;
+    assert!(hard.closed_obligations.contains_key(&receipt.obligation_id));
+    assert_eq!(hard.verification_receipts.len(), 1);
+    assert_eq!(harness.current_phase().await, RunPhase::Idle);
 }
