@@ -13,6 +13,7 @@ members = [
     "crates/rivet-repository",
     "crates/rivet-core",
     "crates/rivet",
+    "crates/rivet-eval",
 ]
 
 [workspace.package]
@@ -52,8 +53,9 @@ uuid = { version = "1.15", features = ["v4", "serde"] }
 # Storage & Embedded DB
 redb = "2.4"
 
-# Model Multi-provider
-genai = "0.1"
+# Model HTTP client
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+dotenvy = "0.15"
 
 # CLI / TUI
 clap = { version = "4.5", features = ["derive", "env"] }

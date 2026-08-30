@@ -8,13 +8,11 @@ license.workspace = true
 [dependencies]
 rivet-types = { workspace = true }
 rivet-model = { workspace = true }
-genai = { workspace = true }
+reqwest = { workspace = true }
+dotenvy = { workspace = true }
 futures-util = { workspace = true }
 async-trait = { workspace = true }
-serde = { workspace = true }
 serde_json = { workspace = true }
-tracing = { workspace = true }
-thiserror = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }

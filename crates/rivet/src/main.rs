@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tracing_subscriber::EnvFilter;
+pub mod tui;
 
 #[derive(Parser)]
 #[command(
@@ -23,6 +24,9 @@ use tracing_subscriber::EnvFilter;
 struct Cli {
     #[arg(default_value = ".")]
     path: PathBuf,
+
+    #[arg(long, help = "Launch full Ratatui interactive cockpit")]
+    tui: bool,
 
     #[command(subcommand)]
     command: Option<Commands>,
@@ -35,8 +39,13 @@ enum Commands {
         #[arg(default_value = ".")]
         path: PathBuf,
     },
-    /// Start interactive cognitive session
+    /// Start interactive cognitive CLI session
     Chat {
+        #[arg(default_value = ".")]
+        path: PathBuf,
+    },
+    /// Start interactive developer cockpit (TUI)
+    Tui {
         #[arg(default_value = ".")]
         path: PathBuf,
     },
@@ -57,6 +66,10 @@ async fn main() -> anyhow::Result<()> {
     println!("╚══════════════════════════════════════════════════════════════╝");
     println!("📁 Active Project: {}", target_dir.display());
 
+    if cli.tui {
+        return run_tui(&target_dir).await;
+    }
+
     match cli.command {
         Some(Commands::Census { path }) => {
             println!("\n🔍 Running deterministic census on {}...", path.display());
@@ -69,12 +82,34 @@ async fn main() -> anyhow::Result<()> {
             println!("⏸️  Deferred Trees: {}", census.deferred_count);
         }
         Some(Commands::Chat { path }) => run_chat(&path).await?,
+        Some(Commands::Tui { path }) => run_tui(&path).await?,
         _ => {
             run_chat(&target_dir).await?;
         }
     }
 
     Ok(())
+}
+
+async fn run_tui(target_dir: &Path) -> anyhow::Result<()> {
+    let state_dir = target_dir.join(".rivet");
+    tokio::fs::create_dir_all(&state_dir).await?;
+    let store: Arc<dyn HardStateStore> = Arc::new(RedbStore::open(state_dir.join("state.redb"))?);
+    let model = Arc::new(GenAiBackend::new());
+    let runtime = Arc::new(Runtime::new(target_dir));
+    let repository_id = target_dir
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .unwrap_or("rivet");
+    let harness = Arc::new(
+        HarnessCore::open(store, model, runtime)
+            .await?
+            .with_repository_id(repository_id),
+    );
+
+    let mut app = tui::TuiApp::new(harness);
+    app.run().await
 }
 
 async fn run_chat(target_dir: &Path) -> anyhow::Result<()> {

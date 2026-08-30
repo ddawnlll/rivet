@@ -7,6 +7,9 @@ use rivet_types::*;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+pub mod induction;
+pub use induction::{FrontierDecision, FrontierNode, InductionEngine, RepoFrontier};
+
 const DEFERRED_DIRS: &[&str] = &["node_modules", "target", "vendor", "dist"];
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -1,14 +1,11 @@
-//! # rivet-core (Harness Core & Cognitive State Machine)
-//!
-//! Orchestrates the canonical cycle:
-//! Cognitive View -> Model Controller -> ACCP -> Runtime -> Praxis -> Noesis.
-//! The core owns lifecycle and admission decisions, while each subsystem keeps
-//! ownership of its own semantic state.
+pub mod goal_compiler;
+pub use goal_compiler::{GoalCompiler, GoalSpec, ObligationGraph, ObligationNode, ObligationPredicate, ObligationStatus};
 
 use accp::{
     AccpEnvelope, AccpMessage, AccpSemanticGate, ActionAuthorizationPolicy, CompletionProposal,
     VerificationRequest,
 };
+use hephaestus::{FailureClusterTracker, HephaestusEngine};
 use noesis::{
     CognitiveView, HardState, InvocationReason, ModelInvocationRecord, NoesisEvent, SoftWorkspace,
 };
@@ -17,6 +14,7 @@ use praxis::{
     PlanSpec, PraxisEngine, PytestParser, TestRunReport, VerityPipeline,
 };
 use rivet_model::{CognitiveAction, ModelBackend, ModelRequest};
+use rivet_repository::{InductionEngine, RepoFrontier, RepositoryCensus};
 use rivet_runtime::Runtime;
 use rivet_store::HardStateStore;
 use rivet_types::*;
@@ -36,6 +34,7 @@ pub enum RunPhase {
     Observing,
     Verifying,
     RevisingState,
+    Stagnated,
     WaitingForUser,
     Responding,
     Completed,
@@ -51,6 +50,9 @@ pub struct HarnessCore {
     pub store: Arc<dyn HardStateStore>,
     pub model: Arc<dyn ModelBackend>,
     pub runtime: Arc<Runtime>,
+    pub goal_spec: Arc<Mutex<Option<GoalSpec>>>,
+    pub failure_tracker: Arc<Mutex<FailureClusterTracker>>,
+    pub hephaestus: Arc<HephaestusEngine>,
     repository_id: String,
     relevant_files: Arc<Mutex<Vec<String>>>,
     repository_signals: Arc<Mutex<Vec<String>>>,
@@ -119,12 +121,55 @@ impl HarnessCore {
             store,
             model,
             runtime,
+            goal_spec: Arc::new(Mutex::new(None)),
+            failure_tracker: Arc::new(Mutex::new(FailureClusterTracker::new())),
+            hephaestus: Arc::new(HephaestusEngine::new(3)),
             repository_id: std::env::var("RIVET_REPOSITORY_ID").unwrap_or_else(|_| "rivet".into()),
             relevant_files: Arc::new(Mutex::new(Vec::new())),
             repository_signals: Arc::new(Mutex::new(Vec::new())),
             cycle_lock: Arc::new(Mutex::new(())),
             phase: Arc::new(Mutex::new(RunPhase::Idle)),
         }
+    }
+
+    /// Compile a user prompt into a formal GoalSpec, materialize its obligations
+    /// into HardState, and set it as the active goal.
+    pub async fn initialize_goal(&self, user_prompt: &str) -> RivetResult<GoalSpec> {
+        let current_revision = self.hard_state.lock().await.revision;
+        let spec = GoalCompiler::compile(user_prompt, &self.repository_id, current_revision);
+
+        for node in spec.graph.nodes.values() {
+            self.record_event(NoesisEvent::ObligationCreated {
+                obligation_id: node.id.clone(),
+                description: format!("{}: {}", node.title, node.description),
+                scope: node.target_scope.clone(),
+                timestamp: chrono::Utc::now(),
+            })
+            .await?;
+        }
+
+        *self.goal_spec.lock().await = Some(spec.clone());
+        Ok(spec)
+    }
+
+    /// Adaptive repository induction: updates the active RepoFrontier conditioned on goal and focus
+    pub async fn update_repo_frontier(
+        &self,
+        census: &RepositoryCensus,
+        goal_prompt: &str,
+    ) -> RepoFrontier {
+        let focus = self.soft_workspace.lock().await.active_focus.clone();
+        let frontier = InductionEngine::induce_frontier(census, goal_prompt, &focus, 8192);
+
+        self.set_relevant_files(frontier.descended_paths()).await;
+
+        let mut signals = Vec::new();
+        for dir in census.active_directory_frontier(8) {
+            signals.push(format!("{}: {} files ({} KB)", dir.relative_path, dir.file_count, dir.total_bytes / 1024));
+        }
+        self.set_repository_signals(signals).await;
+
+        frontier
     }
 
     pub async fn set_relevant_files(&self, mut files: Vec<String>) {
@@ -481,7 +526,7 @@ impl HarnessCore {
         let result = self.run_verification_at(request, current_revision).await;
         if result.is_err() {
             self.set_phase(RunPhase::Failed).await;
-        } else {
+        } else if self.current_phase().await != RunPhase::Stagnated {
             self.set_phase(RunPhase::Idle).await;
         }
         result
@@ -682,6 +727,7 @@ impl HarnessCore {
         })
         .await?;
         if receipt.passed {
+            self.failure_tracker.lock().await.record_success();
             let is_open = self
                 .hard_state
                 .lock()
@@ -695,6 +741,23 @@ impl HarnessCore {
                     timestamp: chrono::Utc::now(),
                 })
                 .await?;
+            }
+        } else {
+            let mut tracker = self.failure_tracker.lock().await;
+            tracker.record_failure(
+                &request.predicate,
+                receipt.diagnostics.as_deref().unwrap_or("verification failed"),
+            );
+            if self.hephaestus.should_intervene(&tracker) {
+                let mut soft = self.soft_workspace.lock().await;
+                let reframing = self.hephaestus.analyze_and_reframe(&tracker, &soft.hypotheses);
+                soft.hypotheses.clear();
+                for hyp in reframing.new_hypothesis_candidates {
+                    soft.add_hypothesis(format!("[Hephaestus Reframed] {}", hyp));
+                }
+                soft.active_focus = reframing.suggested_focus;
+                drop(soft);
+                self.set_phase(RunPhase::Stagnated).await;
             }
         }
         Ok(receipt)

@@ -21,6 +21,11 @@ build/
 target/
 **/*.rs.bk
 
+# Local provider credentials
+.env
+.env.*
+!.env.example
+
 # Scratch & Temporary
 tmp/
 scratch/
