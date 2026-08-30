@@ -1,0 +1,52 @@
+# Rivet Constitution v0.2
+
+Aşağıdaki maddeler implementasyon ayrıntısı değil, araştırma geçerliliğini ve control-plane güvenilirliğini korumak için önerilen anayasal kurallardır. Değiştirilebilirler; ancak değişiklikler versioned decision record ve benchmark sonucu gerektirmelidir.
+
+1. **Agent ≠ Model, but Model Is the Primary Semantic Engine.** Foundation model Rivet'in persistent kimliği değildir; invocation sırasında active cognitive controller olarak semantik interpretation, hypothesis formation, architecture ve code reasoning'in ana motorudur.
+2. **Runtime Owns Persistence and Authority, Not Meaning.** Model active reasoning ve state-mutation proposal üretebilir; authoritative hard-state promotion, verification status, capability authority, irreversible side effects ve completion runtime contracts tarafından yönetilir.
+3. **Mechanize What Is Mechanically Decidable; Do Not Mechanize Semantics by Force.** Deterministic fonksiyonlar test edilebilir oldukları için kullanılır; generalist semantic judgment brittle heuristic branch'lere zorla çevrilmez. Human authority gerektiren kararlar ayrıca ayrılır.
+4. **Hard State ≠ Soft State ≠ Context.** Durable project knowledge, session/task working cognition ve model input payload üç ayrı katmandır; birbirlerinin yerine kullanılamaz.
+5. **Soft State Is Bounded and Non-Authoritative.** Active hypotheses, focus, provisional relations ve local strategy serbestçe değişebilir; soft workspace ikinci bir unbounded chat history olamaz.
+6. **Hard State Requires Promotion Semantics.** Model-derived düşünce doğrudan VERIFIED/authoritative knowledge olmaz. Promotion provenance, scope, evidence class ve applicable gate taşır.
+7. **Persistent Memory Must Be Revisable.** Hard state revision/scope bağı taşır; evidence veya repository revision değişince dependent claims/procedures/tasks stale, superseded veya reopened olabilir.
+8. **No Self-Confirming Memory.** Model inference → memory → aynı model inference zinciri bağımsız evidence üretmez. Retrieval geçmiş bir iddiayı hatırlatır; onu doğrulamaz.
+9. **No Pre-Defined Project Memory.** Rust, TypeScript, trading, V8, framework veya repository-specific ontology Rivet Core'a gömülmez. Core yalnız general epistemic/execution primitives taşır; project semantics LLM-led induction ile öğrenilir.
+10. **DEFER ≠ IRRELEVANT.** Large/generated/vendored trees default olarak task-relative düşük priority alabilir; fakat global hard-ignore semantiği kazanmaz. Relevance yeni goal altında yeniden değerlendirilebilir.
+11. **Model-Sparse Is an Outcome, Not a Dogma.** Model çağrısını azaltmak yalnız verified success/reliability korunuyor veya yükseliyorsa kazançtır.
+12. **Noesis Preservation.** Noesis kaldırılmaz veya “prompt memory”ye indirgenmez. Problem ontology, facts, assumptions, hypotheses, unknowns, contradictions, environment knowledge ve obligations explicit state olarak korunur.
+13. **ACCP Preservation.** Claim/action promotion evidence, risk, reversibility, provenance ve authority kontrolünden geçer. Tool erişimi prompttaki rica ile değil enforceable capability policy ile sınırlandırılır.
+14. **Praxis Preservation.** Completion, implementer/model beyanı değildir. Gereken tests/invariants/oracles geçmeden obligation VERIFIED statüsüne yükseltilemez.
+15. **Hephaestus Is Cold Path.** Hephaestus rutin her transition'da çalışan pahalı meta-agent değildir. Stagnation, exhausted local search, persistent contradiction veya frame failure durumunda aktive olur.
+16. **Project Specialization Is Learned State.** Rust, Python, TypeScript, C++, Bazel, Cargo veya pytest bilgisi universal scheduler control flow'una hardcode edilmez. Dil/build özel bilgi provider/adapters veya discovered state'te bulunur.
+17. **Capability Before Tool.** Core önce “hangi capability gerekli?” diye sorar; sonra available provider seçer. `cargo test` bir capability değil, `test.run` capability'sinin olası provider'ıdır.
+18. **Discover → Verify → Cache.** Bilinmeyen capability için keşfedilen command/provider en az bir probe ile doğrulanmadan authoritative registry'ye alınamaz. Scope dışına genellenemez.
+19. **No Naked Model Invocation.** Her model çağrısı bir `InvocationReceipt` üretir: neden, hangi unresolved semantic need, verilen context, model tier, token budget ve sonuç.
+20. **No Naked Context.** Bir inference çağrısına “belki lazım olur” diye bütün repository, bütün tool history veya bütün session verilmez. Context selection explicit relevance contract'ına bağlıdır.
+21. **Chat History Is Not State.** Konuşma geçmişi audit trail olabilir; authoritative task/belief/project state olamaz.
+22. **Raw Tool Output Is Not Default Model Context.** Compiler/test/log çıktıları önce parser/normalizer'dan geçer. Model raw slice'ı ancak structured summary yetersizse talep eder.
+23. **Artifact → Observation → State Delta → Task.** Environment çıktısı doğrudan serbest metin reasoning'e bırakılmaz; mümkün olduğunda typed event'e dönüştürülür.
+24. **Evidence Is Append-Only.** Tool result, file snapshot, test result, human approval ve model proposal lineage'i immutable evidence ledger'da tutulur; interpretation değişebilir, raw evidence geriye dönük değiştirilemez.
+25. **Claims Carry Provenance.** “Build works”, “bug fixed”, “symbol unused”, “test passes” gibi state etkileyen claims evidence refs ve authority class olmadan promotion alamaz.
+26. **Completion Requires Closed Obligations.** Goal Compiler'ın ürettiği acceptance obligations kapanmadan agent “done” diyemez. Unsupported veya unverified obligations explicit açık kalır.
+27. **Failure Reopens Work.** Praxis fail'i sadece log değildir; ilgili obligation'ı yeniden açar ve typed remediation task üretir.
+28. **Independent Review for Material Changes.** Yüksek riskli değişikliklerde implementer'ın kendi context/reasoning trajectory'si reviewer'a verilmez; correlated-error riskini azaltmak için blind review tercih edilir.
+29. **Reviewer ≠ Implementer.** Review worker prod code yazamaz; implementer kendi patch'inin tek verifier'ı olamaz. Reviewer bulgusu fixer/implementer workflow'una evidence olarak döner.
+30. **No Naked Veto.** ACCP veya reviewer bir action'ı blokluyorsa reproducible evidence, violated invariant veya explicit authority rule göstermelidir.
+31. **Least Capability.** Worker sadece task için gereken read/write/execute capabilities'i görür. `git reset --hard`, production write veya network access gibi unrelated powers default olarak exposed değildir.
+32. **Project Is Untrusted Until Trusted.** Project-local config, hooks, scripts ve activation commands trust boundary geçmeden executable authority kazanamaz.
+33. **Parallelism Is Derived, Not Requested.** Worker sayısı bir prompt kararı değildir. Scheduler read/write sets, dependency edges, resource locks ve merge/conflict riskinden safe parallel set türetir.
+34. **Resource Isolation Is Enforced.** CPU, memory, process count, disk, network ve timeout limitleri prompt instruction değil runtime control'dür.
+35. **Stable Identity Over Line Numbers.** Mümkünse symbol/AST identity, structural path, content hash ve provider identity kullanılır. Line number yalnızca ephemeral locator'dır.
+36. **Graph Is Fallible.** Project/capability/evidence graph yanlış veya eksik olabilir; her edge source/provenance ve confidence taşır. Graph'a sahip olmak truth'a sahip olmak değildir.
+37. **No Duplicate Cognition.** Stable project knowledge bir kez keşfedilip serialized artifact/state'e dönüştürüldüğünde aynı sorunun frontier modele tekrar tekrar sorulması budget violation sayılır.
+38. **Model Routing Is Secondary.** Model tiering or invocation suppression may optimize cost after state quality is established, but routing policy may never lower epistemic, verification, or authority standards and is not part of the primary v0.2 thesis.
+39. **Token Budget Is First-Class State.** Her run uncached input, cached read, output/reasoning, model calls, frontier calls ve context payload breakdown'ı üretir.
+40. **Cache Is Not Evidence.** Prompt cache veya reused context maliyeti azaltabilir; correctness/provenance garantisi değildir.
+41. **Rollback Is a Capability.** Material mutation'lar checkpoint/transaction/commit sınırı olmadan çalıştırılmaz. Reversibility ACCP risk değerlendirmesinin parçasıdır.
+42. **Process Bugs Beat Output Patching.** Aynı failure pattern tekrar ediyorsa Hephaestus/process auditor tek tek output'ları düzeltmek yerine generator/workflow/policy kusurunu araştırır.
+43. **Oracle Ladder.** Syntax success < compile success < targeted test < integration < regression < platform matrix < domain invariant. Alt seviye üst seviyenin yerine geçmez.
+44. **No Deleted Tests as Success.** Testleri kapatmak, skip etmek veya acceptance scope'u daraltmak explicit human-authorized goal değişikliği olmadan completion üretmez.
+45. **Generalist Claim Requires Heterogeneous Evaluation.** Tek Python SWE-bench sonucu “generalist” iddiasını desteklemez. Çok dil, çok build system, monorepo ve scientific/integration tasks gerekir.
+46. **Novelty Is Audited, Not Assumed.** Graph, state machine, compiler, retrieval, semantic editing, evidence ledger ve uncertainty routing tek başına Rivet novelty'si olarak sunulamaz.
+47. **Every Performance Claim Needs a Baseline.** “Daha hızlı/ucuz” ancak aynı model, aynı task, aynı tool access ve aynı verification standardıyla karşılaştırıldığında anlamlıdır.
+48. **Failure Is an Acceptable Research Outcome.** If Hard State + Soft Workspace + Cognitive View + Hierarchical Relevance do not produce measurable reliability, continuity, representation-quality, or efficiency gains over an equivalent context-centric baseline, the state-architecture thesis is rejected or narrowed. Failure to reduce model calls alone does not falsify v0.2; model-sparse behavior is a secondary outcome.

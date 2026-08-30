@@ -1,0 +1,26 @@
+# OS & Editor
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/
+*.swp
+*~
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+
+# Rust (Rivet runtime)
+target/
+**/*.rs.bk
+
+# Scratch & Temporary
+tmp/
+scratch/

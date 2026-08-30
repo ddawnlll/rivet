@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="utf-8"/>
+<meta content="width=device-width,initial-scale=1" name="viewport"/>
+<meta content="Rivet generalist software engineering agent research monograph and v0.3 technical architecture: Rivet-owned harness, full-Rust single-process runtime, Noesis hard/soft epistemic state, cognitive views, adaptive project induction, ACCP governance and Praxis verification." name="description"/>
+<title>Rivet — Research Monograph, Architecture Constitution &amp; Technical Profile v0.3</title>
+<style>
+:root{
+  --paper:#fffdf9; --ink:#181818; --muted:#65625d; --line:#b7b2a8;
+  --soft:#f1eee7; --soft2:#e8e3d9; --accent:#173f5f; --accent2:#6d3b22;
+  --ok:#2c5a3f; --warn:#7a5114; --bad:#7d2b2b; --code:#242424;
+}
+*{box-sizing:border-box} html{scroll-behavior:smooth}
+body{max-width:1160px;margin:0 auto;padding:30px 54px 90px;background:var(--paper);color:var(--ink);font:15.5px/1.62 Georgia,'Times New Roman',serif}
+header.hero{padding:32px 0 22px;border-bottom:3px double #333;margin-bottom:20px}
+.hero .kicker{font:700 12px/1.2 Arial,sans-serif;letter-spacing:.16em;text-transform:uppercase;color:var(--muted);margin-bottom:10px}
+.hero h1{font:800 clamp(2.1rem,5vw,4rem)/1.02 Arial,sans-serif;margin:.1rem 0 .6rem;border:0;padding:0;letter-spacing:-.045em}
+.hero .subtitle{font:600 18px/1.4 Arial,sans-serif;max-width:920px;color:#3e3c38}
+.hero .meta{margin-top:16px;font:12px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace;color:var(--muted)}
+nav#toc{margin:26px 0 48px;border:1px solid var(--line);background:#faf8f3;padding:18px 22px;column-count:2;column-gap:34px}
+nav#toc h2{column-span:all;margin:0 0 12px!important;border:0!important;padding:0!important;font-size:1.05rem!important}
+nav#toc ul{list-style:none;margin:0;padding:0} nav#toc li{break-inside:avoid;margin:0 0 4px;font:12px/1.35 Arial,sans-serif}
+nav#toc .toc-h1{font-weight:700;margin-top:9px}.toc-h2{padding-left:12px;color:#555}
+nav#toc a{text-decoration:none;color:inherit}nav#toc a:hover{text-decoration:underline;color:var(--accent)}
+h1,h2,h3,h4,th{font-family:Arial,Helvetica,sans-serif;color:#171717;position:relative}
+h1{font-size:1.85rem;line-height:1.15;margin-top:3.2rem;border-bottom:2px solid #333;padding-bottom:.38rem;letter-spacing:-.02em}
+h2{font-size:1.35rem;line-height:1.2;margin-top:2.25rem;border-bottom:1px solid #bbb;padding-bottom:.2rem}
+h3{font-size:1.08rem;margin-top:1.6rem}h4{font-size:.98rem}
+.anchor{opacity:0;margin-left:.45rem;font-size:.7em;text-decoration:none!important;color:#999!important}.anchor:hover{opacity:1}
+p,li{max-width:100ch}p{margin:.75rem 0 1rem}li{margin:.22rem 0}
+a{color:#154c78;text-decoration-thickness:1px;text-underline-offset:2px}a:hover{color:#0a2f4d}
+blockquote{margin:1.2rem 0;padding:.2rem 1rem;border-left:4px solid #555;color:#353535;background:#f6f3ed}
+pre{white-space:pre-wrap;overflow-wrap:anywhere;overflow:auto;padding:1rem 1.05rem;background:#efede7;border:1px solid #d4cfc5;font:12.5px/1.47 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;border-radius:3px}
+code{font:0.9em ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;background:#efede7;padding:.08em .28em;border-radius:2px}pre code{background:transparent;padding:0}
+table{border-collapse:collapse;width:100%;font:12.2px/1.42 Arial,sans-serif;margin:1.1rem 0 1.7rem;display:table}
+th,td{border:1px solid #aaa;padding:.48rem .55rem;vertical-align:top;text-align:left}th{background:#eae7df;font-weight:700}tr:nth-child(even) td{background:#fcfbf8}
+.status{border-left:5px solid #333;background:#eeece6;padding:1rem 1.15rem;margin:1rem 0 1.5rem}
+.badge{display:inline-block;padding:.13rem .42rem;border-radius:999px;font:700 10px/1.45 Arial,sans-serif;letter-spacing:.02em;border:1px solid #aaa;background:#fff}
+.badge.established{border-color:#51735e;color:#294936}.badge.project{border-color:#526b86;color:#254361}.badge.inference{border-color:#8b714c;color:#60471f}.badge.invariant{border-color:#7b3434;color:#6a2020}.badge.provisional{border-color:#6d6280;color:#4c3e61}.badge.open{border-color:#777;color:#555}.badge.falsifier{border-color:#9b4a3b;color:#7d2b2b}
+hr{border:0;border-top:1px solid #aaa;margin:2.5rem 0}
+strong{font-weight:700}.small{font-size:.88em;color:var(--muted)}
+footer{border-top:3px double #333;margin-top:60px;padding-top:18px;color:var(--muted);font-size:12px}
+.backtop{position:fixed;right:18px;bottom:18px;background:#282828;color:#fff!important;text-decoration:none;padding:7px 9px;border-radius:3px;font:11px Arial,sans-serif;opacity:.7}.backtop:hover{opacity:1}
+@media(max-width:800px){body{padding:18px 20px 70px;font-size:15px}nav#toc{column-count:1}.hero h1{font-size:2.35rem}table{display:block;overflow-x:auto;white-space:normal}.backtop{display:none}}
+@media print{@page{margin:16mm}body{max-width:none;padding:0;background:#fff;font-size:10pt}nav#toc{column-count:2;background:#fff}.backtop,.anchor{display:none}h1{break-before:page}h1:first-of-type{break-before:auto}pre{font-size:8pt;background:#f5f5f5}a{color:#000;text-decoration:none}a[href^="http"]:after{content:" (" attr(href) ")";font-size:8pt;word-break:break-all}}
+</style>
+</head>
+<body id="top">
+<header class="hero">
+<div class="kicker">Research Monograph · Architecture Constitution · Technical Profile · Evidence Audit</div>
+<h1>Rivet</h1>
+<div class="subtitle">Generalist Epistemic Software Engineering Agent Runtime — frontier LLM cognition, Noesis hard/soft state, Cognitive View Compiler, adaptive project induction, ACCP, Praxis ve Hephaestus.</div>
+<div class="meta">RESEARCH DRAFT 0.3 · 30 AUGUST 2026 · PRE-IMPLEMENTATION / EVIDENCE-BOUND · TECHNICAL PROFILE LOCKED FOR FIRST VERTICAL SLICE</div>
+</header>
