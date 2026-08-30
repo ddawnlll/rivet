@@ -16,7 +16,7 @@ tasks:
     title: "Rust Workspace & Cargo.toml Root Initialization"
     description: "Create the root Cargo.toml workspace and directory structure for all 12 crates."
     crates: ["rivet-types", "accp", "noesis", "praxis", "hephaestus", "rivet-store", "rivet-model", "rivet-model-genai", "rivet-runtime", "rivet-repository", "rivet-core", "rivet"]
-    status: "TODO"
+    status: "DONE"
     acceptance_criteria:
       - "cargo check --workspace exits with 0"
       - "Cargo.lock generated"
@@ -26,7 +26,7 @@ tasks:
     title: "Canonical ID, Revision & Epistemic Types (rivet-types)"
     description: "Implement strongly typed IDs (SessionId, TaskId, ClaimId, EvidenceId, ArtifactId, Revision), EpistemicStatus, and Core Error types."
     crates: ["rivet-types"]
-    status: "TODO"
+    status: "DONE"
     acceptance_criteria:
       - "All ID types have Display, Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize"
       - "Revision implements strict ordering and hashing"
@@ -36,7 +36,7 @@ tasks:
     title: "ACCP 3.0 Typed Envelopes & Semantic Invariants (accp)"
     description: "Implement ACCP 3.0 message envelopes (ActionProposal, ActionDecision, ExecutionReceipt, ClaimProposal, VerificationRequest, VerificationReceipt, StateTransitionProposal, CompletionProposal, CompletionDecision) and invariant enforcement."
     crates: ["accp"]
-    status: "TODO"
+    status: "DONE"
     acceptance_criteria:
       - "AccpMessage enum covers all 9 normative classes"
       - "Unit tests for illegal semantic casts (e.g. ModelClaim -> Observation rejection)"
@@ -46,7 +46,7 @@ tasks:
     title: "Noesis Memory & Event Ledger Contracts (noesis)"
     description: "Implement NoesisEvent, HardState materialized view, SoftWorkspace bounded RAM model, StatePromotion, and Invalidation rules."
     crates: ["noesis"]
-    status: "TODO"
+    status: "DONE"
     acceptance_criteria:
       - "Event append and replay produces deterministic HardState"
       - "SoftWorkspace bounded capacity and eviction policy works"
@@ -56,7 +56,7 @@ tasks:
     title: "Model Backend & Action Contracts (rivet-model)"
     description: "Implement ModelBackend trait (invoke, stream), CognitiveAction parser, and InvocationReceipt accounting."
     crates: ["rivet-model"]
-    status: "TODO"
+    status: "DONE"
     acceptance_criteria:
       - "ModelBackend trait defined with async invoke/stream"
       - "CognitiveAction deserializes typed tool/state/completion calls"
@@ -69,7 +69,7 @@ tasks:
     title: "redb Embedded HardStateStore Implementation (rivet-store)"
     description: "Implement HardStateStore trait backed by redb ACID table for NoesisEvent ledger and checkpointing."
     crates: ["rivet-store"]
-    status: "TODO"
+    status: "DONE"
     acceptance_criteria:
       - "ACID transaction guarantees verified with crash/replay test"
       - "Zero-copy reads on event scans"
@@ -79,7 +79,7 @@ tasks:
     title: "Noesis SoftWorkspace Bounded Lifecycle & Eviction"
     description: "Implement working memory in RAM: active focus, hypotheses, candidate actions with strict token/item bound."
     crates: ["noesis"]
-    status: "TODO"
+    status: "DONE"
     acceptance_criteria:
       - "Working memory cannot exceed configured token limit"
       - "Non-authoritative flag strictly preserved"
@@ -89,7 +89,7 @@ tasks:
     title: "Cognitive View Compiler Projection"
     description: "Compile HardState + SoftWorkspace + RepoFrontier into task-conditioned CognitiveView struct."
     crates: ["noesis", "rivet-core"]
-    status: "TODO"
+    status: "DONE"
     acceptance_criteria:
       - "Produces concise CognitiveView payload"
       - "Excludes raw chat history and deferred subtree dumps"
@@ -102,7 +102,7 @@ tasks:
     title: "Praxis Mechanical Verification Engine (praxis)"
     description: "Implement test execution, output parsing (cargo test, pytest, etc.), and signed VerificationReceipt generation."
     crates: ["praxis"]
-    status: "TODO"
+    status: "DONE"
     acceptance_criteria:
       - "Executes targeted tests without LLM intervention"
       - "Parses test pass/fail/error counts reliably"
@@ -112,7 +112,7 @@ tasks:
     title: "ACCP Action Authorization Policy Enforcer (accp)"
     description: "Enforce action permissions, read/write scopes, and destructive action blocks."
     crates: ["accp"]
-    status: "TODO"
+    status: "DONE"
     acceptance_criteria:
       - "Rejects write actions outside declared scope"
       - "Blocks destructive actions without explicit user authority"
@@ -125,7 +125,7 @@ tasks:
     title: "OS Process & File Mutation Runtime (rivet-runtime)"
     description: "Implement sandboxed command execution (tokio::process) with timeout, cancellation, and stdout/stderr capture."
     crates: ["rivet-runtime"]
-    status: "TODO"
+    status: "DONE"
     acceptance_criteria:
       - "Handles process timeouts and SIGINT cancellation cleanly"
       - "Safe atomic file writes"
@@ -135,7 +135,7 @@ tasks:
     title: "Adaptive Project Induction & Deterministic Census (rivet-repository)"
     description: "Implement fast tree walking, .gitignore parsing, size histograms, and DEFER tree classification."
     crates: ["rivet-repository"]
-    status: "TODO"
+    status: "DONE"
     acceptance_criteria:
       - "Census finishes in <50ms for average repos"
       - "node_modules/target/vendor are DEFERRED, not deleted"
@@ -148,7 +148,7 @@ tasks:
     title: "genai Multi-Provider Model Adapter (rivet-model-genai)"
     description: "Implement ModelBackend using genai crate supporting Anthropic, OpenAI, Gemini, Ollama."
     crates: ["rivet-model-genai"]
-    status: "TODO"
+    status: "DONE"
     acceptance_criteria:
       - "Streaming and non-streaming responses normalized to ACCP actions"
       - "Token usage tracked in InvocationReceipt"
@@ -158,7 +158,7 @@ tasks:
     title: "Canonical Cognitive Cycle & RunPhase State Machine (rivet-core)"
     description: "Implement the end-to-end cognitive loop orchestrating View -> Model -> ACCP -> Runtime -> Praxis -> Noesis."
     crates: ["rivet-core"]
-    status: "TODO"
+    status: "DONE"
     acceptance_criteria:
       - "Full cycle executes end-to-end without panics"
       - "Completion strictly requires Praxis PASS"
