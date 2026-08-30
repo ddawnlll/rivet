@@ -60,6 +60,7 @@ fixtures listed below.
 | EVAL-044 | `cargo test --workspace --locked` after durable obligation scope enforcement | PASS: lockfile-constrained debug workspace unit, integration, and doc suite; 15 Core tests, live-test skips, and process-persistence tests pass. |
 | EVAL-045 | `cargo test -p rivet-core --test cognitive_cycle_test --release` and `cargo test --workspace --locked` | PASS: optimized 15-test Core cycle and a second lockfile-constrained full workspace regression both pass. |
 | EVAL-046 | `cargo clippy --workspace --all-targets -- -D warnings` and `cargo test --workspace --quiet` after Praxis test-lint repair | PASS: all workspace targets are warning-free; full debug workspace suite passes with exit code 0. |
+| EVAL-047 | `cargo test --workspace --release --locked --quiet` after final lint repair | PASS: optimized lockfile-constrained workspace suite passes with exit code 0. |
 
 ## Atomic milestones
 
