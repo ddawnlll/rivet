@@ -2,6 +2,7 @@ use chrono::Utc;
 use noesis::{HardState, NoesisEvent};
 use rivet_store::{HardStateStore, RedbStore};
 use rivet_types::*;
+use std::process::Command;
 
 #[tokio::test]
 async fn test_redb_persistence_and_replay_across_reopen() {
@@ -93,4 +94,48 @@ async fn uncheckpointed_events_are_recoverable_from_append_log() {
         state.claims.get(&claim_id).unwrap().proposition,
         "event log survives a stale checkpoint"
     );
+}
+
+#[tokio::test]
+async fn crash_child_appends_then_exits_before_checkpoint() {
+    let Ok(db_path) = std::env::var("RIVET_CRASH_CHILD_DB") else {
+        return;
+    };
+    let store = RedbStore::open(db_path).unwrap();
+    store
+        .append_event(&NoesisEvent::EvidenceRecorded {
+            evidence_id: EvidenceId::new(),
+            source: "crash-child".into(),
+            summary: "append committed before simulated process crash".into(),
+            timestamp: Utc::now(),
+        })
+        .await
+        .unwrap();
+    std::process::exit(101);
+}
+
+#[tokio::test]
+async fn process_crash_before_checkpoint_is_recoverable() {
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let db_path = tmp_dir.path().join("process-crash.redb");
+    let child = Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "crash_child_appends_then_exits_before_checkpoint",
+        ])
+        .env("RIVET_CRASH_CHILD_DB", &db_path)
+        .output()
+        .unwrap();
+    assert_eq!(child.status.code(), Some(101));
+
+    let reopened = RedbStore::open(&db_path).unwrap();
+    assert!(reopened.load_checkpoint().await.unwrap().is_none());
+    let events = reopened.read_events(Revision::ZERO).await.unwrap();
+    assert_eq!(events.len(), 1);
+    match &events[0] {
+        NoesisEvent::EvidenceRecorded { summary, .. } => {
+            assert_eq!(summary, "append committed before simulated process crash")
+        }
+        other => panic!("unexpected recovered event: {other:?}"),
+    }
 }

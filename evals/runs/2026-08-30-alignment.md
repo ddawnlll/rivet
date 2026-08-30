@@ -35,6 +35,9 @@ fixtures listed below.
 | EVAL-019 | `cargo clippy --workspace -- -D warnings` after the same changes | PASS. |
 | EVAL-020 | `cargo test -p rivet-core --test cognitive_cycle_test` plus `cargo clippy -p rivet-core -- -D warnings` after canonical lifecycle phase completion | PASS: 9 core tests and strict core clippy; `Observing` and `Responding` transitions now exist alongside the documented lifecycle states. |
 | EVAL-021 | `cargo test -p rivet-core --test cognitive_cycle_test` plus `cargo clippy -p rivet-core --tests -- -D warnings` after the Verity bridge | PASS: 10 core tests; a real `cargo --version` subprocess traverses the 8-gate PlanSpec pipeline and becomes a scoped, persisted Harness verification receipt. |
+| EVAL-022 | `cargo test --workspace` after Harness Verity bridge | PASS: all workspace unit, integration, and doc tests, including 10 Core cognitive-cycle tests. |
+| EVAL-023 | `cargo clippy --workspace -- -D warnings` after Harness Verity bridge | PASS. |
+| EVAL-024 | `cargo test -p rivet-store --test store_test -- --nocapture` plus `cargo clippy -p rivet-store --tests -- -D warnings` | PASS: 4 persistence tests; a real child test process exits before checkpoint and its append-log event is recovered after reopen. |
 
 ## Atomic milestones
 
@@ -43,7 +46,8 @@ fixtures listed below.
 - `bbcc519` — harden repository and verification boundaries, OpenCode adapter/native stream path, CLI persistence/frontier.
 - `97e68f3` — close state/retry semantic gaps, strict ontology carriers, CognitiveView evidence/repository identity, concurrency and invalidation tests.
 - `867dc90` — strict scope glob semantics, CognitiveView UTF-8/token bounds, append-log recovery, post-completion invalidation, and explicit RunPhase outcomes.
-- `pending` — Harness bridge for PlanSpec-driven VerityPipeline verification, with a real subprocess integration test and test clippy repair (to be committed after final gate).
+- `02c75aa` — Harness bridge for PlanSpec-driven VerityPipeline verification, with a real subprocess integration test and test clippy repair.
+- `pending` — child-process crash recovery test and updated persistence gap tracking (to be committed after final gate).
 
 ## Interpretation and remaining limits
 
