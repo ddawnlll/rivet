@@ -49,7 +49,6 @@ async fn opencode_zen_real_backend_smoke_test_when_configured() {
         .await
         .expect("configured OpenCode native stream should answer");
     assert!(
-        !stream_chunks.is_empty()
-            && stream_chunks.iter().any(|chunk| !chunk.trim().is_empty())
+        !stream_chunks.is_empty() && stream_chunks.iter().any(|chunk| !chunk.trim().is_empty())
     );
 }

@@ -61,6 +61,7 @@ fixtures listed below.
 | EVAL-045 | `cargo test -p rivet-core --test cognitive_cycle_test --release` and `cargo test --workspace --locked` | PASS: optimized 15-test Core cycle and a second lockfile-constrained full workspace regression both pass. |
 | EVAL-046 | `cargo clippy --workspace --all-targets -- -D warnings` and `cargo test --workspace --quiet` after Praxis test-lint repair | PASS: all workspace targets are warning-free; full debug workspace suite passes with exit code 0. |
 | EVAL-047 | `cargo test --workspace --release --locked --quiet` after final lint repair | PASS: optimized lockfile-constrained workspace suite passes with exit code 0. |
+| EVAL-048 | Focused final regression: 15 Core cognitive-cycle tests, 4 persistence/process-crash tests, 8 ACCP ontology tests, credential-aware OpenCode live tests, and `cargo fmt --all -- --check` | PASS: all focused suites and format check pass; live provider tests explicitly skip because credentials are absent. |
 
 ## Atomic milestones
 
@@ -90,6 +91,7 @@ fixtures listed below.
 - `01c2b49` — lockfile-constrained workspace regression evidence.
 - `226fa95` — optimized focused Core and repeated locked workspace regression evidence.
 - `cda83f8` — all-target clippy repair and full debug workspace regression evidence.
+- `pending` — focused final regression and rustfmt compliance (to be committed after final gate).
 
 ## Interpretation and remaining limits
 
