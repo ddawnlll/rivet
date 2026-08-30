@@ -468,6 +468,57 @@ async fn authoritative_events_cannot_mint_unknown_obligations() {
         Arc::new(ScriptedModelBackend::new(vec![])),
         Arc::new(Runtime::new(env!("CARGO_MANIFEST_DIR"))),
     );
+    let bad_scope = harness
+        .record_event(NoesisEvent::ObligationCreated {
+            obligation_id: ObligationId::new(),
+            description: "wrong repository must be rejected".into(),
+            scope: Scope::global("other-repository", Revision::ZERO),
+            timestamp: Utc::now(),
+        })
+        .await;
+    assert!(matches!(bad_scope, Err(RivetError::SemanticViolation(_))));
+
+    let first_obligation = ObligationId::new();
+    let second_obligation = ObligationId::new();
+    for obligation_id in [&first_obligation, &second_obligation] {
+        harness
+            .record_event(NoesisEvent::ObligationCreated {
+                obligation_id: (*obligation_id).clone(),
+                description: "cross-obligation closure guard".into(),
+                scope: Scope::global("rivet", Revision::ZERO),
+                timestamp: Utc::now(),
+            })
+            .await
+            .unwrap();
+    }
+    let scoped_receipt = accp::VerificationReceipt {
+        receipt_id: ReceiptId::new(),
+        obligation_id: first_obligation,
+        passed: true,
+        evidence_id: EvidenceId::new(),
+        verified_scope: Scope::global("rivet", Revision(2)),
+        diagnostics: None,
+        timestamp: Utc::now(),
+    };
+    harness
+        .record_event(NoesisEvent::VerificationRecorded {
+            receipt: scoped_receipt.clone(),
+            timestamp: Utc::now(),
+        })
+        .await
+        .unwrap();
+    let cross_closure = harness
+        .record_event(NoesisEvent::ObligationClosed {
+            obligation_id: second_obligation,
+            receipt_id: scoped_receipt.receipt_id,
+            timestamp: Utc::now(),
+        })
+        .await;
+    assert!(matches!(
+        cross_closure,
+        Err(RivetError::VerificationFailed(_))
+    ));
+
     let unknown = ObligationId::new();
     let receipt = accp::VerificationReceipt {
         receipt_id: ReceiptId::new(),

@@ -52,6 +52,7 @@ fixtures listed below.
 | EVAL-036 | `cargo test -p rivet-repository` plus `cargo clippy -p rivet-repository -- -D warnings` after deferred signal refinement | PASS: deferred directory observations distinguish high-volume, dependency-materialization, and generated-artifacts signals. |
 | EVAL-037 | `cargo test -p rivet-core --test cognitive_cycle_test` plus `cargo clippy -p rivet-core --tests -- -D warnings` after task-bound completion hardening | PASS: direct completion for a foreign task ID is rejected; 14 Core tests and strict Core clippy pass. |
 | EVAL-038 | `cargo test -p rivet-model-genai --test live_opencode_test -- --nocapture` plus `cargo clippy -p rivet-model-genai --tests -- -D warnings` | PASS: credential-aware live test skips explicitly without keys; with credentials it now checks both non-stream invoke and native stream paths. |
+| EVAL-039 | `cargo test -p rivet-core --test cognitive_cycle_test` plus `cargo clippy -p rivet-core --tests -- -D warnings` after obligation scope/identity hardening | PASS: 14 Core tests; wrong-repository obligations and cross-obligation closure attempts are rejected before state mutation. |
 
 ## Atomic milestones
 
@@ -72,7 +73,8 @@ fixtures listed below.
 - `dad588d` — Verity PASS → completion → failed recheck invalidation extension.
 - `e85692c` — refined deferred-tree signals for semantic induction.
 - `16d9d66` — task-bound completion event enforcement.
-- `pending` — credential-aware OpenCode invoke + native stream live coverage (to be committed after final gate).
+- `7426250` — credential-aware OpenCode invoke + native stream live coverage.
+- `pending` — obligation scope and receipt identity hardening (to be committed after final gate).
 
 ## Interpretation and remaining limits
 

@@ -727,6 +727,13 @@ impl HarnessCore {
                         .into(),
                 ));
             }
+            NoesisEvent::ObligationCreated { scope, .. } => {
+                if scope.repository != self.repository_id || scope.revision > hard.revision {
+                    return Err(RivetError::SemanticViolation(
+                        "obligation scope is outside the active Harness repository revision".into(),
+                    ));
+                }
+            }
             NoesisEvent::ObligationClosed {
                 obligation_id,
                 receipt_id,
@@ -737,10 +744,11 @@ impl HarnessCore {
                         "obligation closure requires an open known obligation".into(),
                     ));
                 }
-                let verified = hard
-                    .verification_receipts
-                    .values()
-                    .any(|receipt| receipt.receipt_id == *receipt_id && receipt.passed);
+                let verified = hard.verification_receipts.values().any(|receipt| {
+                    receipt.receipt_id == *receipt_id
+                        && receipt.obligation_id == *obligation_id
+                        && receipt.passed
+                });
                 if !verified {
                     return Err(RivetError::VerificationFailed(
                         "obligation closure requires a recorded passing Praxis receipt".into(),
@@ -753,6 +761,14 @@ impl HarnessCore {
                 {
                     return Err(RivetError::SemanticViolation(
                         "verification receipt requires a known open or closed obligation".into(),
+                    ));
+                }
+                if receipt.verified_scope.repository != self.repository_id
+                    || receipt.verified_scope.revision > hard.revision
+                {
+                    return Err(RivetError::SemanticViolation(
+                        "verification receipt scope is outside the active Harness repository revision"
+                            .into(),
                     ));
                 }
             }
