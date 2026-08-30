@@ -54,6 +54,7 @@ fixtures listed below.
 | EVAL-038 | `cargo test -p rivet-model-genai --test live_opencode_test -- --nocapture` plus `cargo clippy -p rivet-model-genai --tests -- -D warnings` | PASS: credential-aware live test skips explicitly without keys; with credentials it now checks both non-stream invoke and native stream paths. |
 | EVAL-039 | `cargo test -p rivet-core --test cognitive_cycle_test` plus `cargo clippy -p rivet-core --tests -- -D warnings` after obligation scope/identity hardening | PASS: 14 Core tests; wrong-repository obligations and cross-obligation closure attempts are rejected before state mutation. |
 | EVAL-040 | `cargo test --workspace --release` after all current changes | PASS: optimized workspace unit, integration, and doc tests; 14 Core, 8 ACCP, 6 Noesis, 4 Runtime, and 4 process-persistence tests pass. |
+| EVAL-041 | `cargo test -p rivet-core --test cognitive_cycle_test` plus `cargo clippy -p rivet-core --tests -- -D warnings` after durable obligation scope enforcement | PASS: 15 Core tests; obligation scopes survive restart and broader repository/path verification scopes are rejected before subprocess execution. |
 
 ## Atomic milestones
 
@@ -76,7 +77,8 @@ fixtures listed below.
 - `16d9d66` — task-bound completion event enforcement.
 - `7426250` — credential-aware OpenCode invoke + native stream live coverage.
 - `cecc8ca` — obligation scope and receipt identity hardening.
-- `pending` — optimized release workspace regression evidence (to be committed after final gate).
+- `63b5e36` — optimized release workspace regression evidence.
+- `pending` — durable obligation scope map and path-broadening verification guard (to be committed after final gate).
 
 ## Interpretation and remaining limits
 

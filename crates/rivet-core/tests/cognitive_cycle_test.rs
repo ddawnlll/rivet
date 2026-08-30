@@ -319,6 +319,10 @@ async fn persisted_harness_reopens_checkpointed_noesis_state() {
         hard.obligations.get(&obligation_id).unwrap(),
         "restart must preserve obligations"
     );
+    assert_eq!(
+        hard.obligation_scopes.get(&obligation_id).unwrap(),
+        &Scope::global("rivet", Revision::ZERO)
+    );
 }
 
 #[tokio::test]
@@ -567,6 +571,42 @@ async fn verification_scope_is_bound_to_the_harness_repository() {
         })
         .await;
     assert!(matches!(result, Err(RivetError::SemanticViolation(_))));
+}
+
+#[tokio::test]
+async fn verification_cannot_broaden_an_obligation_path_scope() {
+    let directory = tempfile::tempdir().unwrap();
+    let harness = HarnessCore::new(
+        Arc::new(MemoryStore::new()),
+        Arc::new(ScriptedModelBackend::new(vec![])),
+        Arc::new(Runtime::new(directory.path())),
+    );
+    let obligation_id = ObligationId::new();
+    harness
+        .record_event(NoesisEvent::ObligationCreated {
+            obligation_id: obligation_id.clone(),
+            description: "only source files are in scope".into(),
+            scope: Scope::path("rivet", "src/**", Revision::ZERO),
+            timestamp: Utc::now(),
+        })
+        .await
+        .unwrap();
+    let revision = harness.hard_state.lock().await.revision;
+    let result = harness
+        .run_verification(accp::VerificationRequest {
+            obligation_id,
+            predicate: "cargo --version".into(),
+            target_scope: Scope::global("rivet", revision),
+            timeout_seconds: 30,
+            timestamp: Utc::now(),
+        })
+        .await;
+    let error = result.expect_err("a global verification must not broaden src-only scope");
+    assert!(
+        error
+            .to_string()
+            .contains("broader than the obligation scope")
+    );
 }
 
 #[tokio::test]

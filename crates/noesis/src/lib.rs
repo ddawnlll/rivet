@@ -113,6 +113,9 @@ pub struct HardState {
     pub active_task_id: Option<TaskId>,
     pub claims: HashMap<ClaimId, ClaimRecord>,
     pub obligations: HashMap<ObligationId, String>,
+    /// Durable scope declarations for open and historically closed obligations.
+    #[serde(default)]
+    pub obligation_scopes: HashMap<ObligationId, Scope>,
     pub closed_obligations: HashMap<ObligationId, ReceiptId>,
     pub evidence: HashMap<EvidenceId, String>,
     #[serde(default)]
@@ -179,10 +182,13 @@ impl HardState {
             NoesisEvent::ObligationCreated {
                 obligation_id,
                 description,
+                scope,
                 ..
             } => {
                 self.obligations
                     .insert(obligation_id.clone(), description.clone());
+                self.obligation_scopes
+                    .insert(obligation_id.clone(), scope.clone());
             }
             NoesisEvent::ObligationClosed {
                 obligation_id,

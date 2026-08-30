@@ -536,7 +536,8 @@ impl HarnessCore {
                 "Verity request is outside the current repository or state revision".into(),
             ));
         }
-        self.ensure_known_obligation(&request.obligation_id).await?;
+        self.ensure_known_obligation(&request.obligation_id, &request.target_scope)
+            .await?;
         let request_message = AccpMessage::VerificationRequest(request.clone());
         AccpEnvelope::from_message(
             format!("verity-verification-{}", request.obligation_id),
@@ -624,7 +625,8 @@ impl HarnessCore {
                 "Verification request is outside the current repository or state revision".into(),
             ));
         }
-        self.ensure_known_obligation(&request.obligation_id).await?;
+        self.ensure_known_obligation(&request.obligation_id, &request.target_scope)
+            .await?;
         let mut parts = request.predicate.split_whitespace();
         let Some(program) = parts.next() else {
             return Err(RivetError::VerificationFailed(
@@ -698,11 +700,22 @@ impl HarnessCore {
         Ok(receipt)
     }
 
-    async fn ensure_known_obligation(&self, obligation_id: &ObligationId) -> RivetResult<()> {
+    async fn ensure_known_obligation(
+        &self,
+        obligation_id: &ObligationId,
+        target_scope: &Scope,
+    ) -> RivetResult<()> {
         let hard = self.hard_state.lock().await;
         if hard.obligations.contains_key(obligation_id)
             || hard.closed_obligations.contains_key(obligation_id)
         {
+            if let Some(declared_scope) = hard.obligation_scopes.get(obligation_id)
+                && !scope_contains_at_revision(declared_scope, target_scope)
+            {
+                return Err(RivetError::SemanticViolation(
+                    "verification scope is broader than the obligation scope".into(),
+                ));
+            }
             return Ok(());
         }
         Err(RivetError::SemanticViolation(format!(
@@ -771,6 +784,13 @@ impl HarnessCore {
                             .into(),
                     ));
                 }
+                if let Some(declared_scope) = hard.obligation_scopes.get(&receipt.obligation_id)
+                    && !scope_contains_at_revision(declared_scope, &receipt.verified_scope)
+                {
+                    return Err(RivetError::SemanticViolation(
+                        "verification receipt scope is broader than the obligation scope".into(),
+                    ));
+                }
             }
             NoesisEvent::CompletionAccepted {
                 task_id,
@@ -817,6 +837,30 @@ fn is_allowed_verification_program(program: &str) -> bool {
         program,
         "cargo" | "pytest" | "go" | "npm" | "pnpm" | "yarn" | "jest" | "vitest"
     )
+}
+
+fn scope_contains_at_revision(outer: &Scope, inner: &Scope) -> bool {
+    if outer.repository != inner.repository || outer.revision > inner.revision {
+        return false;
+    }
+    let normalize = |path: &str| {
+        path.replace('\\', "/")
+            .trim_start_matches("./")
+            .trim_matches('/')
+            .to_string()
+    };
+    match (&outer.path_pattern, &inner.path_pattern) {
+        (None, _) => true,
+        (Some(_), None) => false,
+        (Some(outer_path), Some(inner_path)) => {
+            let outer_path = normalize(outer_path);
+            let inner_path = normalize(inner_path);
+            outer_path == inner_path
+                || outer_path.strip_suffix("/**").is_some_and(|prefix| {
+                    inner_path == prefix || inner_path.starts_with(&format!("{prefix}/"))
+                })
+        }
+    }
 }
 
 fn parse_report(program: &str, stdout: &str, stderr: &str) -> ParsedTestReport {
