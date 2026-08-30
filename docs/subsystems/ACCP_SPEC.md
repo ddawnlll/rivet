@@ -2,7 +2,10 @@
 
 <span class="badge project">PROJECT_DESIGN</span> ACCP'nin iki ana sorusu vardır:
 
-**v0.2 scope clarification.** ACCP memory engine, scheduler, RPC transport veya “everything protocol” değildir. Çekirdek görevi evidence admission, soft→hard promotion authority, action authorization ve auditable claim semantics'tir. Native provider tool/function calling başka bir transport olarak kalabilir; Rivet'in epistemic semantics'i onun üstünde veya yanında typed runtime state olarak uygulanabilir.
+> [!NOTE]
+> **Normative Protocol Specification:** ACCP 3.0 protokolünün tam, uluslararası standart formatındaki normatif spesifikasyonu için bakınız: [`ACCP 3.0 Specification`](#accp-3-0-cognitive-controller-harness-semantic-protocol). Bu bölüm, Rivet v0.3 içindeki mimari entegrasyonu özetler.
+
+**v0.2/v0.3 scope clarification.** ACCP memory engine, scheduler, RPC transport veya “everything protocol” değildir. Çekirdek görevi evidence admission, soft→hard promotion authority, action authorization ve auditable claim semantics'tir. Native provider tool/function calling başka bir transport olarak kalabilir; Rivet'in epistemic semantics'i onun üstünde veya yanında typed runtime state olarak uygulanabilir.
 
 1. **Bu claim mevcut evidence altında hangi authority ile söylenebilir?**
 2. **Bu action mevcut user authority, risk ve reversibility altında çalıştırılabilir mi?**

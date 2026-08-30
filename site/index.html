@@ -191,6 +191,202 @@ footer{border-top:3px double #333;margin-top:60px;padding-top:18px;color:var(--m
 <li class="toc-h2"><a href="#praxis-verification-plan">Praxis verification plan</a></li>
 <li class="toc-h2"><a href="#invocation-receipt">Invocation receipt</a></li>
 <li class="toc-h2"><a href="#tokencompute-receipt">Token/compute receipt</a></li>
+<li class="toc-h1"><a href="#accp-30">ACCP 3.0</a></li>
+<li class="toc-h2"><a href="#cognitive-controllerharness-semantic-protocol">Cognitive Controller–Harness Semantic Protocol</a></li>
+<li class="toc-h2"><a href="#foreword">Foreword</a></li>
+<li class="toc-h1"><a href="#1-scope">1 Scope</a></li>
+<li class="toc-h1"><a href="#2-normative-references">2 Normative references</a></li>
+<li class="toc-h1"><a href="#3-terms-and-definitions">3 Terms and definitions</a></li>
+<li class="toc-h2"><a href="#31-accp">3.1 ACCP</a></li>
+<li class="toc-h2"><a href="#32-cognitive-controller">3.2 Cognitive Controller</a></li>
+<li class="toc-h2"><a href="#33-harness">3.3 Harness</a></li>
+<li class="toc-h2"><a href="#34-commitment">3.4 commitment</a></li>
+<li class="toc-h2"><a href="#35-observation">3.5 observation</a></li>
+<li class="toc-h2"><a href="#36-claim">3.6 claim</a></li>
+<li class="toc-h2"><a href="#37-evidence">3.7 evidence</a></li>
+<li class="toc-h2"><a href="#38-proposal">3.8 proposal</a></li>
+<li class="toc-h2"><a href="#39-decision">3.9 decision</a></li>
+<li class="toc-h2"><a href="#310-receipt">3.10 receipt</a></li>
+<li class="toc-h2"><a href="#311-verification">3.11 verification</a></li>
+<li class="toc-h2"><a href="#312-capability">3.12 capability</a></li>
+<li class="toc-h2"><a href="#313-authority">3.13 authority</a></li>
+<li class="toc-h2"><a href="#314-scope">3.14 scope</a></li>
+<li class="toc-h2"><a href="#315-revision">3.15 revision</a></li>
+<li class="toc-h2"><a href="#316-completion">3.16 completion</a></li>
+<li class="toc-h1"><a href="#4-normative-verbal-forms">4 Normative verbal forms</a></li>
+<li class="toc-h1"><a href="#5-protocol-architecture">5 Protocol architecture</a></li>
+<li class="toc-h2"><a href="#51-general-model">5.1 General model</a></li>
+<li class="toc-h2"><a href="#52-boundary-ownership">5.2 Boundary ownership</a></li>
+<li class="toc-h1"><a href="#6-fundamental-semantic-invariants">6 Fundamental semantic invariants</a></li>
+<li class="toc-h2"><a href="#61-general">6.1 General</a></li>
+<li class="toc-h2"><a href="#62-proposal-is-not-execution">6.2 Proposal is not execution</a></li>
+<li class="toc-h2"><a href="#63-claim-is-not-observation">6.3 Claim is not observation</a></li>
+<li class="toc-h2"><a href="#64-observation-is-not-interpretation">6.4 Observation is not interpretation</a></li>
+<li class="toc-h2"><a href="#65-evidence-is-not-verification">6.5 Evidence is not verification</a></li>
+<li class="toc-h2"><a href="#66-evidence-reference-is-not-evidence-sufficiency">6.6 Evidence reference is not evidence sufficiency</a></li>
+<li class="toc-h2"><a href="#67-execution-success-is-not-task-success">6.7 Execution success is not task success</a></li>
+<li class="toc-h2"><a href="#68-patch-application-is-not-fix-verification">6.8 Patch application is not fix verification</a></li>
+<li class="toc-h2"><a href="#69-verification-is-predicate-scoped">6.9 Verification is predicate-scoped</a></li>
+<li class="toc-h2"><a href="#610-completion-proposal-is-not-completion">6.10 Completion proposal is not completion</a></li>
+<li class="toc-h2"><a href="#611-messages-do-not-mint-authority">6.11 Messages do not mint authority</a></li>
+<li class="toc-h2"><a href="#612-retrieval-is-not-new-evidence">6.12 Retrieval is not new evidence</a></li>
+<li class="toc-h2"><a href="#613-decision-validity-is-bounded">6.13 Decision validity is bounded</a></li>
+<li class="toc-h2"><a href="#614-private-cognition-is-outside-the-protocol">6.14 Private cognition is outside the protocol</a></li>
+<li class="toc-h1"><a href="#7-actor-model">7 Actor model</a></li>
+<li class="toc-h2"><a href="#71-required-roles">7.1 Required roles</a></li>
+<li class="toc-h2"><a href="#72-cognitive-controller-permissions">7.2 Cognitive Controller permissions</a></li>
+<li class="toc-h2"><a href="#73-harness-permissions">7.3 Harness permissions</a></li>
+<li class="toc-h2"><a href="#74-external-actors">7.4 External actors</a></li>
+<li class="toc-h1"><a href="#8-protocol-message-model">8 Protocol message model</a></li>
+<li class="toc-h2"><a href="#81-message-families">8.1 Message families</a></li>
+<li class="toc-h2"><a href="#82-directionality">8.2 Directionality</a></li>
+<li class="toc-h1"><a href="#9-message-envelope">9 Message envelope</a></li>
+<li class="toc-h2"><a href="#91-required-fields">9.1 Required fields</a></li>
+<li class="toc-h2"><a href="#92-recommended-fields">9.2 Recommended fields</a></li>
+<li class="toc-h2"><a href="#93-example">9.3 Example</a></li>
+<li class="toc-h2"><a href="#94-message-identity">9.4 Message identity</a></li>
+<li class="toc-h1"><a href="#10-view-messages">10 VIEW messages</a></li>
+<li class="toc-h2"><a href="#101-purpose">10.1 Purpose</a></li>
+<li class="toc-h2"><a href="#102-core-kinds">10.2 Core kinds</a></li>
+<li class="toc-h2"><a href="#103-cognitive-view">10.3 COGNITIVE VIEW</a></li>
+<li class="toc-h2"><a href="#104-authority-of-views">10.4 Authority of views</a></li>
+<li class="toc-h1"><a href="#11-query-messages">11 QUERY messages</a></li>
+<li class="toc-h2"><a href="#111-core-kinds">11.1 Core kinds</a></li>
+<li class="toc-h2"><a href="#112-semantics">11.2 Semantics</a></li>
+<li class="toc-h2"><a href="#113-artifact-query-example">11.3 ARTIFACT query example</a></li>
+<li class="toc-h1"><a href="#12-proposal-messages">12 PROPOSAL messages</a></li>
+<li class="toc-h2"><a href="#121-core-kinds">12.1 Core kinds</a></li>
+<li class="toc-h2"><a href="#122-general-requirement">12.2 General requirement</a></li>
+<li class="toc-h1"><a href="#13-claim-semantics">13 Claim semantics</a></li>
+<li class="toc-h2"><a href="#131-claim-record">13.1 Claim record</a></li>
+<li class="toc-h2"><a href="#132-epistemic-classes">13.2 Epistemic classes</a></li>
+<li class="toc-h2"><a href="#133-assumption">13.3 ASSUMPTION</a></li>
+<li class="toc-h2"><a href="#134-hypothesis">13.4 HYPOTHESIS</a></li>
+<li class="toc-h2"><a href="#135-inference">13.5 INFERENCE</a></li>
+<li class="toc-h2"><a href="#136-supported">13.6 SUPPORTED</a></li>
+<li class="toc-h2"><a href="#137-verified">13.7 VERIFIED</a></li>
+<li class="toc-h2"><a href="#138-rejected">13.8 REJECTED</a></li>
+<li class="toc-h2"><a href="#139-contradicted">13.9 CONTRADICTED</a></li>
+<li class="toc-h2"><a href="#1310-unknown">13.10 UNKNOWN</a></li>
+<li class="toc-h1"><a href="#14-claim-transition-rules">14 Claim transition rules</a></li>
+<li class="toc-h2"><a href="#141-general">14.1 General</a></li>
+<li class="toc-h2"><a href="#142-prohibited-direct-minting">14.2 Prohibited direct minting</a></li>
+<li class="toc-h2"><a href="#143-example">14.3 Example</a></li>
+<li class="toc-h1"><a href="#15-observation-semantics">15 Observation semantics</a></li>
+<li class="toc-h2"><a href="#151-observation-production">15.1 Observation production</a></li>
+<li class="toc-h2"><a href="#152-observation-record">15.2 Observation record</a></li>
+<li class="toc-h2"><a href="#153-example">15.3 Example</a></li>
+<li class="toc-h2"><a href="#154-controller-originated-statements">15.4 Controller-originated statements</a></li>
+<li class="toc-h1"><a href="#16-evidence-semantics">16 Evidence semantics</a></li>
+<li class="toc-h2"><a href="#161-evidence-record">16.1 Evidence record</a></li>
+<li class="toc-h2"><a href="#162-evidence-references">16.2 Evidence references</a></li>
+<li class="toc-h2"><a href="#163-scope">16.3 Scope</a></li>
+<li class="toc-h2"><a href="#164-revision">16.4 Revision</a></li>
+<li class="toc-h1"><a href="#17-action-proposals">17 ACTION proposals</a></li>
+<li class="toc-h2"><a href="#171-action-record">17.1 Action record</a></li>
+<li class="toc-h2"><a href="#172-example">17.2 Example</a></li>
+<li class="toc-h2"><a href="#173-capability-versus-provider">17.3 Capability versus provider</a></li>
+<li class="toc-h1"><a href="#18-action-authorization">18 Action authorization</a></li>
+<li class="toc-h2"><a href="#181-general">18.1 General</a></li>
+<li class="toc-h2"><a href="#182-standing-authorization">18.2 Standing authorization</a></li>
+<li class="toc-h2"><a href="#183-explicit-decision">18.3 Explicit decision</a></li>
+<li class="toc-h1"><a href="#19-decision-messages">19 DECISION messages</a></li>
+<li class="toc-h2"><a href="#191-verdicts">19.1 Verdicts</a></li>
+<li class="toc-h2"><a href="#192-decision-binding">19.2 Decision binding</a></li>
+<li class="toc-h2"><a href="#193-example">19.3 Example</a></li>
+<li class="toc-h1"><a href="#20-receipt-messages">20 RECEIPT messages</a></li>
+<li class="toc-h2"><a href="#201-core-kinds">20.1 Core kinds</a></li>
+<li class="toc-h2"><a href="#202-authority">20.2 Authority</a></li>
+<li class="toc-h2"><a href="#203-execution-receipt">20.3 EXECUTION receipt</a></li>
+<li class="toc-h2"><a href="#204-example">20.4 Example</a></li>
+<li class="toc-h1"><a href="#21-verification-semantics">21 Verification semantics</a></li>
+<li class="toc-h2"><a href="#211-verification-proposal">21.1 Verification proposal</a></li>
+<li class="toc-h2"><a href="#212-verification-receipt">21.2 Verification receipt</a></li>
+<li class="toc-h2"><a href="#213-verification-results">21.3 Verification results</a></li>
+<li class="toc-h2"><a href="#214-no-scope-inflation">21.4 No scope inflation</a></li>
+<li class="toc-h1"><a href="#22-state-transition-semantics">22 State-transition semantics</a></li>
+<li class="toc-h2"><a href="#221-general">22.1 General</a></li>
+<li class="toc-h2"><a href="#222-required-binding">22.2 Required binding</a></li>
+<li class="toc-h2"><a href="#223-stale-base-protection">22.3 Stale-base protection</a></li>
+<li class="toc-h2"><a href="#224-receipt">22.4 Receipt</a></li>
+<li class="toc-h1"><a href="#23-completion-semantics">23 Completion semantics</a></li>
+<li class="toc-h2"><a href="#231-completion-proposal">23.1 Completion proposal</a></li>
+<li class="toc-h2"><a href="#232-completion-authority">23.2 Completion authority</a></li>
+<li class="toc-h2"><a href="#233-acceptance">23.3 Acceptance</a></li>
+<li class="toc-h2"><a href="#234-rejection-example">23.4 Rejection example</a></li>
+<li class="toc-h2"><a href="#235-accepted-completion">23.5 Accepted completion</a></li>
+<li class="toc-h1"><a href="#24-capability-semantics">24 Capability semantics</a></li>
+<li class="toc-h2"><a href="#241-capability-representation">24.1 Capability representation</a></li>
+<li class="toc-h2"><a href="#242-capability-exposure">24.2 Capability exposure</a></li>
+<li class="toc-h2"><a href="#243-least-capability">24.3 Least capability</a></li>
+<li class="toc-h1"><a href="#25-authority-semantics">25 Authority semantics</a></li>
+<li class="toc-h2"><a href="#251-general">25.1 General</a></li>
+<li class="toc-h2"><a href="#252-authority-dimensions">25.2 Authority dimensions</a></li>
+<li class="toc-h2"><a href="#253-authority-requests">25.3 Authority requests</a></li>
+<li class="toc-h1"><a href="#26-scope-semantics">26 Scope semantics</a></li>
+<li class="toc-h2"><a href="#261-general">26.1 General</a></li>
+<li class="toc-h2"><a href="#262-scope-widening">26.2 Scope widening</a></li>
+<li class="toc-h1"><a href="#27-revision-semantics">27 Revision semantics</a></li>
+<li class="toc-h2"><a href="#271-general">27.1 General</a></li>
+<li class="toc-h2"><a href="#272-revision-types">27.2 Revision types</a></li>
+<li class="toc-h2"><a href="#273-staleness">27.3 Staleness</a></li>
+<li class="toc-h2"><a href="#274-stale-signal">27.4 Stale signal</a></li>
+<li class="toc-h1"><a href="#28-signal-messages">28 SIGNAL messages</a></li>
+<li class="toc-h2"><a href="#281-core-kinds">28.1 Core kinds</a></li>
+<li class="toc-h2"><a href="#282-signal-semantics">28.2 SIGNAL semantics</a></li>
+<li class="toc-h1"><a href="#29-protocol-processing-rules">29 Protocol processing rules</a></li>
+<li class="toc-h2"><a href="#291-controller-output-processing">29.1 Controller output processing</a></li>
+<li class="toc-h2"><a href="#292-adapter-rule">29.2 Adapter rule</a></li>
+<li class="toc-h2"><a href="#293-tool-call-mapping">29.3 Tool-call mapping</a></li>
+<li class="toc-h1"><a href="#30-protocol-error-model">30 Protocol error model</a></li>
+<li class="toc-h2"><a href="#301-error-response">30.1 Error response</a></li>
+<li class="toc-h2"><a href="#302-core-error-codes">30.2 Core error codes</a></li>
+<li class="toc-h2"><a href="#303-semantic-cast-error">30.3 Semantic-cast error</a></li>
+<li class="toc-h1"><a href="#31-correlation-and-causality">31 Correlation and causality</a></li>
+<li class="toc-h1"><a href="#32-idempotency-and-retries">32 Idempotency and retries</a></li>
+<li class="toc-h1"><a href="#33-serialization-model">33 Serialization model</a></li>
+<li class="toc-h2"><a href="#331-protocol-independence">33.1 Protocol independence</a></li>
+<li class="toc-h2"><a href="#332-canonical-interchange-binding">33.2 Canonical interchange binding</a></li>
+<li class="toc-h2"><a href="#333-yaml">33.3 YAML</a></li>
+<li class="toc-h2"><a href="#334-transcript-representation">33.4 Transcript representation</a></li>
+<li class="toc-h1"><a href="#34-extensibility">34 Extensibility</a></li>
+<li class="toc-h2"><a href="#341-extension-fields">34.1 Extension fields</a></li>
+<li class="toc-h2"><a href="#342-core-semantics">34.2 Core semantics</a></li>
+<li class="toc-h2"><a href="#343-unknown-extensions">34.3 Unknown extensions</a></li>
+<li class="toc-h1"><a href="#35-versioning">35 Versioning</a></li>
+<li class="toc-h2"><a href="#351-version-identifier">35.1 Version identifier</a></li>
+<li class="toc-h2"><a href="#352-major-version-changes">35.2 Major-version changes</a></li>
+<li class="toc-h2"><a href="#353-minor-compatible-changes">35.3 Minor-compatible changes</a></li>
+<li class="toc-h1"><a href="#36-security-considerations">36 Security considerations</a></li>
+<li class="toc-h2"><a href="#361-untrusted-content">36.1 Untrusted content</a></li>
+<li class="toc-h2"><a href="#362-semantic-injection">36.2 Semantic injection</a></li>
+<li class="toc-h2"><a href="#363-controller-compromise">36.3 Controller compromise</a></li>
+<li class="toc-h2"><a href="#364-receipt-integrity">36.4 Receipt integrity</a></li>
+<li class="toc-h1"><a href="#37-privacy-considerations">37 Privacy considerations</a></li>
+<li class="toc-h1"><a href="#38-conformance">38 Conformance</a></li>
+<li class="toc-h2"><a href="#381-accp-core-conformance">38.1 ACCP Core conformance</a></li>
+<li class="toc-h2"><a href="#382-epistemic-conformance">38.2 Epistemic conformance</a></li>
+<li class="toc-h2"><a href="#383-serialization-conformance">38.3 Serialization conformance</a></li>
+<li class="toc-h1"><a href="#39-mandatory-conformance-tests">39 Mandatory conformance tests</a></li>
+<li class="toc-h1"><a href="#40-canonical-lightweight-transaction">40 Canonical lightweight transaction</a></li>
+<li class="toc-h2"><a href="#401-user-request">40.1 User request</a></li>
+<li class="toc-h2"><a href="#402-controller-cognition">40.2 Controller cognition</a></li>
+<li class="toc-h2"><a href="#403-action-proposal">40.3 Action proposal</a></li>
+<li class="toc-h2"><a href="#404-internal-authorization">40.4 Internal authorization</a></li>
+<li class="toc-h2"><a href="#405-execution-receipt">40.5 Execution receipt</a></li>
+<li class="toc-h1"><a href="#41-canonical-governed-mutation-transaction">41 Canonical governed mutation transaction</a></li>
+<li class="toc-h1"><a href="#42-protocol-state-transition-summary">42 Protocol state transition summary</a></li>
+<li class="toc-h1"><a href="#43-semantic-type-safety-summary">43 Semantic type-safety summary</a></li>
+<li class="toc-h1"><a href="#annex-a">Annex A</a></li>
+<li class="toc-h2"><a href="#normative-semantic-transition-matrix">Normative semantic transition matrix</a></li>
+<li class="toc-h1"><a href="#annex-b">Annex B</a></li>
+<li class="toc-h2"><a href="#normative-producer-matrix">Normative producer matrix</a></li>
+<li class="toc-h1"><a href="#annex-c">Annex C</a></li>
+<li class="toc-h2"><a href="#accp-core-type-model-informative-rust-representation">ACCP core type model — informative Rust representation</a></li>
+<li class="toc-h1"><a href="#annex-d">Annex D</a></li>
+<li class="toc-h2"><a href="#legacy-accp-2x-report-compatibility-informative">Legacy ACCP 2.x report compatibility — informative</a></li>
+<li class="toc-h1"><a href="#annex-e">Annex E</a></li>
+<li class="toc-h2"><a href="#design-principle-summary-informative">Design principle summary — informative</a></li>
 <li class="toc-h1"><a href="#context-architecture">Context Architecture</a></li>
 <li class="toc-h2"><a href="#context-is-a-view-not-memory">Context is a view, not memory</a></li>
 <li class="toc-h2"><a href="#context-view-contract">Context view contract</a></li>
@@ -856,7 +1052,8 @@ RECENT EVIDENCE ──────┘          ↓
 <p>v0.2 doğrudan representation ablation ister: <strong>(A) raw retrieved text, (B) triples, (C) selected graph paths, (D) hybrid semantic+typed cognitive view.</strong> Aynı underlying evidence altında next-action accuracy, contradiction detection, rejected-belief recall, unsupported relation üretimi, token cost ve latency ölçülmelidir. “Graph kullanmak” katkı değildir; doğru cognitive serialization katkı olabilir.</p>
 <h1 id="accp-specification-claim-action-authority-and-capability-governance">ACCP specification: claim, action, authority and capability governance<a class="anchor" href="#accp-specification-claim-action-authority-and-capability-governance">¶</a></h1>
 <p><span class="badge project">PROJECT_DESIGN</span> ACCP'nin iki ana sorusu vardır:</p>
-<p><strong>v0.2 scope clarification.</strong> ACCP memory engine, scheduler, RPC transport veya “everything protocol” değildir. Çekirdek görevi evidence admission, soft→hard promotion authority, action authorization ve auditable claim semantics'tir. Native provider tool/function calling başka bir transport olarak kalabilir; Rivet'in epistemic semantics'i onun üstünde veya yanında typed runtime state olarak uygulanabilir.</p>
+<div class="status">**Normative Protocol Specification:** ACCP 3.0 protokolünün tam, uluslararası standart formatındaki normatif spesifikasyonu için bakınız: [`ACCP 3.0 Specification`](#accp-3-0-cognitive-controller-harness-semantic-protocol). Bu bölüm, Rivet v0.3 içindeki mimari entegrasyonu özetler.</div>
+<p><strong>v0.2/v0.3 scope clarification.</strong> ACCP memory engine, scheduler, RPC transport veya “everything protocol” değildir. Çekirdek görevi evidence admission, soft→hard promotion authority, action authorization ve auditable claim semantics'tir. Native provider tool/function calling başka bir transport olarak kalabilir; Rivet'in epistemic semantics'i onun üstünde veya yanında typed runtime state olarak uygulanabilir.</p>
 <ol>
 <li><strong>Bu claim mevcut evidence altında hangi authority ile söylenebilir?</strong></li>
 <li><strong>Bu action mevcut user authority, risk ve reversibility altında çalıştırılabilir mi?</strong></li>
@@ -2230,6 +2427,1608 @@ wall_clock_ms: 188420
 rollback_count: 1
 wrong_deterministic_transitions: 1
 </code></pre>
+<h1 id="accp-30">ACCP 3.0<a class="anchor" href="#accp-30">¶</a></h1>
+<h2 id="cognitive-controllerharness-semantic-protocol">Cognitive Controller–Harness Semantic Protocol<a class="anchor" href="#cognitive-controllerharness-semantic-protocol">¶</a></h2>
+<p><strong>Protocol specification</strong><br/>
+<strong>Edition:</strong> 3.0 Draft 1<br/>
+<strong>Status:</strong> Draft International-Standard-Style Specification<br/>
+<strong>Language:</strong> English normative terminology with implementation examples<br/>
+<strong>Date:</strong> 2026-08-30</p>
+<hr/>
+<h2 id="foreword">Foreword<a class="anchor" href="#foreword">¶</a></h2>
+<p>ACCP defines a strict semantic protocol between a <strong>Cognitive Controller</strong> and an <strong>Authoritative Harness</strong>.</p>
+<p>This document specifies protocol roles, semantic types, message classes, authority boundaries, evidence semantics, verification semantics, state-transition rules, revision binding, conformance requirements and serialization requirements.</p>
+<p>ACCP is not a model API, tool API, memory system, verification engine, policy engine, scheduler or chain-of-thought representation.</p>
+<p>An implementation conforming to this document shall preserve the semantic distinctions defined herein regardless of its internal architecture, model provider, programming language, storage engine or execution substrate.</p>
+<hr/>
+<h1 id="1-scope">1 Scope<a class="anchor" href="#1-scope">¶</a></h1>
+<p>This document specifies the ACCP protocol for exchange of semantically typed commitments and authoritative runtime events between:</p>
+<p>a) a <strong>Cognitive Controller</strong>, which performs semantic interpretation, reasoning, planning, hypothesis formation and action selection; and</p>
+<p>b) an <strong>Authoritative Harness</strong>, which owns or mediates execution authority, runtime observations, capability enforcement, persistent state transitions and authoritative completion.</p>
+<p>This document defines:</p>
+<p>a) actor roles;</p>
+<p>b) the normative ACCP ontology;</p>
+<p>c) protocol message classes;</p>
+<p>d) protocol message envelopes;</p>
+<p>e) claim, observation, evidence and verification semantics;</p>
+<p>f) action proposal and execution semantics;</p>
+<p>g) authority and capability semantics;</p>
+<p>h) state-transition semantics;</p>
+<p>i) completion semantics;</p>
+<p>j) scope and revision binding;</p>
+<p>k) protocol error handling;</p>
+<p>l) protocol versioning and extensibility;</p>
+<p>m) serialization requirements;</p>
+<p>n) conformance requirements.</p>
+<p>This document does not specify:</p>
+<p>a) how a Cognitive Controller performs private reasoning;</p>
+<p>b) how an LLM provider exposes tool calling;</p>
+<p>c) how the Harness internally implements memory, scheduling, verification, persistence or policy;</p>
+<p>d) any particular programming language;</p>
+<p>e) any particular transport protocol;</p>
+<p>f) any mandatory persistent file format;</p>
+<p>g) any domain-specific task ontology.</p>
+<hr/>
+<h1 id="2-normative-references">2 Normative references<a class="anchor" href="#2-normative-references">¶</a></h1>
+<p>There are no mandatory external normative references in this edition.</p>
+<p>Implementations using JSON serialization should conform to a standards-compliant JSON implementation.</p>
+<hr/>
+<h1 id="3-terms-and-definitions">3 Terms and definitions<a class="anchor" href="#3-terms-and-definitions">¶</a></h1>
+<p>For the purposes of this document, the following terms and definitions apply.</p>
+<h2 id="31-accp">3.1 ACCP<a class="anchor" href="#31-accp">¶</a></h2>
+<p>semantic protocol defining the boundary between probabilistic cognition and authoritative runtime state</p>
+<p>ACCP defines legal semantic categories and transitions across this boundary.</p>
+<hr/>
+<h2 id="32-cognitive-controller">3.2 Cognitive Controller<a class="anchor" href="#32-cognitive-controller">¶</a></h2>
+<p>actor responsible for semantic interpretation and cognitive decision-making</p>
+<p>A Cognitive Controller may be implemented by:</p>
+<p>a) a large language model;</p>
+<p>b) a reasoning model;</p>
+<p>c) a compound model system;</p>
+<p>d) a latent reasoner;</p>
+<p>e) a multi-model controller;</p>
+<p>f) another semantic decision system.</p>
+<p>A Cognitive Controller is not, by virtue of being a controller, an authoritative source of execution, observation, verification or persistent-state truth.</p>
+<hr/>
+<h2 id="33-harness">3.3 Harness<a class="anchor" href="#33-harness">¶</a></h2>
+<p>actor owning or mediating authoritative runtime operations</p>
+<p>The Harness may contain or coordinate execution, state, verification, evidence, capability and policy subsystems.</p>
+<p>The Harness is the authoritative ACCP endpoint for decisions and receipts.</p>
+<hr/>
+<h2 id="34-commitment">3.4 commitment<a class="anchor" href="#34-commitment">¶</a></h2>
+<p>externally relevant semantic output of cognition capable of affecting subsequent runtime behaviour</p>
+<p>Examples include:</p>
+<p>a) an action proposal;</p>
+<p>b) a claim;</p>
+<p>c) a state-transition proposal;</p>
+<p>d) a verification proposal;</p>
+<p>e) a completion proposal.</p>
+<p>Private reasoning is not a commitment.</p>
+<hr/>
+<h2 id="35-observation">3.5 observation<a class="anchor" href="#35-observation">¶</a></h2>
+<p>record of an event, measurement or output originating from an environment or authoritative observation mechanism</p>
+<p>An observation is not an interpretation of that event.</p>
+<hr/>
+<h2 id="36-claim">3.6 claim<a class="anchor" href="#36-claim">¶</a></h2>
+<p>truth-evaluable proposition concerning a world, state, artifact, mechanism or task</p>
+<p>A claim is not evidence.</p>
+<hr/>
+<h2 id="37-evidence">3.7 evidence<a class="anchor" href="#37-evidence">¶</a></h2>
+<p>provenance-bound record that may support, contradict or otherwise bear upon a claim or decision</p>
+<p>The existence of an evidence reference does not imply evidence sufficiency.</p>
+<hr/>
+<h2 id="38-proposal">3.8 proposal<a class="anchor" href="#38-proposal">¶</a></h2>
+<p>request or semantic commitment emitted by the Cognitive Controller for consideration by the Harness</p>
+<p>A proposal does not itself alter authoritative runtime state.</p>
+<hr/>
+<h2 id="39-decision">3.9 decision<a class="anchor" href="#39-decision">¶</a></h2>
+<p>authoritative Harness response to a proposal or governed request</p>
+<hr/>
+<h2 id="310-receipt">3.10 receipt<a class="anchor" href="#310-receipt">¶</a></h2>
+<p>authoritative record that a runtime-relevant event occurred or that a bounded verification was performed</p>
+<hr/>
+<h2 id="311-verification">3.11 verification<a class="anchor" href="#311-verification">¶</a></h2>
+<p>evaluation of a defined predicate under a defined scope, revision and verification procedure</p>
+<p>Verification is not unrestricted truth.</p>
+<hr/>
+<h2 id="312-capability">3.12 capability<a class="anchor" href="#312-capability">¶</a></h2>
+<p>authorizable class of operation</p>
+<p>A capability is distinct from the concrete tool or provider used to implement it.</p>
+<p>Example:</p>
+<pre><code class="language-text">capability: vcs.status
+provider: git status --short --branch
+</code></pre>
+<hr/>
+<h2 id="313-authority">3.13 authority<a class="anchor" href="#313-authority">¶</a></h2>
+<p>permission for an actor or subsystem to cause a defined authoritative effect</p>
+<hr/>
+<h2 id="314-scope">3.14 scope<a class="anchor" href="#314-scope">¶</a></h2>
+<p>boundary within which a semantic object, capability, decision, evidence item or verification result applies</p>
+<hr/>
+<h2 id="315-revision">3.15 revision<a class="anchor" href="#315-revision">¶</a></h2>
+<p>identified version of mutable state to which a protocol object is bound</p>
+<hr/>
+<h2 id="316-completion">3.16 completion<a class="anchor" href="#316-completion">¶</a></h2>
+<p>authoritative Harness state indicating that applicable task completion requirements have been satisfied</p>
+<p>A controller statement that work is complete is not itself completion.</p>
+<hr/>
+<h1 id="4-normative-verbal-forms">4 Normative verbal forms<a class="anchor" href="#4-normative-verbal-forms">¶</a></h1>
+<p>Within this document:</p>
+<p><strong>shall</strong> indicates a requirement;</p>
+<p><strong>shall not</strong> indicates a prohibition;</p>
+<p><strong>should</strong> indicates a recommendation;</p>
+<p><strong>should not</strong> indicates a discouraged practice;</p>
+<p><strong>may</strong> indicates permission;</p>
+<p><strong>can</strong> indicates a possibility or capability.</p>
+<hr/>
+<h1 id="5-protocol-architecture">5 Protocol architecture<a class="anchor" href="#5-protocol-architecture">¶</a></h1>
+<h2 id="51-general-model">5.1 General model<a class="anchor" href="#51-general-model">¶</a></h2>
+<p>ACCP shall operate according to the following abstract architecture:</p>
+<pre><code class="language-text">             Cognitive Controller
+                      │
+                      │ ACCP
+                      │
+                      ▼
+             Authoritative Harness
+          ┌───────────┼────────────┐
+          │           │            │
+       execution     state     verification
+          │           │            │
+          └───────────┴────────────┘
+                      │
+                  environment
+</code></pre>
+<p>The implementation may place all components in one process.</p>
+<p>ACCP shall not require network communication.</p>
+<p>ACCP shall not require serialization between components when native typed values provide equivalent protocol semantics.</p>
+<hr/>
+<h2 id="52-boundary-ownership">5.2 Boundary ownership<a class="anchor" href="#52-boundary-ownership">¶</a></h2>
+<p>The Cognitive Controller shall own semantic cognition.</p>
+<p>The Harness shall own or mediate authoritative runtime effects.</p>
+<p>The Controller may determine:</p>
+<p>a) what information is relevant;</p>
+<p>b) what hypothesis to consider;</p>
+<p>c) what action would be useful;</p>
+<p>d) whether further investigation is needed;</p>
+<p>e) what patch or plan to propose;</p>
+<p>f) whether completion appears warranted.</p>
+<p>The Controller shall not unilaterally determine:</p>
+<p>a) that a proposed action was executed;</p>
+<p>b) that an environment observation occurred;</p>
+<p>c) that a verification predicate passed;</p>
+<p>d) that authority exists;</p>
+<p>e) that an authoritative state mutation occurred;</p>
+<p>f) that authoritative completion occurred.</p>
+<hr/>
+<h1 id="6-fundamental-semantic-invariants">6 Fundamental semantic invariants<a class="anchor" href="#6-fundamental-semantic-invariants">¶</a></h1>
+<h2 id="61-general">6.1 General<a class="anchor" href="#61-general">¶</a></h2>
+<p>Every conforming implementation shall preserve the invariants in 6.2 through 6.14.</p>
+<hr/>
+<h2 id="62-proposal-is-not-execution">6.2 Proposal is not execution<a class="anchor" href="#62-proposal-is-not-execution">¶</a></h2>
+<pre><code class="language-text">PROPOSAL ≠ EXECUTION
+</code></pre>
+<p>An <code>ACTION</code> proposal shall not be represented as an execution receipt without an intervening authoritative execution event.</p>
+<hr/>
+<h2 id="63-claim-is-not-observation">6.3 Claim is not observation<a class="anchor" href="#63-claim-is-not-observation">¶</a></h2>
+<pre><code class="language-text">CLAIM ≠ OBSERVATION
+</code></pre>
+<p>A proposition generated through controller inference shall not be classified as an observation solely because the Controller asserts it.</p>
+<hr/>
+<h2 id="64-observation-is-not-interpretation">6.4 Observation is not interpretation<a class="anchor" href="#64-observation-is-not-interpretation">¶</a></h2>
+<pre><code class="language-text">OBSERVATION ≠ INTERPRETATION
+</code></pre>
+<p>A Harness shall preserve the distinction between environmental output and semantic conclusions drawn from that output.</p>
+<hr/>
+<h2 id="65-evidence-is-not-verification">6.5 Evidence is not verification<a class="anchor" href="#65-evidence-is-not-verification">¶</a></h2>
+<pre><code class="language-text">EVIDENCE ≠ VERIFICATION
+</code></pre>
+<p>Evidence may support a claim without satisfying a defined verification predicate.</p>
+<hr/>
+<h2 id="66-evidence-reference-is-not-evidence-sufficiency">6.6 Evidence reference is not evidence sufficiency<a class="anchor" href="#66-evidence-reference-is-not-evidence-sufficiency">¶</a></h2>
+<pre><code class="language-text">EVIDENCE_REFERENCE ≠ SUFFICIENCY
+</code></pre>
+<p>The presence of one or more evidence references shall not automatically authorize promotion of a claim.</p>
+<hr/>
+<h2 id="67-execution-success-is-not-task-success">6.7 Execution success is not task success<a class="anchor" href="#67-execution-success-is-not-task-success">¶</a></h2>
+<pre><code class="language-text">EXECUTION_SUCCESS ≠ TASK_SUCCESS
+</code></pre>
+<p>Successful execution of a tool, command, patch or mutation shall not automatically imply correctness of the intended semantic effect.</p>
+<hr/>
+<h2 id="68-patch-application-is-not-fix-verification">6.8 Patch application is not fix verification<a class="anchor" href="#68-patch-application-is-not-fix-verification">¶</a></h2>
+<pre><code class="language-text">PATCH_APPLIED ≠ BUG_FIXED
+</code></pre>
+<hr/>
+<h2 id="69-verification-is-predicate-scoped">6.9 Verification is predicate-scoped<a class="anchor" href="#69-verification-is-predicate-scoped">¶</a></h2>
+<pre><code class="language-text">VERIFY(P1) ≠ VERIFY(P2)
+</code></pre>
+<p>A verification result shall authorize only claims covered by its predicate, scope and revision.</p>
+<hr/>
+<h2 id="610-completion-proposal-is-not-completion">6.10 Completion proposal is not completion<a class="anchor" href="#610-completion-proposal-is-not-completion">¶</a></h2>
+<pre><code class="language-text">COMPLETION_PROPOSAL ≠ COMPLETE
+</code></pre>
+<p>A Controller shall not self-authorize authoritative task completion.</p>
+<hr/>
+<h2 id="611-messages-do-not-mint-authority">6.11 Messages do not mint authority<a class="anchor" href="#611-messages-do-not-mint-authority">¶</a></h2>
+<p>No message emitted by a Cognitive Controller shall create authority solely by asserting that such authority exists.</p>
+<hr/>
+<h2 id="612-retrieval-is-not-new-evidence">6.12 Retrieval is not new evidence<a class="anchor" href="#612-retrieval-is-not-new-evidence">¶</a></h2>
+<p>Previously stored information retrieved into a cognitive view shall not become new evidence merely by being retrieved.</p>
+<hr/>
+<h2 id="613-decision-validity-is-bounded">6.13 Decision validity is bounded<a class="anchor" href="#613-decision-validity-is-bounded">¶</a></h2>
+<p>A decision shall be valid only for the request, subject, scope and applicable revision to which it is bound.</p>
+<hr/>
+<h2 id="614-private-cognition-is-outside-the-protocol">6.14 Private cognition is outside the protocol<a class="anchor" href="#614-private-cognition-is-outside-the-protocol">¶</a></h2>
+<p>ACCP shall not require disclosure of chain-of-thought, hidden reasoning traces, latent reasoning states or private scratchpads.</p>
+<p>ACCP transports <strong>cognitive commitments</strong>, not private cognition.</p>
+<hr/>
+<h1 id="7-actor-model">7 Actor model<a class="anchor" href="#7-actor-model">¶</a></h1>
+<h2 id="71-required-roles">7.1 Required roles<a class="anchor" href="#71-required-roles">¶</a></h2>
+<p>ACCP defines two required protocol roles:</p>
+<pre><code class="language-text">COGNITIVE_CONTROLLER
+HARNESS
+</code></pre>
+<hr/>
+<h2 id="72-cognitive-controller-permissions">7.2 Cognitive Controller permissions<a class="anchor" href="#72-cognitive-controller-permissions">¶</a></h2>
+<p>A Cognitive Controller may emit:</p>
+<p>a) queries;</p>
+<p>b) claims;</p>
+<p>c) action proposals;</p>
+<p>d) workspace proposals;</p>
+<p>e) state-transition proposals;</p>
+<p>f) verification proposals;</p>
+<p>g) completion proposals.</p>
+<p>A Cognitive Controller shall not emit authoritative:</p>
+<p>a) execution receipts;</p>
+<p>b) environment observations pretending to be directly measured;</p>
+<p>c) verification receipts;</p>
+<p>d) authoritative decisions;</p>
+<p>e) authoritative state-transition receipts.</p>
+<hr/>
+<h2 id="73-harness-permissions">7.3 Harness permissions<a class="anchor" href="#73-harness-permissions">¶</a></h2>
+<p>A Harness may emit:</p>
+<p>a) views;</p>
+<p>b) decisions;</p>
+<p>c) execution receipts;</p>
+<p>d) observation receipts;</p>
+<p>e) evidence receipts;</p>
+<p>f) verification receipts;</p>
+<p>g) state-transition receipts;</p>
+<p>h) lifecycle and validity signals.</p>
+<hr/>
+<h2 id="74-external-actors">7.4 External actors<a class="anchor" href="#74-external-actors">¶</a></h2>
+<p>Human users, tools, runtimes, verifiers and external services may be recorded as the <strong>origin</strong> of authoritative information.</p>
+<p>Unless an extension profile specifies otherwise, these actors shall communicate with the Cognitive Controller through the Harness.</p>
+<hr/>
+<h1 id="8-protocol-message-model">8 Protocol message model<a class="anchor" href="#8-protocol-message-model">¶</a></h1>
+<h2 id="81-message-families">8.1 Message families<a class="anchor" href="#81-message-families">¶</a></h2>
+<p>ACCP defines the following top-level message families:</p>
+<pre><code class="language-text">VIEW
+QUERY
+PROPOSAL
+DECISION
+RECEIPT
+SIGNAL
+</code></pre>
+<p>No other top-level family shall be considered part of ACCP Core 3.0.</p>
+<p>Extensions may define additional <code>kind</code> values but shall not redefine the semantics of the six core families.</p>
+<hr/>
+<h2 id="82-directionality">8.2 Directionality<a class="anchor" href="#82-directionality">¶</a></h2>
+<table>
+<thead>
+<tr>
+<th>Family</th>
+<th>Required direction</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>VIEW</td>
+<td>Harness → Cognitive Controller</td>
+</tr>
+<tr>
+<td>QUERY</td>
+<td>Cognitive Controller → Harness</td>
+</tr>
+<tr>
+<td>PROPOSAL</td>
+<td>Cognitive Controller → Harness</td>
+</tr>
+<tr>
+<td>DECISION</td>
+<td>Harness → Cognitive Controller</td>
+</tr>
+<tr>
+<td>RECEIPT</td>
+<td>Harness → Cognitive Controller</td>
+</tr>
+<tr>
+<td>SIGNAL</td>
+<td>Harness → Cognitive Controller</td>
+</tr>
+</tbody>
+</table>
+<hr/>
+<h1 id="9-message-envelope">9 Message envelope<a class="anchor" href="#9-message-envelope">¶</a></h1>
+<h2 id="91-required-fields">9.1 Required fields<a class="anchor" href="#91-required-fields">¶</a></h2>
+<p>Every serialized ACCP message shall contain:</p>
+<pre><code class="language-yaml">accp_version:
+message_id:
+sender:
+family:
+kind:
+payload:
+</code></pre>
+<hr/>
+<h2 id="92-recommended-fields">9.2 Recommended fields<a class="anchor" href="#92-recommended-fields">¶</a></h2>
+<p>Messages associated with mutable state should additionally contain:</p>
+<pre><code class="language-yaml">correlation_id:
+scope:
+revision:
+</code></pre>
+<hr/>
+<h2 id="93-example">9.3 Example<a class="anchor" href="#93-example">¶</a></h2>
+<pre><code class="language-yaml">accp_version: "3.0"
+message_id: "msg-1042"
+
+sender:
+  role: "COGNITIVE_CONTROLLER"
+
+family: "PROPOSAL"
+kind: "ACTION"
+
+correlation_id: "turn-882"
+
+scope:
+  project: "repo-17"
+
+revision:
+  project: "git:8f2c91a"
+
+payload:
+  ...
+</code></pre>
+<hr/>
+<h2 id="94-message-identity">9.4 Message identity<a class="anchor" href="#94-message-identity">¶</a></h2>
+<p><code>message_id</code> shall uniquely identify a protocol message within the issuing Harness domain.</p>
+<p>A receiver shall not treat repeated receipt of the same <code>message_id</code> as a new semantic commitment unless replay semantics explicitly permit this.</p>
+<hr/>
+<h1 id="10-view-messages">10 VIEW messages<a class="anchor" href="#10-view-messages">¶</a></h1>
+<h2 id="101-purpose">10.1 Purpose<a class="anchor" href="#101-purpose">¶</a></h2>
+<p>A <code>VIEW</code> message communicates a bounded Harness-generated projection of authoritative or provisional system state to the Cognitive Controller.</p>
+<hr/>
+<h2 id="102-core-kinds">10.2 Core kinds<a class="anchor" href="#102-core-kinds">¶</a></h2>
+<p>The following kinds are defined:</p>
+<pre><code class="language-text">COGNITIVE
+STATE
+CAPABILITY
+CONSTRAINT
+</code></pre>
+<hr/>
+<h2 id="103-cognitive-view">10.3 COGNITIVE VIEW<a class="anchor" href="#103-cognitive-view">¶</a></h2>
+<p>A <code>COGNITIVE</code> view may contain:</p>
+<p>a) active goal information;</p>
+<p>b) selected persistent claims;</p>
+<p>c) selected workspace state;</p>
+<p>d) evidence references;</p>
+<p>e) known unknowns;</p>
+<p>f) contradictions;</p>
+<p>g) capability information;</p>
+<p>h) applicable constraints.</p>
+<p>A Cognitive View shall not imply that omitted information does not exist.</p>
+<hr/>
+<h2 id="104-authority-of-views">10.4 Authority of views<a class="anchor" href="#104-authority-of-views">¶</a></h2>
+<p>A view is a projection.</p>
+<p>A view shall not, solely by inclusion of a claim, transform that claim into verified knowledge.</p>
+<hr/>
+<h1 id="11-query-messages">11 QUERY messages<a class="anchor" href="#11-query-messages">¶</a></h1>
+<h2 id="111-core-kinds">11.1 Core kinds<a class="anchor" href="#111-core-kinds">¶</a></h2>
+<pre><code class="language-text">STATE
+EVIDENCE
+ARTIFACT
+CAPABILITY
+</code></pre>
+<hr/>
+<h2 id="112-semantics">11.2 Semantics<a class="anchor" href="#112-semantics">¶</a></h2>
+<p>A <code>QUERY</code> expresses a Controller request for information.</p>
+<p>A query shall not imply that the requested information exists.</p>
+<hr/>
+<h2 id="113-artifact-query-example">11.3 ARTIFACT query example<a class="anchor" href="#113-artifact-query-example">¶</a></h2>
+<pre><code class="language-yaml">family: "QUERY"
+kind: "ARTIFACT"
+
+payload:
+  selector:
+    type: "runtime_log"
+    filter:
+      endpoint: "/auth/refresh"
+      status: 500
+
+  purpose:
+    unresolved_question: "determine failure condition"
+</code></pre>
+<hr/>
+<h1 id="12-proposal-messages">12 PROPOSAL messages<a class="anchor" href="#12-proposal-messages">¶</a></h1>
+<h2 id="121-core-kinds">12.1 Core kinds<a class="anchor" href="#121-core-kinds">¶</a></h2>
+<pre><code class="language-text">CLAIM
+ACTION
+WORKSPACE_DELTA
+STATE_TRANSITION
+VERIFICATION
+COMPLETION
+</code></pre>
+<hr/>
+<h2 id="122-general-requirement">12.2 General requirement<a class="anchor" href="#122-general-requirement">¶</a></h2>
+<p>A proposal shall describe a Controller commitment without claiming that the proposed authoritative effect has occurred.</p>
+<hr/>
+<h1 id="13-claim-semantics">13 Claim semantics<a class="anchor" href="#13-claim-semantics">¶</a></h1>
+<h2 id="131-claim-record">13.1 Claim record<a class="anchor" href="#131-claim-record">¶</a></h2>
+<p>A claim shall be representable using:</p>
+<pre><code class="language-yaml">claim_id:
+proposition:
+epistemic_class:
+scope:
+support:
+contradictions:
+confidence:
+</code></pre>
+<p>Only <code>claim_id</code>, <code>proposition</code> and <code>epistemic_class</code> are required by ACCP Core.</p>
+<hr/>
+<h2 id="132-epistemic-classes">13.2 Epistemic classes<a class="anchor" href="#132-epistemic-classes">¶</a></h2>
+<p>ACCP defines:</p>
+<pre><code class="language-text">ASSUMPTION
+HYPOTHESIS
+INFERENCE
+SUPPORTED
+VERIFIED
+REJECTED
+CONTRADICTED
+UNKNOWN
+</code></pre>
+<hr/>
+<h2 id="133-assumption">13.3 ASSUMPTION<a class="anchor" href="#133-assumption">¶</a></h2>
+<p>A proposition provisionally treated as usable without sufficient direct evidence.</p>
+<hr/>
+<h2 id="134-hypothesis">13.4 HYPOTHESIS<a class="anchor" href="#134-hypothesis">¶</a></h2>
+<p>A proposition proposed as a possible explanation or model.</p>
+<hr/>
+<h2 id="135-inference">13.5 INFERENCE<a class="anchor" href="#135-inference">¶</a></h2>
+<p>A proposition derived from one or more observations, claims or assumptions.</p>
+<hr/>
+<h2 id="136-supported">13.6 SUPPORTED<a class="anchor" href="#136-supported">¶</a></h2>
+<p>A proposition for which the Harness has admitted relevant supporting evidence but which has not satisfied the requirements for <code>VERIFIED</code>.</p>
+<hr/>
+<h2 id="137-verified">13.7 VERIFIED<a class="anchor" href="#137-verified">¶</a></h2>
+<p>A proposition whose defined verification requirements have been satisfied for its declared scope and revision.</p>
+<p>A Controller assertion shall not by itself create <code>VERIFIED</code> status.</p>
+<hr/>
+<h2 id="138-rejected">13.8 REJECTED<a class="anchor" href="#138-rejected">¶</a></h2>
+<p>A proposition no longer accepted as an active candidate under the applicable state.</p>
+<hr/>
+<h2 id="139-contradicted">13.9 CONTRADICTED<a class="anchor" href="#139-contradicted">¶</a></h2>
+<p>A proposition for which unresolved conflicting evidence or authoritative state exists.</p>
+<hr/>
+<h2 id="1310-unknown">13.10 UNKNOWN<a class="anchor" href="#1310-unknown">¶</a></h2>
+<p>An explicitly represented unresolved proposition or information gap.</p>
+<hr/>
+<h1 id="14-claim-transition-rules">14 Claim transition rules<a class="anchor" href="#14-claim-transition-rules">¶</a></h1>
+<h2 id="141-general">14.1 General<a class="anchor" href="#141-general">¶</a></h2>
+<p>A Controller may propose epistemic transitions.</p>
+<p>The Harness shall determine whether the requested transition is admissible.</p>
+<hr/>
+<h2 id="142-prohibited-direct-minting">14.2 Prohibited direct minting<a class="anchor" href="#142-prohibited-direct-minting">¶</a></h2>
+<p>The following shall not be accepted solely from Controller assertion:</p>
+<pre><code class="language-text">HYPOTHESIS → VERIFIED
+INFERENCE  → VERIFIED
+ASSUMPTION → VERIFIED
+</code></pre>
+<p>A conforming Harness shall require applicable verification authority.</p>
+<hr/>
+<h2 id="143-example">14.3 Example<a class="anchor" href="#143-example">¶</a></h2>
+<pre><code class="language-yaml">family: "PROPOSAL"
+kind: "STATE_TRANSITION"
+
+payload:
+  subject:
+    claim_id: "claim-41"
+
+  transition:
+    from: "HYPOTHESIS"
+    to: "SUPPORTED"
+
+  evidence_refs:
+    - "ev-32"
+    - "ev-40"
+</code></pre>
+<hr/>
+<h1 id="15-observation-semantics">15 Observation semantics<a class="anchor" href="#15-observation-semantics">¶</a></h1>
+<h2 id="151-observation-production">15.1 Observation production<a class="anchor" href="#151-observation-production">¶</a></h2>
+<p>Authoritative observations shall originate from the Harness or a source mediated and identified by the Harness.</p>
+<hr/>
+<h2 id="152-observation-record">15.2 Observation record<a class="anchor" href="#152-observation-record">¶</a></h2>
+<p>An observation should contain:</p>
+<pre><code class="language-yaml">observation_id:
+source:
+value:
+scope:
+revision:
+captured_at:
+raw_artifact_ref:
+</code></pre>
+<hr/>
+<h2 id="153-example">15.3 Example<a class="anchor" href="#153-example">¶</a></h2>
+<pre><code class="language-yaml">observation_id: "obs-77"
+
+source:
+  type: "process"
+  capability: "vcs.status"
+
+value:
+  exit_code: 0
+  branch: "main"
+  modified:
+    - "src/runtime.rs"
+
+scope:
+  project: "repo-17"
+
+revision:
+  project: "git:8f2c91a"
+</code></pre>
+<hr/>
+<h2 id="154-controller-originated-statements">15.4 Controller-originated statements<a class="anchor" href="#154-controller-originated-statements">¶</a></h2>
+<p>A Controller statement such as:</p>
+<pre><code class="language-text">"The repository appears dirty."
+</code></pre>
+<p>shall be represented as a claim or interpretation unless grounded by an authoritative observation receipt.</p>
+<hr/>
+<h1 id="16-evidence-semantics">16 Evidence semantics<a class="anchor" href="#16-evidence-semantics">¶</a></h1>
+<h2 id="161-evidence-record">16.1 Evidence record<a class="anchor" href="#161-evidence-record">¶</a></h2>
+<p>Evidence shall be provenance-bound.</p>
+<p>An evidence record should contain:</p>
+<pre><code class="language-yaml">evidence_id:
+source:
+scope:
+revision:
+content_ref:
+supports:
+contradicts:
+limitations:
+</code></pre>
+<hr/>
+<h2 id="162-evidence-references">16.2 Evidence references<a class="anchor" href="#162-evidence-references">¶</a></h2>
+<p>An <code>evidence_ref</code> identifies evidence.</p>
+<p>It shall not imply:</p>
+<p>a) relevance;</p>
+<p>b) sufficiency;</p>
+<p>c) freshness;</p>
+<p>d) independence;</p>
+<p>e) verification.</p>
+<hr/>
+<h2 id="163-scope">16.3 Scope<a class="anchor" href="#163-scope">¶</a></h2>
+<p>Evidence shall not be automatically generalized beyond its declared scope.</p>
+<hr/>
+<h2 id="164-revision">16.4 Revision<a class="anchor" href="#164-revision">¶</a></h2>
+<p>Evidence derived from mutable artifacts should identify the applicable revision.</p>
+<hr/>
+<h1 id="17-action-proposals">17 ACTION proposals<a class="anchor" href="#17-action-proposals">¶</a></h1>
+<h2 id="171-action-record">17.1 Action record<a class="anchor" href="#171-action-record">¶</a></h2>
+<p>An <code>ACTION</code> proposal shall identify the requested capability.</p>
+<p>It should identify:</p>
+<p>a) target;</p>
+<p>b) scope;</p>
+<p>c) parameters;</p>
+<p>d) expected side effects;</p>
+<p>e) relevant claims or evidence;</p>
+<p>f) requested authority if applicable.</p>
+<hr/>
+<h2 id="172-example">17.2 Example<a class="anchor" href="#172-example">¶</a></h2>
+<pre><code class="language-yaml">family: "PROPOSAL"
+kind: "ACTION"
+
+payload:
+  action_id: "action-19"
+
+  capability: "vcs.status"
+
+  intent: "inspect_current_worktree"
+
+  scope:
+    repository: "current"
+
+  expected_effect:
+    mutation: false
+</code></pre>
+<hr/>
+<h2 id="173-capability-versus-provider">17.3 Capability versus provider<a class="anchor" href="#173-capability-versus-provider">¶</a></h2>
+<p>The Controller should request semantic capability rather than a concrete provider when an appropriate capability abstraction exists.</p>
+<p>Example:</p>
+<pre><code class="language-text">vcs.status
+</code></pre>
+<p>is preferred over:</p>
+<pre><code class="language-text">execute exactly "git status --short --branch"
+</code></pre>
+<p>where the Harness can safely resolve the provider.</p>
+<p>This recommendation shall not prohibit raw execution capabilities when required.</p>
+<hr/>
+<h1 id="18-action-authorization">18 Action authorization<a class="anchor" href="#18-action-authorization">¶</a></h1>
+<h2 id="181-general">18.1 General<a class="anchor" href="#181-general">¶</a></h2>
+<p>Every authoritative action shall pass Harness-side authorization.</p>
+<hr/>
+<h2 id="182-standing-authorization">18.2 Standing authorization<a class="anchor" href="#182-standing-authorization">¶</a></h2>
+<p>For pre-authorized low-risk operations, a Harness may omit transmission of an explicit <code>DECISION</code> message.</p>
+<p>The Harness shall still perform an internal authorization check.</p>
+<p>The resulting execution receipt shall identify sufficient authorization context to establish that the action was not executed solely because the Controller requested it.</p>
+<hr/>
+<h2 id="183-explicit-decision">18.3 Explicit decision<a class="anchor" href="#183-explicit-decision">¶</a></h2>
+<p>Material, constrained or non-pre-authorized actions should produce an explicit <code>DECISION</code>.</p>
+<hr/>
+<h1 id="19-decision-messages">19 DECISION messages<a class="anchor" href="#19-decision-messages">¶</a></h1>
+<h2 id="191-verdicts">19.1 Verdicts<a class="anchor" href="#191-verdicts">¶</a></h2>
+<p>ACCP defines the following core verdicts:</p>
+<pre><code class="language-text">ACCEPTED
+ACCEPTED_WITH_CONSTRAINTS
+REJECTED
+REQUIRE_EVIDENCE
+REQUIRE_VERIFICATION
+REQUIRE_AUTHORITY
+DEFERRED
+</code></pre>
+<hr/>
+<h2 id="192-decision-binding">19.2 Decision binding<a class="anchor" href="#192-decision-binding">¶</a></h2>
+<p>A decision shall identify the proposal or request to which it applies.</p>
+<p>It should identify:</p>
+<pre><code class="language-yaml">subject_ref:
+scope:
+revision:
+verdict:
+constraints:
+requirements:
+reason_codes:
+</code></pre>
+<hr/>
+<h2 id="193-example">19.3 Example<a class="anchor" href="#193-example">¶</a></h2>
+<pre><code class="language-yaml">family: "DECISION"
+kind: "ACTION"
+
+payload:
+  subject_ref: "action-19"
+  verdict: "ACCEPTED"
+
+  authorization:
+    capability: "vcs.status"
+    scope: "repository:current"
+
+  reason_codes:
+    - "READ_ONLY_PREAUTHORIZED"
+</code></pre>
+<hr/>
+<h1 id="20-receipt-messages">20 RECEIPT messages<a class="anchor" href="#20-receipt-messages">¶</a></h1>
+<h2 id="201-core-kinds">20.1 Core kinds<a class="anchor" href="#201-core-kinds">¶</a></h2>
+<pre><code class="language-text">EXECUTION
+OBSERVATION
+EVIDENCE
+VERIFICATION
+STATE_TRANSITION
+</code></pre>
+<hr/>
+<h2 id="202-authority">20.2 Authority<a class="anchor" href="#202-authority">¶</a></h2>
+<p>A Cognitive Controller shall not originate an authoritative <code>RECEIPT</code>.</p>
+<hr/>
+<h2 id="203-execution-receipt">20.3 EXECUTION receipt<a class="anchor" href="#203-execution-receipt">¶</a></h2>
+<p>An execution receipt shall identify:</p>
+<p>a) the executed action;</p>
+<p>b) execution result;</p>
+<p>c) applicable scope;</p>
+<p>d) applicable revision;</p>
+<p>e) actual effects when known.</p>
+<hr/>
+<h2 id="204-example">20.4 Example<a class="anchor" href="#204-example">¶</a></h2>
+<pre><code class="language-yaml">family: "RECEIPT"
+kind: "EXECUTION"
+
+payload:
+  action_ref: "action-19"
+
+  result:
+    status: "SUCCESS"
+    exit_code: 0
+
+  observations:
+    branch: "main"
+    ahead: 2
+    behind: 0
+
+    modified:
+      - "src/runtime.rs"
+      - "Cargo.toml"
+
+    untracked:
+      - "notes/protocol.md"
+
+    staged: []
+</code></pre>
+<hr/>
+<h1 id="21-verification-semantics">21 Verification semantics<a class="anchor" href="#21-verification-semantics">¶</a></h1>
+<h2 id="211-verification-proposal">21.1 Verification proposal<a class="anchor" href="#211-verification-proposal">¶</a></h2>
+<p>A Controller may request evaluation of one or more predicates.</p>
+<p>Example:</p>
+<pre><code class="language-yaml">family: "PROPOSAL"
+kind: "VERIFICATION"
+
+payload:
+  predicates:
+    - id: "pred-1"
+      statement: "concurrent refresh failure is absent"
+
+    - id: "pred-2"
+      statement: "auth regression suite passes"
+</code></pre>
+<hr/>
+<h2 id="212-verification-receipt">21.2 Verification receipt<a class="anchor" href="#212-verification-receipt">¶</a></h2>
+<p>A Harness shall issue or mediate authoritative verification results.</p>
+<p>A verification receipt shall identify:</p>
+<p>a) predicate;</p>
+<p>b) result;</p>
+<p>c) scope;</p>
+<p>d) revision;</p>
+<p>e) verifier or procedure;</p>
+<p>f) supporting evidence or artifact where applicable.</p>
+<hr/>
+<h2 id="213-verification-results">21.3 Verification results<a class="anchor" href="#213-verification-results">¶</a></h2>
+<p>Core results are:</p>
+<pre><code class="language-text">PASS
+FAIL
+INDETERMINATE
+NOT_RUN
+</code></pre>
+<hr/>
+<h2 id="214-no-scope-inflation">21.4 No scope inflation<a class="anchor" href="#214-no-scope-inflation">¶</a></h2>
+<p>Given:</p>
+<pre><code class="language-text">predicate: auth.refresh targeted test passes
+</code></pre>
+<p>a Harness shall not automatically derive:</p>
+<pre><code class="language-text">entire repository is regression-free
+</code></pre>
+<p>unless a defined verification relationship establishes such coverage.</p>
+<hr/>
+<h1 id="22-state-transition-semantics">22 State-transition semantics<a class="anchor" href="#22-state-transition-semantics">¶</a></h1>
+<h2 id="221-general">22.1 General<a class="anchor" href="#221-general">¶</a></h2>
+<p>A Controller may propose authoritative state transitions.</p>
+<p>The proposal shall not itself mutate authoritative state.</p>
+<hr/>
+<h2 id="222-required-binding">22.2 Required binding<a class="anchor" href="#222-required-binding">¶</a></h2>
+<p>A state-transition proposal affecting mutable persistent state shall identify its expected base revision.</p>
+<hr/>
+<h2 id="223-stale-base-protection">22.3 Stale-base protection<a class="anchor" href="#223-stale-base-protection">¶</a></h2>
+<p>If the applicable authoritative state revision differs from the required base revision, the Harness shall:</p>
+<p>a) reject the transition;</p>
+<p>b) defer the transition; or</p>
+<p>c) require explicit re-evaluation.</p>
+<p>It shall not silently apply the transition as though the original revision still existed.</p>
+<hr/>
+<h2 id="224-receipt">22.4 Receipt<a class="anchor" href="#224-receipt">¶</a></h2>
+<p>Successful authoritative state mutation shall produce a <code>STATE_TRANSITION</code> receipt or equivalent auditable event.</p>
+<hr/>
+<h1 id="23-completion-semantics">23 Completion semantics<a class="anchor" href="#23-completion-semantics">¶</a></h1>
+<h2 id="231-completion-proposal">23.1 Completion proposal<a class="anchor" href="#231-completion-proposal">¶</a></h2>
+<p>A Controller may emit:</p>
+<pre><code class="language-yaml">family: "PROPOSAL"
+kind: "COMPLETION"
+</code></pre>
+<p>when it determines that the task appears complete.</p>
+<hr/>
+<h2 id="232-completion-authority">23.2 Completion authority<a class="anchor" href="#232-completion-authority">¶</a></h2>
+<p>The Controller shall not mark the authoritative Harness task state as complete.</p>
+<hr/>
+<h2 id="233-acceptance">23.3 Acceptance<a class="anchor" href="#233-acceptance">¶</a></h2>
+<p>The Harness may accept completion only when applicable completion requirements are satisfied.</p>
+<p>Such requirements may include:</p>
+<p>a) required verification predicates;</p>
+<p>b) open obligations;</p>
+<p>c) authority requirements;</p>
+<p>d) unresolved blockers;</p>
+<p>e) required user decisions;</p>
+<p>f) revision consistency.</p>
+<hr/>
+<h2 id="234-rejection-example">23.4 Rejection example<a class="anchor" href="#234-rejection-example">¶</a></h2>
+<pre><code class="language-yaml">family: "DECISION"
+kind: "COMPLETION"
+
+payload:
+  verdict: "REJECTED"
+
+  requirements:
+    - code: "FIX_NOT_VERIFIED"
+    - code: "REGRESSION_VERIFICATION_MISSING"
+</code></pre>
+<hr/>
+<h2 id="235-accepted-completion">23.5 Accepted completion<a class="anchor" href="#235-accepted-completion">¶</a></h2>
+<pre><code class="language-yaml">family: "DECISION"
+kind: "COMPLETION"
+
+payload:
+  verdict: "ACCEPTED"
+
+  completion:
+    status: "COMPLETE"
+
+  bound_to:
+    project_revision: "workspace:rev-102"
+</code></pre>
+<hr/>
+<h1 id="24-capability-semantics">24 Capability semantics<a class="anchor" href="#24-capability-semantics">¶</a></h1>
+<h2 id="241-capability-representation">24.1 Capability representation<a class="anchor" href="#241-capability-representation">¶</a></h2>
+<p>Capabilities should be represented independently from provider implementations.</p>
+<p>Example:</p>
+<pre><code class="language-yaml">capability:
+  id: "test.run"
+
+provider:
+  implementation: "cargo test"
+</code></pre>
+<hr/>
+<h2 id="242-capability-exposure">24.2 Capability exposure<a class="anchor" href="#242-capability-exposure">¶</a></h2>
+<p>The Harness shall determine which capabilities are available to the Controller.</p>
+<p>A Controller shall not gain a capability merely by requesting it.</p>
+<hr/>
+<h2 id="243-least-capability">24.3 Least capability<a class="anchor" href="#243-least-capability">¶</a></h2>
+<p>A Harness should expose only capabilities relevant to the current task and authority context.</p>
+<hr/>
+<h1 id="25-authority-semantics">25 Authority semantics<a class="anchor" href="#25-authority-semantics">¶</a></h1>
+<h2 id="251-general">25.1 General<a class="anchor" href="#251-general">¶</a></h2>
+<p>Authority shall be Harness-owned or Harness-mediated.</p>
+<hr/>
+<h2 id="252-authority-dimensions">25.2 Authority dimensions<a class="anchor" href="#252-authority-dimensions">¶</a></h2>
+<p>Authority may be constrained by:</p>
+<p>a) actor;</p>
+<p>b) capability;</p>
+<p>c) target;</p>
+<p>d) scope;</p>
+<p>e) revision;</p>
+<p>f) time;</p>
+<p>g) risk class;</p>
+<p>h) human approval;</p>
+<p>i) environment.</p>
+<hr/>
+<h2 id="253-authority-requests">25.3 Authority requests<a class="anchor" href="#253-authority-requests">¶</a></h2>
+<p>A Controller may request additional authority.</p>
+<p>Example:</p>
+<pre><code class="language-yaml">family: "PROPOSAL"
+kind: "ACTION"
+
+payload:
+  capability: "production.deploy"
+
+  requested_authority:
+    environment: "production"
+</code></pre>
+<p>The requested authority field shall not grant that authority.</p>
+<hr/>
+<h1 id="26-scope-semantics">26 Scope semantics<a class="anchor" href="#26-scope-semantics">¶</a></h1>
+<h2 id="261-general">26.1 General<a class="anchor" href="#261-general">¶</a></h2>
+<p>Claims, evidence, decisions, verification results and authority shall be interpreted only within their declared scope.</p>
+<hr/>
+<h2 id="262-scope-widening">26.2 Scope widening<a class="anchor" href="#262-scope-widening">¶</a></h2>
+<p>Scope widening shall be explicit.</p>
+<p>An implementation shall not silently transform:</p>
+<pre><code class="language-text">symbol
+→ module
+→ repository
+→ deployment
+</code></pre>
+<p>authority or epistemic validity.</p>
+<hr/>
+<h1 id="27-revision-semantics">27 Revision semantics<a class="anchor" href="#27-revision-semantics">¶</a></h1>
+<h2 id="271-general">27.1 General<a class="anchor" href="#271-general">¶</a></h2>
+<p>Mutable-world assertions shall be bindable to revisions.</p>
+<hr/>
+<h2 id="272-revision-types">27.2 Revision types<a class="anchor" href="#272-revision-types">¶</a></h2>
+<p>An implementation may define multiple revision domains, for example:</p>
+<pre><code class="language-yaml">revision:
+  project: "git:8f2c91a"
+  state: 412
+  workspace: 18
+  environment: "staging:deploy-992"
+</code></pre>
+<hr/>
+<h2 id="273-staleness">27.3 Staleness<a class="anchor" href="#273-staleness">¶</a></h2>
+<p>A Harness shall treat revision mismatch as semantically significant where the validity of a claim, evidence item, decision or authorization depends upon the modified state.</p>
+<hr/>
+<h2 id="274-stale-signal">27.4 Stale signal<a class="anchor" href="#274-stale-signal">¶</a></h2>
+<p>The Harness may emit:</p>
+<pre><code class="language-yaml">family: "SIGNAL"
+kind: "STALE_STATE"
+</code></pre>
+<p>when previously transmitted information has become invalid or requires re-evaluation.</p>
+<hr/>
+<h1 id="28-signal-messages">28 SIGNAL messages<a class="anchor" href="#28-signal-messages">¶</a></h1>
+<h2 id="281-core-kinds">28.1 Core kinds<a class="anchor" href="#281-core-kinds">¶</a></h2>
+<pre><code class="language-text">STALE_STATE
+CONTRADICTION
+REPLAN_REQUIRED
+BUDGET
+CANCELLATION
+LIFECYCLE
+</code></pre>
+<hr/>
+<h2 id="282-signal-semantics">28.2 SIGNAL semantics<a class="anchor" href="#282-signal-semantics">¶</a></h2>
+<p>A signal informs the Controller of a condition requiring awareness or response.</p>
+<p>A signal is not itself evidence unless the signal contains or references an authoritative evidence record.</p>
+<hr/>
+<h1 id="29-protocol-processing-rules">29 Protocol processing rules<a class="anchor" href="#29-protocol-processing-rules">¶</a></h1>
+<h2 id="291-controller-output-processing">29.1 Controller output processing<a class="anchor" href="#291-controller-output-processing">¶</a></h2>
+<p>A Harness receiving Controller output shall:</p>
+<ol>
+<li>decode the provider-native representation;</li>
+<li>classify it according to ACCP semantics;</li>
+<li>validate the protocol object;</li>
+<li>reject illegal semantic escalation;</li>
+<li>evaluate applicable authority and policy;</li>
+<li>execute or route accepted operations;</li>
+<li>capture resulting authoritative events;</li>
+<li>issue appropriate decisions, receipts or signals.</li>
+</ol>
+<hr/>
+<h2 id="292-adapter-rule">29.2 Adapter rule<a class="anchor" href="#292-adapter-rule">¶</a></h2>
+<p>Provider adapters shall translate <strong>representation</strong>, not invent <strong>authority or epistemic status</strong>.</p>
+<p>An adapter shall not convert:</p>
+<pre><code class="language-text">model prose: "verification succeeded"
+</code></pre>
+<p>into:</p>
+<pre><code class="language-text">VERIFICATION_RECEIPT
+</code></pre>
+<p>unless an authoritative verifier actually produced the result.</p>
+<hr/>
+<h2 id="293-tool-call-mapping">29.3 Tool-call mapping<a class="anchor" href="#293-tool-call-mapping">¶</a></h2>
+<p>A provider-native tool call generated by the Controller shall normally map to:</p>
+<pre><code class="language-text">PROPOSAL / ACTION
+</code></pre>
+<p>not:</p>
+<pre><code class="language-text">RECEIPT / EXECUTION
+</code></pre>
+<hr/>
+<h1 id="30-protocol-error-model">30 Protocol error model<a class="anchor" href="#30-protocol-error-model">¶</a></h1>
+<h2 id="301-error-response">30.1 Error response<a class="anchor" href="#301-error-response">¶</a></h2>
+<p>A Harness shall reject malformed or semantically invalid messages.</p>
+<hr/>
+<h2 id="302-core-error-codes">30.2 Core error codes<a class="anchor" href="#302-core-error-codes">¶</a></h2>
+<p>The following error codes are defined:</p>
+<pre><code class="language-text">INVALID_MESSAGE
+UNSUPPORTED_VERSION
+UNSUPPORTED_KIND
+INVALID_DIRECTION
+INVALID_SEMANTIC_CAST
+UNKNOWN_REFERENCE
+SCOPE_MISMATCH
+REVISION_MISMATCH
+STALE_DECISION
+AUTHORITY_MISSING
+CAPABILITY_DENIED
+EVIDENCE_INSUFFICIENT
+VERIFICATION_REQUIRED
+INVALID_COMPLETION
+CORRELATION_ERROR
+</code></pre>
+<hr/>
+<h2 id="303-semantic-cast-error">30.3 Semantic-cast error<a class="anchor" href="#303-semantic-cast-error">¶</a></h2>
+<p>The error <code>INVALID_SEMANTIC_CAST</code> should be used when a participant attempts to represent one semantic class as another without the required authoritative transition.</p>
+<p>Examples:</p>
+<pre><code class="language-text">Controller claim → observation
+Proposal → receipt
+Evidence → verified claim
+</code></pre>
+<hr/>
+<h1 id="31-correlation-and-causality">31 Correlation and causality<a class="anchor" href="#31-correlation-and-causality">¶</a></h1>
+<p>Messages participating in the same protocol transaction should be correlatable.</p>
+<p>Example:</p>
+<pre><code class="language-text">msg-1 ACTION_PROPOSAL
+   ↓
+msg-2 ACTION_DECISION
+   ↓
+msg-3 EXECUTION_RECEIPT
+</code></pre>
+<p>The implementation should retain sufficient correlation to establish this lineage.</p>
+<hr/>
+<h1 id="32-idempotency-and-retries">32 Idempotency and retries<a class="anchor" href="#32-idempotency-and-retries">¶</a></h1>
+<p>Retransmission shall not automatically cause duplicate authoritative side effects.</p>
+<p>A Harness processing a duplicate action proposal with the same idempotency identity should either:</p>
+<p>a) return the prior result;</p>
+<p>b) reject the duplicate; or</p>
+<p>c) explicitly create a new action identity.</p>
+<p>It shall not silently repeat a destructive operation merely because transport delivery was repeated.</p>
+<hr/>
+<h1 id="33-serialization-model">33 Serialization model<a class="anchor" href="#33-serialization-model">¶</a></h1>
+<h2 id="331-protocol-independence">33.1 Protocol independence<a class="anchor" href="#331-protocol-independence">¶</a></h2>
+<p>ACCP semantics are independent of serialization.</p>
+<p>An implementation may use:</p>
+<p>a) native Rust types;</p>
+<p>b) native language objects;</p>
+<p>c) JSON;</p>
+<p>d) CBOR;</p>
+<p>e) another representation preserving ACCP semantics.</p>
+<hr/>
+<h2 id="332-canonical-interchange-binding">33.2 Canonical interchange binding<a class="anchor" href="#332-canonical-interchange-binding">¶</a></h2>
+<p>ACCP 3.0 defines UTF-8 JSON as the canonical interchange and conformance-test representation.</p>
+<p>This requirement does not require internal runtime components to serialize protocol messages through JSON.</p>
+<hr/>
+<h2 id="333-yaml">33.3 YAML<a class="anchor" href="#333-yaml">¶</a></h2>
+<p>YAML may be used as a human-readable authoring, fixture or diagnostic representation.</p>
+<p>YAML shall not be considered the normative semantic definition of ACCP.</p>
+<hr/>
+<h2 id="334-transcript-representation">33.4 Transcript representation<a class="anchor" href="#334-transcript-representation">¶</a></h2>
+<p>A protocol implementation may persist a sequence of ACCP messages using JSON Lines.</p>
+<p>Example:</p>
+<pre><code class="language-json">{"accp_version":"3.0","message_id":"m1","family":"PROPOSAL","kind":"ACTION"}
+{"accp_version":"3.0","message_id":"m2","family":"RECEIPT","kind":"EXECUTION"}
+</code></pre>
+<p>No custom ACCP file extension is required by this document.</p>
+<hr/>
+<h1 id="34-extensibility">34 Extensibility<a class="anchor" href="#34-extensibility">¶</a></h1>
+<h2 id="341-extension-fields">34.1 Extension fields<a class="anchor" href="#341-extension-fields">¶</a></h2>
+<p>Extensions shall be placed in a dedicated namespace or <code>extensions</code> object.</p>
+<hr/>
+<h2 id="342-core-semantics">34.2 Core semantics<a class="anchor" href="#342-core-semantics">¶</a></h2>
+<p>An extension shall not redefine the meaning of a core ACCP field.</p>
+<hr/>
+<h2 id="343-unknown-extensions">34.3 Unknown extensions<a class="anchor" href="#343-unknown-extensions">¶</a></h2>
+<p>A receiver may ignore an unknown extension only when doing so cannot alter:</p>
+<p>a) authority;</p>
+<p>b) execution safety;</p>
+<p>c) verification semantics;</p>
+<p>d) scope;</p>
+<p>e) revision validity;</p>
+<p>f) completion semantics.</p>
+<p>Otherwise the receiver shall reject the message or require negotiation.</p>
+<hr/>
+<h1 id="35-versioning">35 Versioning<a class="anchor" href="#35-versioning">¶</a></h1>
+<h2 id="351-version-identifier">35.1 Version identifier<a class="anchor" href="#351-version-identifier">¶</a></h2>
+<p>Core messages shall contain:</p>
+<pre><code class="language-text">accp_version = "3.0"
+</code></pre>
+<hr/>
+<h2 id="352-major-version-changes">35.2 Major-version changes<a class="anchor" href="#352-major-version-changes">¶</a></h2>
+<p>A change requiring reinterpretation of existing core semantics shall require a major protocol version change.</p>
+<hr/>
+<h2 id="353-minor-compatible-changes">35.3 Minor-compatible changes<a class="anchor" href="#353-minor-compatible-changes">¶</a></h2>
+<p>Optional fields and non-conflicting extension kinds may be added without a major-version change where existing semantics remain valid.</p>
+<hr/>
+<h1 id="36-security-considerations">36 Security considerations<a class="anchor" href="#36-security-considerations">¶</a></h1>
+<h2 id="361-untrusted-content">36.1 Untrusted content<a class="anchor" href="#361-untrusted-content">¶</a></h2>
+<p>Text originating from repositories, tools, websites, logs or other untrusted sources shall not gain authority merely by containing protocol-like instructions.</p>
+<hr/>
+<h2 id="362-semantic-injection">36.2 Semantic injection<a class="anchor" href="#362-semantic-injection">¶</a></h2>
+<p>A Harness shall not parse arbitrary untrusted project text as authoritative ACCP control messages unless that channel is explicitly authenticated as a protocol source.</p>
+<hr/>
+<h2 id="363-controller-compromise">36.3 Controller compromise<a class="anchor" href="#363-controller-compromise">¶</a></h2>
+<p>ACCP assumes that a Controller may emit incorrect, overconfident or adversarial proposals.</p>
+<p>The Harness shall therefore not rely on Controller compliance as the sole enforcement mechanism for authority boundaries.</p>
+<hr/>
+<h2 id="364-receipt-integrity">36.4 Receipt integrity<a class="anchor" href="#364-receipt-integrity">¶</a></h2>
+<p>Implementations requiring strong auditability should protect authoritative receipts against accidental or malicious modification.</p>
+<hr/>
+<h1 id="37-privacy-considerations">37 Privacy considerations<a class="anchor" href="#37-privacy-considerations">¶</a></h1>
+<p>Private chain-of-thought is outside ACCP.</p>
+<p>A conforming implementation shall not require private reasoning traces for protocol conformance.</p>
+<p>Optional fields such as:</p>
+<pre><code class="language-yaml">rationale_summary:
+</code></pre>
+<p>may be used.</p>
+<p>Such summaries shall be treated as Controller assertions, not evidence.</p>
+<hr/>
+<h1 id="38-conformance">38 Conformance<a class="anchor" href="#38-conformance">¶</a></h1>
+<h2 id="381-accp-core-conformance">38.1 ACCP Core conformance<a class="anchor" href="#381-accp-core-conformance">¶</a></h2>
+<p>An implementation claiming <strong>ACCP 3.0 Core Conformance</strong> shall:</p>
+<p>a) implement the six core message families;</p>
+<p>b) preserve required directionality;</p>
+<p>c) preserve proposal/execution separation;</p>
+<p>d) preserve claim/observation separation;</p>
+<p>e) prevent Controller-originated authoritative receipts;</p>
+<p>f) preserve scope semantics;</p>
+<p>g) preserve revision semantics when revisions are supplied;</p>
+<p>h) preserve authority separation;</p>
+<p>i) reject illegal semantic casts;</p>
+<p>j) preserve completion authority.</p>
+<hr/>
+<h2 id="382-epistemic-conformance">38.2 Epistemic conformance<a class="anchor" href="#382-epistemic-conformance">¶</a></h2>
+<p>An implementation claiming <strong>ACCP 3.0 Epistemic Conformance</strong> shall additionally implement:</p>
+<p>a) claim epistemic classes;</p>
+<p>b) evidence references;</p>
+<p>c) evidence scope;</p>
+<p>d) verification semantics;</p>
+<p>e) <code>SUPPORTED</code> versus <code>VERIFIED</code>;</p>
+<p>f) contradiction or rejection semantics;</p>
+<p>g) state-transition admission.</p>
+<hr/>
+<h2 id="383-serialization-conformance">38.3 Serialization conformance<a class="anchor" href="#383-serialization-conformance">¶</a></h2>
+<p>An implementation claiming <strong>ACCP 3.0 JSON Conformance</strong> shall correctly encode and decode the canonical JSON representation defined by this document and its accompanying schema.</p>
+<hr/>
+<h1 id="39-mandatory-conformance-tests">39 Mandatory conformance tests<a class="anchor" href="#39-mandatory-conformance-tests">¶</a></h1>
+<p>An ACCP 3.0 conformance suite shall include at least the following tests.</p>
+<h3 id="ct-001-controller-cannot-mint-observation">CT-001 — Controller cannot mint observation<a class="anchor" href="#ct-001-controller-cannot-mint-observation">¶</a></h3>
+<p>Input:</p>
+<pre><code class="language-text">Controller: "git status is clean"
+</code></pre>
+<p>without an authoritative execution receipt.</p>
+<p>Expected:</p>
+<pre><code class="language-text">not classified as OBSERVATION
+</code></pre>
+<hr/>
+<h3 id="ct-002-proposal-cannot-become-execution">CT-002 — Proposal cannot become execution<a class="anchor" href="#ct-002-proposal-cannot-become-execution">¶</a></h3>
+<p>Input:</p>
+<pre><code class="language-text">ACTION_PROPOSAL
+</code></pre>
+<p>Expected:</p>
+<pre><code class="language-text">no EXECUTION_RECEIPT without execution
+</code></pre>
+<hr/>
+<h3 id="ct-003-evidence-reference-does-not-verify">CT-003 — Evidence reference does not verify<a class="anchor" href="#ct-003-evidence-reference-does-not-verify">¶</a></h3>
+<p>Input:</p>
+<pre><code class="language-text">claim + evidence_ref
+</code></pre>
+<p>Expected:</p>
+<pre><code class="language-text">not automatically VERIFIED
+</code></pre>
+<hr/>
+<h3 id="ct-004-targeted-verification-cannot-widen-scope">CT-004 — Targeted verification cannot widen scope<a class="anchor" href="#ct-004-targeted-verification-cannot-widen-scope">¶</a></h3>
+<p>Input:</p>
+<pre><code class="language-text">verification scope = auth.refresh
+</code></pre>
+<p>Expected:</p>
+<pre><code class="language-text">cannot establish repository-wide regression freedom
+</code></pre>
+<hr/>
+<h3 id="ct-005-stale-decision-cannot-authorize-new-revision">CT-005 — Stale decision cannot authorize new revision<a class="anchor" href="#ct-005-stale-decision-cannot-authorize-new-revision">¶</a></h3>
+<p>Input:</p>
+<pre><code class="language-text">decision revision = R1
+current revision = R2
+</code></pre>
+<p>Expected:</p>
+<pre><code class="language-text">decision rejected, deferred or revalidated
+</code></pre>
+<hr/>
+<h3 id="ct-006-controller-cannot-self-complete">CT-006 — Controller cannot self-complete<a class="anchor" href="#ct-006-controller-cannot-self-complete">¶</a></h3>
+<p>Input:</p>
+<pre><code class="language-text">COMPLETION_PROPOSAL
+</code></pre>
+<p>Expected:</p>
+<pre><code class="language-text">authoritative completion unchanged until Harness decision
+</code></pre>
+<hr/>
+<h3 id="ct-007-adapter-cannot-mint-verification">CT-007 — Adapter cannot mint verification<a class="anchor" href="#ct-007-adapter-cannot-mint-verification">¶</a></h3>
+<p>Input:</p>
+<pre><code class="language-text">model text = "all tests pass"
+</code></pre>
+<p>Expected:</p>
+<pre><code class="language-text">not mapped to VERIFICATION_RECEIPT
+</code></pre>
+<hr/>
+<h3 id="ct-008-duplicate-destructive-proposal-is-not-blindly-re-executed">CT-008 — Duplicate destructive proposal is not blindly re-executed<a class="anchor" href="#ct-008-duplicate-destructive-proposal-is-not-blindly-re-executed">¶</a></h3>
+<p>Expected:</p>
+<pre><code class="language-text">idempotency protection or explicit new identity
+</code></pre>
+<hr/>
+<h1 id="40-canonical-lightweight-transaction">40 Canonical lightweight transaction<a class="anchor" href="#40-canonical-lightweight-transaction">¶</a></h1>
+<h2 id="401-user-request">40.1 User request<a class="anchor" href="#401-user-request">¶</a></h2>
+<pre><code class="language-text">check git status how it is rn
+</code></pre>
+<hr/>
+<h2 id="402-controller-cognition">40.2 Controller cognition<a class="anchor" href="#402-controller-cognition">¶</a></h2>
+<p>The Controller may privately determine:</p>
+<pre><code class="language-text">The user requests current repository state.
+vcs.status is sufficient.
+No mutation is required.
+</code></pre>
+<p>This private cognition is not itself an ACCP message.</p>
+<hr/>
+<h2 id="403-action-proposal">40.3 Action proposal<a class="anchor" href="#403-action-proposal">¶</a></h2>
+<pre><code class="language-json">{
+  "accp_version": "3.0",
+  "message_id": "msg-001",
+  "sender": {
+    "role": "COGNITIVE_CONTROLLER"
+  },
+  "family": "PROPOSAL",
+  "kind": "ACTION",
+  "payload": {
+    "action_id": "act-001",
+    "capability": "vcs.status",
+    "intent": "inspect_current_worktree",
+    "expected_effect": {
+      "mutation": false
+    }
+  }
+}
+</code></pre>
+<hr/>
+<h2 id="404-internal-authorization">40.4 Internal authorization<a class="anchor" href="#404-internal-authorization">¶</a></h2>
+<p>The Harness determines that <code>vcs.status</code> is read-only and pre-authorized.</p>
+<p>An explicit wire-level decision may therefore be omitted.</p>
+<hr/>
+<h2 id="405-execution-receipt">40.5 Execution receipt<a class="anchor" href="#405-execution-receipt">¶</a></h2>
+<pre><code class="language-json">{
+  "accp_version": "3.0",
+  "message_id": "msg-002",
+  "sender": {
+    "role": "HARNESS"
+  },
+  "family": "RECEIPT",
+  "kind": "EXECUTION",
+  "correlation_id": "act-001",
+  "payload": {
+    "status": "SUCCESS",
+    "capability": "vcs.status",
+    "observations": {
+      "branch": "main",
+      "upstream": {
+        "ahead": 2,
+        "behind": 0
+      },
+      "modified": [
+        "src/runtime.rs",
+        "Cargo.toml"
+      ],
+      "untracked": [
+        "notes/protocol.md"
+      ],
+      "staged": []
+    }
+  }
+}
+</code></pre>
+<p>The Controller may then produce user-facing prose.</p>
+<p>The transaction is:</p>
+<pre><code class="language-text">PROPOSAL
+   ↓
+internal authorization
+   ↓
+execution
+   ↓
+RECEIPT
+</code></pre>
+<p>Strict ontology does not require unnecessary message ceremony.</p>
+<hr/>
+<h1 id="41-canonical-governed-mutation-transaction">41 Canonical governed mutation transaction<a class="anchor" href="#41-canonical-governed-mutation-transaction">¶</a></h1>
+<p>A material mutation should follow:</p>
+<pre><code class="language-text">ACTION_PROPOSAL
+      ↓
+ACTION_DECISION
+      ↓
+EXECUTION_RECEIPT
+      ↓
+VERIFICATION_PROPOSAL
+      ↓
+VERIFICATION_RECEIPT
+      ↓
+COMPLETION_PROPOSAL
+      ↓
+COMPLETION_DECISION
+</code></pre>
+<p>Each arrow represents a semantic transition.</p>
+<p>The following shall remain distinct throughout the transaction:</p>
+<pre><code class="language-text">intent
+authorization
+execution
+observation
+verification
+completion
+</code></pre>
+<hr/>
+<h1 id="42-protocol-state-transition-summary">42 Protocol state transition summary<a class="anchor" href="#42-protocol-state-transition-summary">¶</a></h1>
+<pre><code class="language-text">                 ┌───────────────┐
+                 │  CONTROLLER   │
+                 └───────┬───────┘
+                         │
+                  QUERY / PROPOSAL
+                         │
+                         ▼
+                 ┌───────────────┐
+                 │    HARNESS    │
+                 └───────┬───────┘
+                         │
+           ┌─────────────┼─────────────┐
+           │             │             │
+        DECISION      EXECUTION     VERIFICATION
+           │             │             │
+           └─────────────┼─────────────┘
+                         │
+                         ▼
+                  RECEIPT / SIGNAL
+                         │
+                         ▼
+                 ┌───────────────┐
+                 │  CONTROLLER   │
+                 └───────────────┘
+</code></pre>
+<hr/>
+<h1 id="43-semantic-type-safety-summary">43 Semantic type-safety summary<a class="anchor" href="#43-semantic-type-safety-summary">¶</a></h1>
+<p>A conforming implementation shall preserve at least the following distinctions:</p>
+<pre><code class="language-text">Cognitive decision
+    ≠ Runtime decision
+
+Claim
+    ≠ Observation
+
+Observation
+    ≠ Interpretation
+
+Evidence
+    ≠ Verification
+
+Evidence reference
+    ≠ Evidence sufficiency
+
+Proposal
+    ≠ Authorization
+
+Authorization
+    ≠ Execution
+
+Execution
+    ≠ Intended semantic effect
+
+Patch application
+    ≠ Correct fix
+
+Verification of P
+    ≠ Verification of Q
+
+Retrieved state
+    ≠ Fresh evidence
+
+Controller says complete
+    ≠ Harness completion
+</code></pre>
+<hr/>
+<h1 id="annex-a">Annex A<a class="anchor" href="#annex-a">¶</a></h1>
+<h2 id="normative-semantic-transition-matrix">Normative semantic transition matrix<a class="anchor" href="#normative-semantic-transition-matrix">¶</a></h2>
+<table>
+<thead>
+<tr>
+<th>Source semantic class</th>
+<th>Target semantic class</th>
+<th>Direct transition</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Controller Claim</td>
+<td>Observation</td>
+<td>Prohibited</td>
+</tr>
+<tr>
+<td>Controller Claim</td>
+<td>Hypothesis</td>
+<td>Permitted</td>
+</tr>
+<tr>
+<td>Hypothesis</td>
+<td>Supported</td>
+<td>Harness-admitted</td>
+</tr>
+<tr>
+<td>Hypothesis</td>
+<td>Verified</td>
+<td>Verification required</td>
+</tr>
+<tr>
+<td>Inference</td>
+<td>Verified</td>
+<td>Verification required</td>
+</tr>
+<tr>
+<td>Evidence</td>
+<td>Verified Claim</td>
+<td>Prohibited as direct cast</td>
+</tr>
+<tr>
+<td>Action Proposal</td>
+<td>Execution</td>
+<td>Authorization/execution required</td>
+</tr>
+<tr>
+<td>Action Proposal</td>
+<td>Execution Receipt</td>
+<td>Prohibited</td>
+</tr>
+<tr>
+<td>Execution Receipt</td>
+<td>Verification Receipt</td>
+<td>Verification required</td>
+</tr>
+<tr>
+<td>Execution Success</td>
+<td>Completion</td>
+<td>Prohibited</td>
+</tr>
+<tr>
+<td>Completion Proposal</td>
+<td>Completion</td>
+<td>Harness decision required</td>
+</tr>
+<tr>
+<td>Decision at R1</td>
+<td>Authority at R2</td>
+<td>Revalidation required</td>
+</tr>
+<tr>
+<td>Retrieved Memory</td>
+<td>Fresh Evidence</td>
+<td>Prohibited</td>
+</tr>
+<tr>
+<td>Verification(P)</td>
+<td>Verification(Q)</td>
+<td>Prohibited unless coverage relation defined</td>
+</tr>
+</tbody>
+</table>
+<hr/>
+<h1 id="annex-b">Annex B<a class="anchor" href="#annex-b">¶</a></h1>
+<h2 id="normative-producer-matrix">Normative producer matrix<a class="anchor" href="#normative-producer-matrix">¶</a></h2>
+<table>
+<thead>
+<tr>
+<th>Object</th>
+<th style="text-align: right;">Controller</th>
+<th style="text-align: right;">Harness</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>QUERY</td>
+<td style="text-align: right;">Yes</td>
+<td style="text-align: right;">No</td>
+</tr>
+<tr>
+<td>ACTION_PROPOSAL</td>
+<td style="text-align: right;">Yes</td>
+<td style="text-align: right;">No</td>
+</tr>
+<tr>
+<td>CLAIM_PROPOSAL</td>
+<td style="text-align: right;">Yes</td>
+<td style="text-align: right;">No</td>
+</tr>
+<tr>
+<td>STATE_TRANSITION_PROPOSAL</td>
+<td style="text-align: right;">Yes</td>
+<td style="text-align: right;">No</td>
+</tr>
+<tr>
+<td>VERIFICATION_PROPOSAL</td>
+<td style="text-align: right;">Yes</td>
+<td style="text-align: right;">No</td>
+</tr>
+<tr>
+<td>COMPLETION_PROPOSAL</td>
+<td style="text-align: right;">Yes</td>
+<td style="text-align: right;">No</td>
+</tr>
+<tr>
+<td>VIEW</td>
+<td style="text-align: right;">No</td>
+<td style="text-align: right;">Yes</td>
+</tr>
+<tr>
+<td>DECISION</td>
+<td style="text-align: right;">No</td>
+<td style="text-align: right;">Yes</td>
+</tr>
+<tr>
+<td>EXECUTION_RECEIPT</td>
+<td style="text-align: right;">No</td>
+<td style="text-align: right;">Yes</td>
+</tr>
+<tr>
+<td>OBSERVATION_RECEIPT</td>
+<td style="text-align: right;">No</td>
+<td style="text-align: right;">Yes</td>
+</tr>
+<tr>
+<td>VERIFICATION_RECEIPT</td>
+<td style="text-align: right;">No</td>
+<td style="text-align: right;">Yes</td>
+</tr>
+<tr>
+<td>STATE_TRANSITION_RECEIPT</td>
+<td style="text-align: right;">No</td>
+<td style="text-align: right;">Yes</td>
+</tr>
+<tr>
+<td>SIGNAL</td>
+<td style="text-align: right;">No</td>
+<td style="text-align: right;">Yes</td>
+</tr>
+</tbody>
+</table>
+<hr/>
+<h1 id="annex-c">Annex C<a class="anchor" href="#annex-c">¶</a></h1>
+<h2 id="accp-core-type-model-informative-rust-representation">ACCP core type model — informative Rust representation<a class="anchor" href="#accp-core-type-model-informative-rust-representation">¶</a></h2>
+<pre><code class="language-rust">pub enum Message {
+    View(View),
+    Query(Query),
+    Proposal(Proposal),
+    Decision(Decision),
+    Receipt(Receipt),
+    Signal(Signal),
+}
+
+pub enum Proposal {
+    Claim(ClaimProposal),
+    Action(ActionProposal),
+    WorkspaceDelta(WorkspaceDeltaProposal),
+    StateTransition(StateTransitionProposal),
+    Verification(VerificationProposal),
+    Completion(CompletionProposal),
+}
+
+pub enum Receipt {
+    Execution(ExecutionReceipt),
+    Observation(ObservationReceipt),
+    Evidence(EvidenceReceipt),
+    Verification(VerificationReceipt),
+    StateTransition(StateTransitionReceipt),
+}
+
+pub enum EpistemicClass {
+    Assumption,
+    Hypothesis,
+    Inference,
+    Supported,
+    Verified,
+    Rejected,
+    Contradicted,
+    Unknown,
+}
+
+pub enum Verdict {
+    Accepted,
+    AcceptedWithConstraints,
+    Rejected,
+    RequireEvidence,
+    RequireVerification,
+    RequireAuthority,
+    Deferred,
+}
+</code></pre>
+<p>The Rust representation is informative.</p>
+<p>The semantic distinctions specified by this document are normative.</p>
+<hr/>
+<h1 id="annex-d">Annex D<a class="anchor" href="#annex-d">¶</a></h1>
+<h2 id="legacy-accp-2x-report-compatibility-informative">Legacy ACCP 2.x report compatibility — informative<a class="anchor" href="#legacy-accp-2x-report-compatibility-informative">¶</a></h2>
+<p>Legacy ACCP report artifacts may be produced as projections over ACCP 3.0 protocol history.</p>
+<p>Example:</p>
+<pre><code class="language-text">protocol events
+    │
+    ├── claim proposals
+    ├── evidence receipts
+    ├── execution receipts
+    ├── verification receipts
+    ├── decisions
+    └── completion
+            │
+            ▼
+      report projection
+            │
+      ┌─────┼─────┐
+      ▼     ▼     ▼
+     RCA   FVR   PRR
+</code></pre>
+<p>Legacy reports shall not be treated as ACCP 3.0 protocol primitives.</p>
+<hr/>
+<h1 id="annex-e">Annex E<a class="anchor" href="#annex-e">¶</a></h1>
+<h2 id="design-principle-summary-informative">Design principle summary — informative<a class="anchor" href="#design-principle-summary-informative">¶</a></h2>
+<p>ACCP may be summarized as:</p>
+<blockquote>
+<p><strong>A type system for cognition/runtime commitments expressed as a protocol.</strong></p>
+</blockquote>
+<p>The Cognitive Controller remains free to reason, infer, plan and choose.</p>
+<p>The Harness remains responsible for authoritative effects.</p>
+<p>ACCP defines the strict semantic boundary between them.</p>
+<p>The protocol therefore governs neither thought nor implementation architecture.</p>
+<p>It governs what semantic meaning may legitimately cross the boundary.</p>
+<hr/>
+<p><strong>END OF ACCP 3.0 DRAFT 1</strong></p>
 <h1 id="context-architecture">Context Architecture<a class="anchor" href="#context-architecture">¶</a></h1>
 <h2 id="context-is-a-view-not-memory">Context is a view, not memory<a class="anchor" href="#context-is-a-view-not-memory">¶</a></h2>
 <p><strong>v0.2 amendment:</strong> Bu bölümdeki “Context View” artık Cognitive View Compiler'ın output'u olarak okunmalıdır. Context yalnız serialization payload'ıdır; Soft Workspace aktif çalışma state'i, Hard State persistent epistemic state'tir. Modelin bütün memory'yi görmesi hedef değil, task için gerekli küçük working representation'ı görmesi hedeftir.</p>
