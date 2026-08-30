@@ -98,7 +98,7 @@ fixtures listed below.
 - `55fd77d` — focused final regression and rustfmt compliance.
 - `pending` — lockfile-constrained all-target workspace regression (to be committed after final gate).
 - `pending` — focused Praxis/Runtime/Repository regression and normal workspace clippy (to be committed after final gate).
-- `pending` — final post-timebox workspace, clippy, format, diff, and doc-test gates (to be committed after final gate).
+- `4c4322c` — final post-timebox workspace, clippy, format, diff, and doc-test gates.
 
 ## Interpretation and remaining limits
 
