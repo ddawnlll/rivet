@@ -1,7 +1,7 @@
-use std::fs;
 use chrono::Utc;
 use praxis::gates::lock_gate::LockMode;
 use praxis::*;
+use std::fs;
 
 #[tokio::test]
 async fn test_full_verity_8_gate_pipeline_success() {
@@ -11,7 +11,11 @@ async fn test_full_verity_8_gate_pipeline_success() {
     // 1. Create mock repository files
     let src_dir = repo_root.join("src");
     fs::create_dir_all(&src_dir).unwrap();
-    fs::write(src_dir.join("lib.rs"), "pub fn add(a: i32, b: i32) -> i32 { a + b }\n").unwrap();
+    fs::write(
+        src_dir.join("lib.rs"),
+        "pub fn add(a: i32, b: i32) -> i32 { a + b }\n",
+    )
+    .unwrap();
 
     // 2. Create an evidence ledger
     let ledger_path = repo_root.join(".praxis").join("evidence.ledger.jsonl");
@@ -80,7 +84,13 @@ async fn test_full_verity_8_gate_pipeline_success() {
     let pipeline = VerityPipeline::new(repo_root).with_lock_mode(LockMode::CreateIfMissing);
 
     let result = pipeline
-        .run(&plan, Some(&ledger), &changed_files, None::<&str>, "attempt-001")
+        .run(
+            &plan,
+            Some(&ledger),
+            &changed_files,
+            None::<&str>,
+            "attempt-001",
+        )
         .await;
 
     // Verify verdicts
@@ -137,7 +147,13 @@ async fn test_verity_pipeline_forbidden_file_security_block() {
     let pipeline = VerityPipeline::new(repo_root).with_lock_mode(LockMode::CreateIfMissing);
 
     let result = pipeline
-        .run(&plan, Some(&ledger), &changed_files, None::<&str>, "att-sec")
+        .run(
+            &plan,
+            Some(&ledger),
+            &changed_files,
+            None::<&str>,
+            "att-sec",
+        )
         .await;
 
     // Must be FAIL due to EvidenceGate security boundary
@@ -148,8 +164,10 @@ async fn test_verity_pipeline_forbidden_file_security_block() {
         .find(|g| g.gate_name == "EvidenceGate")
         .unwrap();
     assert_eq!(evidence_res.verdict, GateVerdict::Fail);
-    assert!(evidence_res
-        .reason_codes
-        .contains(&reason_codes::FORBIDDEN_FILE_CHANGED.to_string()));
+    assert!(
+        evidence_res
+            .reason_codes
+            .contains(&reason_codes::FORBIDDEN_FILE_CHANGED.to_string())
+    );
     assert!(result.final_receipt.is_none());
 }

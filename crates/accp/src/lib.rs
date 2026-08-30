@@ -162,9 +162,7 @@ impl AccpSemanticGate {
     }
 
     /// Invariant 6.12: Controller prose is not completion
-    pub fn check_completion_authority(
-        unclosed_obligations: &[ObligationId],
-    ) -> RivetResult<()> {
+    pub fn check_completion_authority(unclosed_obligations: &[ObligationId]) -> RivetResult<()> {
         if !unclosed_obligations.is_empty() {
             return Err(RivetError::SemanticViolation(format!(
                 "Cannot complete task: {} obligations remain unverified",

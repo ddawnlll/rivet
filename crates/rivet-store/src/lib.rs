@@ -2,12 +2,12 @@
 //!
 //! Provides the HardStateStore trait and the redb embedded ACID backend.
 
-use std::path::Path;
-use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 use noesis::{HardState, NoesisEvent};
 use redb::{Database, ReadableTableMetadata, TableDefinition};
 use rivet_types::*;
+use std::path::Path;
+use std::sync::{Arc, Mutex};
 
 const EVENTS_TABLE: TableDefinition<u64, &[u8]> = TableDefinition::new("noesis_events");
 const STATE_TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("noesis_materialized");
@@ -86,8 +86,8 @@ impl RedbStore {
 #[async_trait]
 impl HardStateStore for RedbStore {
     async fn append_event(&self, event: &NoesisEvent) -> RivetResult<Revision> {
-        let serialized = serde_json::to_vec(event)
-            .map_err(|e| RivetError::Serialization(e.to_string()))?;
+        let serialized =
+            serde_json::to_vec(event).map_err(|e| RivetError::Serialization(e.to_string()))?;
 
         let write_txn = self
             .db
@@ -148,8 +148,8 @@ impl HardStateStore for RedbStore {
     }
 
     async fn save_checkpoint(&self, state: &HardState) -> RivetResult<()> {
-        let serialized = serde_json::to_vec(state)
-            .map_err(|e| RivetError::Serialization(e.to_string()))?;
+        let serialized =
+            serde_json::to_vec(state).map_err(|e| RivetError::Serialization(e.to_string()))?;
         let write_txn = self
             .db
             .begin_write()

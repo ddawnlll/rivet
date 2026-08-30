@@ -3,11 +3,11 @@
 //! Gate 2: LockGate
 //! Verifies hash consistency against an existing lock file or creates a new lock.
 
-use std::fs;
-use std::path::Path;
+use crate::types::*;
 use chrono::Utc;
 use sha2::{Digest, Sha256};
-use crate::types::*;
+use std::fs;
+use std::path::Path;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LockMode {
@@ -52,7 +52,10 @@ impl LockGate {
                     reason_codes.push(reason_codes::MISSING_PLAN_LOCK.to_string());
                     diagnostics.push(Diagnostic::error(
                         "MISSING_PLAN_LOCK",
-                        format!("Lock file not found at {}. Use CreateIfMissing mode to create one.", path.display()),
+                        format!(
+                            "Lock file not found at {}. Use CreateIfMissing mode to create one.",
+                            path.display()
+                        ),
                     ));
                     return (
                         build_result(GateVerdict::Hold, reason_codes, diagnostics, attempt_id),
@@ -66,7 +69,10 @@ impl LockGate {
                             reason_codes.push(reason_codes::PLAN_ID_MISMATCH.to_string());
                             diagnostics.push(Diagnostic::error(
                                 "PLAN_ID_MISMATCH",
-                                format!("Lock planId '{}' does not match '{}'", lock.plan_id, plan.metadata.plan_id),
+                                format!(
+                                    "Lock planId '{}' does not match '{}'",
+                                    lock.plan_id, plan.metadata.plan_id
+                                ),
                             ));
                         }
 
@@ -85,12 +91,18 @@ impl LockGate {
                             GateVerdict::Pass
                         };
 
-                        (build_result(verdict, reason_codes, diagnostics, attempt_id), Some(lock))
+                        (
+                            build_result(verdict, reason_codes, diagnostics, attempt_id),
+                            Some(lock),
+                        )
                     }
                     Err(e) => {
                         reason_codes.push(reason_codes::PLAN_LOCK_PARSE_ERROR.to_string());
                         diagnostics.push(Diagnostic::error("PLAN_LOCK_PARSE_ERROR", e));
-                        (build_result(GateVerdict::Fail, reason_codes, diagnostics, attempt_id), None)
+                        (
+                            build_result(GateVerdict::Fail, reason_codes, diagnostics, attempt_id),
+                            None,
+                        )
                     }
                 }
             }
@@ -110,12 +122,21 @@ impl LockGate {
                 if let Err(e) = write_lock_file(path, &lock) {
                     reason_codes.push(reason_codes::PLAN_LOCK_PARSE_ERROR.to_string());
                     diagnostics.push(Diagnostic::error("LOCK_WRITE_FAILED", e));
-                    return (build_result(GateVerdict::Fail, reason_codes, diagnostics, attempt_id), None);
+                    return (
+                        build_result(GateVerdict::Fail, reason_codes, diagnostics, attempt_id),
+                        None,
+                    );
                 }
 
                 reason_codes.push(reason_codes::LOCK_CREATED.to_string());
-                diagnostics.push(Diagnostic::info("LOCK_CREATED", format!("Created lock file at {}", path.display())));
-                (build_result(GateVerdict::Pass, reason_codes, diagnostics, attempt_id), Some(lock))
+                diagnostics.push(Diagnostic::info(
+                    "LOCK_CREATED",
+                    format!("Created lock file at {}", path.display()),
+                ));
+                (
+                    build_result(GateVerdict::Pass, reason_codes, diagnostics, attempt_id),
+                    Some(lock),
+                )
             }
             LockMode::RefreshExplicit => {
                 let lock = PlanLock {
@@ -128,12 +149,21 @@ impl LockGate {
                 if let Err(e) = write_lock_file(path, &lock) {
                     reason_codes.push(reason_codes::PLAN_LOCK_PARSE_ERROR.to_string());
                     diagnostics.push(Diagnostic::error("LOCK_WRITE_FAILED", e));
-                    return (build_result(GateVerdict::Fail, reason_codes, diagnostics, attempt_id), None);
+                    return (
+                        build_result(GateVerdict::Fail, reason_codes, diagnostics, attempt_id),
+                        None,
+                    );
                 }
 
                 reason_codes.push(reason_codes::LOCK_PASS.to_string());
-                diagnostics.push(Diagnostic::info("LOCK_REFRESHED", format!("Refreshed lock file at {}", path.display())));
-                (build_result(GateVerdict::Pass, reason_codes, diagnostics, attempt_id), Some(lock))
+                diagnostics.push(Diagnostic::info(
+                    "LOCK_REFRESHED",
+                    format!("Refreshed lock file at {}", path.display()),
+                ));
+                (
+                    build_result(GateVerdict::Pass, reason_codes, diagnostics, attempt_id),
+                    Some(lock),
+                )
             }
         }
     }

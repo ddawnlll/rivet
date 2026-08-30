@@ -42,8 +42,8 @@ impl HephaestusEngine {
     /// Produce a reframing proposal to unblock the agent
     pub fn propose_reframing(&self, failed_actions: &[String]) -> ReframingProposal {
         ReframingProposal {
-            suggested_frame: "Reset local working assumptions; step back to higher-level contracts."
-                .into(),
+            suggested_frame:
+                "Reset local working assumptions; step back to higher-level contracts.".into(),
             discarded_approaches: failed_actions.to_vec(),
             new_hypothesis_candidates: vec![
                 "Underlying interface contract might be mismatching".into(),

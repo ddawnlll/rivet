@@ -4,10 +4,10 @@
 //! Validates evidence ledger integrity, namespace boundaries (allowed/forbidden files),
 //! and required evidence mappings.
 
-use chrono::Utc;
-use regex::Regex;
 use crate::ledger::Ledger;
 use crate::types::*;
+use chrono::Utc;
+use regex::Regex;
 
 pub struct EvidenceGate;
 
@@ -30,14 +30,28 @@ impl EvidenceGate {
                 "EVIDENCE_LEDGER_MISSING",
                 "Evidence ledger is missing. Run tasks to capture evidence.",
             ));
-            return build_result(GateVerdict::Hold, reason_codes, diagnostics, failed_criteria_ids, evidence_refs, attempt_id);
+            return build_result(
+                GateVerdict::Hold,
+                reason_codes,
+                diagnostics,
+                failed_criteria_ids,
+                evidence_refs,
+                attempt_id,
+            );
         };
 
         // 2. Verify ledger cryptographic integrity
         if let Err(e) = ledger.verify_integrity() {
             reason_codes.push(reason_codes::EVIDENCE_LEDGER_PARSE_ERROR.to_string());
             diagnostics.push(Diagnostic::error("LEDGER_CORRUPT", e));
-            return build_result(GateVerdict::Fail, reason_codes, diagnostics, failed_criteria_ids, evidence_refs, attempt_id);
+            return build_result(
+                GateVerdict::Fail,
+                reason_codes,
+                diagnostics,
+                failed_criteria_ids,
+                evidence_refs,
+                attempt_id,
+            );
         }
 
         for r in &ledger.current().records {
@@ -79,22 +93,27 @@ impl EvidenceGate {
         let has_errors = diagnostics.iter().any(|d| d.severity == Severity::Error);
         let verdict = if has_errors {
             GateVerdict::Fail
-        } else if !diagnostics.is_empty() && diagnostics.iter().any(|d| d.severity == Severity::Warning) {
+        } else if !diagnostics.is_empty()
+            && diagnostics.iter().any(|d| d.severity == Severity::Warning)
+        {
             GateVerdict::Hold
         } else {
             reason_codes.push(reason_codes::EVIDENCE_PASS.to_string());
             GateVerdict::Pass
         };
 
-        build_result(verdict, reason_codes, diagnostics, failed_criteria_ids, evidence_refs, attempt_id)
+        build_result(
+            verdict,
+            reason_codes,
+            diagnostics,
+            failed_criteria_ids,
+            evidence_refs,
+            attempt_id,
+        )
     }
 }
 
-fn check_file_boundary(
-    path: &str,
-    allowed: &[String],
-    forbidden: &[String],
-) -> (bool, bool) {
+fn check_file_boundary(path: &str, allowed: &[String], forbidden: &[String]) -> (bool, bool) {
     let mut is_allowed = allowed.is_empty(); // If allowed is empty, unrestricted unless forbidden
     let mut is_forbidden = false;
 

@@ -3,11 +3,11 @@
 //! Append-only NDJSON evidence ledger with atomic writes, Merkle root verification,
 //! and crash recovery.
 
-use std::fs;
-use std::path::{Path, PathBuf};
+use crate::merkle::root_from_records;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
-use crate::merkle::root_from_records;
+use std::fs;
+use std::path::{Path, PathBuf};
 
 pub const LEDGER_SCHEMA: &str = "praxis-ledger/v1";
 const HEADER_LINE_PREFIX: &str = "# ";
@@ -86,7 +86,12 @@ impl Ledger {
 
     /// Append a new record to the ledger, recompute Merkle root, and persist atomically
     pub fn append(&mut self, record: LedgerRecord) -> Result<(usize, String), String> {
-        if self.state.records.iter().any(|r| r.record_id == record.record_id) {
+        if self
+            .state
+            .records
+            .iter()
+            .any(|r| r.record_id == record.record_id)
+        {
             return Err(format!("duplicate recordId: {}", record.record_id));
         }
 
@@ -99,8 +104,16 @@ impl Ledger {
     }
 
     /// Idempotent append: if record already exists, returns its index
-    pub fn append_idempotent(&mut self, record: LedgerRecord) -> Result<(usize, String, bool), String> {
-        if let Some(pos) = self.state.records.iter().position(|r| r.record_id == record.record_id) {
+    pub fn append_idempotent(
+        &mut self,
+        record: LedgerRecord,
+    ) -> Result<(usize, String, bool), String> {
+        if let Some(pos) = self
+            .state
+            .records
+            .iter()
+            .position(|r| r.record_id == record.record_id)
+        {
             return Ok((pos, self.state.merkle_root.clone(), true));
         }
         let (idx, root) = self.append(record)?;
@@ -160,7 +173,9 @@ impl Ledger {
         }
 
         let data = lines.join("\n") + "\n";
-        let staging_path = self.path.with_extension(format!("staging.{}", std::process::id()));
+        let staging_path = self
+            .path
+            .with_extension(format!("staging.{}", std::process::id()));
         fs::write(&staging_path, data).map_err(|e| e.to_string())?;
         fs::rename(&staging_path, &self.path).map_err(|e| e.to_string())?;
         Ok(())

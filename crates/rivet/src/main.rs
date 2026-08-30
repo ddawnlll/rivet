@@ -2,18 +2,22 @@
 //!
 //! Generalist Epistemic Software Engineering Agent Runtime entrypoint.
 
-use std::path::PathBuf;
-use std::sync::Arc;
 use clap::{Parser, Subcommand};
 use rivet_core::HarnessCore;
 use rivet_model_genai::GenAiBackend;
 use rivet_repository::CensusRunner;
 use rivet_runtime::Runtime;
 use rivet_store::MemoryStore;
+use std::path::PathBuf;
+use std::sync::Arc;
 use tracing_subscriber::EnvFilter;
 
 #[derive(Parser)]
-#[command(name = "rivet", version = "0.3.0", about = "Generalist Epistemic Software Engineering Agent Runtime")]
+#[command(
+    name = "rivet",
+    version = "0.3.0",
+    about = "Generalist Epistemic Software Engineering Agent Runtime"
+)]
 struct Cli {
     #[arg(default_value = ".")]
     path: PathBuf,
@@ -56,7 +60,10 @@ async fn main() -> anyhow::Result<()> {
             println!("\n🔍 Running deterministic census on {}...", path.display());
             let census = CensusRunner::run_census(&path).await?;
             println!("✅ Total Files: {}", census.total_files);
-            println!("📦 Total Size: {:.2} MB", census.total_bytes as f64 / 1_048_576.0);
+            println!(
+                "📦 Total Size: {:.2} MB",
+                census.total_bytes as f64 / 1_048_576.0
+            );
             println!("⏸️  Deferred Trees: {}", census.deferred_count);
         }
         _ => {

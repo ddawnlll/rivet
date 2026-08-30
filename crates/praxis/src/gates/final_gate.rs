@@ -4,9 +4,9 @@
 //! Evaluates all acceptance criteria against evidence gathered by prior gates.
 //! Only FinalGate PASS authorizes task completion (Law 1).
 
-use chrono::Utc;
 use crate::gates::exec_gate::CommandRunResult;
 use crate::types::*;
+use chrono::Utc;
 
 pub struct FinalGate;
 
@@ -23,27 +23,52 @@ impl FinalGate {
         let mut evidence_refs = Vec::new();
 
         // 1. Safety Rule: Prior Gate FAIL cannot PASS
-        let prior_fail = prior_gate_results.iter().find(|g| g.verdict == GateVerdict::Fail);
-        let prior_hold = prior_gate_results.iter().any(|g| g.verdict == GateVerdict::Hold);
+        let prior_fail = prior_gate_results
+            .iter()
+            .find(|g| g.verdict == GateVerdict::Fail);
+        let prior_hold = prior_gate_results
+            .iter()
+            .any(|g| g.verdict == GateVerdict::Hold);
 
         if let Some(fail_gate) = prior_fail {
             reason_codes.push(reason_codes::PRIOR_GATE_NOT_PASS.to_string());
             diagnostics.push(Diagnostic::error(
                 "PRIOR_GATE_NOT_PASS",
-                format!("Prior gate '{}' failed. FinalGate cannot produce PASS.", fail_gate.gate_name),
+                format!(
+                    "Prior gate '{}' failed. FinalGate cannot produce PASS.",
+                    fail_gate.gate_name
+                ),
             ));
-            return build_result(GateVerdict::Fail, reason_codes, diagnostics, failed_criteria_ids, evidence_refs, attempt_id);
+            return build_result(
+                GateVerdict::Fail,
+                reason_codes,
+                diagnostics,
+                failed_criteria_ids,
+                evidence_refs,
+                attempt_id,
+            );
         }
 
         // 2. Safety Rule: Zero criteria -> HOLD
-        let all_criteria: Vec<&AcceptanceCriterion> = plan.tasks.iter().flat_map(|t| &t.acceptance_criteria).collect();
+        let all_criteria: Vec<&AcceptanceCriterion> = plan
+            .tasks
+            .iter()
+            .flat_map(|t| &t.acceptance_criteria)
+            .collect();
         if all_criteria.is_empty() {
             reason_codes.push(reason_codes::NO_CRITERIA_DEFINED.to_string());
             diagnostics.push(Diagnostic::warning(
                 "NO_CRITERIA_DEFINED",
                 "No acceptance criteria defined in plan",
             ));
-            return build_result(GateVerdict::Hold, reason_codes, diagnostics, failed_criteria_ids, evidence_refs, attempt_id);
+            return build_result(
+                GateVerdict::Hold,
+                reason_codes,
+                diagnostics,
+                failed_criteria_ids,
+                evidence_refs,
+                attempt_id,
+            );
         }
 
         // 3. Evaluate each criterion
@@ -52,7 +77,8 @@ impl FinalGate {
         let mut deterministic_total = 0;
 
         for crit in all_criteria {
-            let is_deterministic = crit.verification.deterministic && !crit.verification.advisory_only;
+            let is_deterministic =
+                crit.verification.deterministic && !crit.verification.advisory_only;
             if is_deterministic {
                 deterministic_total += 1;
             }
@@ -92,7 +118,14 @@ impl FinalGate {
                 "NO_DETERMINISTIC_CRITERIA",
                 "All criteria are advisory. FinalGate requires at least one passing deterministic criterion.",
             ));
-            return build_result(GateVerdict::Hold, reason_codes, diagnostics, failed_criteria_ids, evidence_refs, attempt_id);
+            return build_result(
+                GateVerdict::Hold,
+                reason_codes,
+                diagnostics,
+                failed_criteria_ids,
+                evidence_refs,
+                attempt_id,
+            );
         }
 
         // 5. Verdict aggregation
@@ -107,7 +140,14 @@ impl FinalGate {
             GateVerdict::Hold
         };
 
-        build_result(verdict, reason_codes, diagnostics, failed_criteria_ids, evidence_refs, attempt_id)
+        build_result(
+            verdict,
+            reason_codes,
+            diagnostics,
+            failed_criteria_ids,
+            evidence_refs,
+            attempt_id,
+        )
     }
 }
 

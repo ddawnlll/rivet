@@ -3,9 +3,9 @@
 //! Fast deterministic repository census, hierarchical relevance tree,
 //! and DEFER classification for generated/vendored trees.
 
-use std::path::{Path, PathBuf};
 use rivet_types::*;
 use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PathRelevance {

@@ -16,8 +16,8 @@ impl JestParser {
         for line in combined.lines() {
             let line_trimmed = line.trim();
             // Example: "Tests:       4 passed, 1 failed, 5 total"
-            if line_trimmed.starts_with("Tests:") {
-                let parts: Vec<&str> = line_trimmed["Tests:".len()..].split(',').collect();
+            if let Some(stripped) = line_trimmed.strip_prefix("Tests:") {
+                let parts: Vec<&str> = stripped.split(',').collect();
                 for part in parts {
                     let part = part.trim();
                     if part.contains("passed") {
@@ -28,10 +28,10 @@ impl JestParser {
                         if let Some(n) = extract_num(part) {
                             failed = n;
                         }
-                    } else if part.contains("skipped") || part.contains("todo") {
-                        if let Some(n) = extract_num(part) {
-                            skipped += n;
-                        }
+                    } else if (part.contains("skipped") || part.contains("todo"))
+                        && let Some(n) = extract_num(part)
+                    {
+                        skipped += n;
                     }
                 }
             }

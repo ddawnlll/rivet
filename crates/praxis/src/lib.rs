@@ -9,23 +9,28 @@
 //! - Circuit breaker and failure rate tracking
 //! - LCOV and Istanbul coverage report analysis
 
-pub mod types;
-pub mod merkle;
-pub mod ledger;
-pub mod coverage;
 pub mod circuit_breaker;
-pub mod parsers;
+pub mod coverage;
 pub mod gates;
+pub mod ledger;
+pub mod merkle;
+pub mod parsers;
 pub mod pipeline;
+pub mod types;
 
-pub use types::*;
-pub use merkle::{MerkleProof, MerkleProofStep, hash_leaf, hash_node, root_from_hashes, root_from_records, inclusion_proof, verify_proof};
-pub use ledger::{Ledger, LedgerRecord, LedgerHeader, LedgerState};
-pub use coverage::{CoverageParser, CoverageResult, CoverageTotals, FileCoverage};
 pub use circuit_breaker::{CircuitBreaker, CircuitBreakerConfig, CircuitBreakerState};
-pub use parsers::{CargoTestParser, PytestParser, JestParser, GoTestParser, ParsedTestReport};
-pub use gates::{SchemaGate, LockGate, EvidenceGate, WiringGate, ExecGate, CoverageGate, FinalGate};
+pub use coverage::{CoverageParser, CoverageResult, CoverageTotals, FileCoverage};
+pub use gates::{
+    CoverageGate, EvidenceGate, ExecGate, FinalGate, LockGate, SchemaGate, WiringGate,
+};
+pub use ledger::{Ledger, LedgerHeader, LedgerRecord, LedgerState};
+pub use merkle::{
+    MerkleProof, MerkleProofStep, hash_leaf, hash_node, inclusion_proof, root_from_hashes,
+    root_from_records, verify_proof,
+};
+pub use parsers::{CargoTestParser, GoTestParser, JestParser, ParsedTestReport, PytestParser};
 pub use pipeline::{VerityPipeline, VerityPipelineResult};
+pub use types::*;
 
 use accp::{VerificationReceipt, VerificationRequest};
 use chrono::Utc;

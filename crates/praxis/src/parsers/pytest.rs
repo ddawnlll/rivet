@@ -15,24 +15,27 @@ impl PytestParser {
         for line in stdout.lines() {
             let line_trimmed = line.trim();
             // Example summary: "==== 12 passed, 2 failed, 1 skipped in 0.45s ===="
-            if line_trimmed.contains(" passed") || line_trimmed.contains(" failed") || line_trimmed.contains(" error") {
-                if line_trimmed.starts_with("===") && line_trimmed.ends_with("===") {
-                    let parts: Vec<&str> = line_trimmed.split(',').collect();
-                    for part in parts {
-                        let part = part.trim_matches(|c: char| c == '=' || c.is_whitespace());
-                        if part.contains("passed") {
-                            if let Some(n) = extract_first_num(part) {
-                                passed = n;
-                            }
-                        } else if part.contains("failed") || part.contains("error") {
-                            if let Some(n) = extract_first_num(part) {
-                                failed += n;
-                            }
-                        } else if part.contains("skipped") {
-                            if let Some(n) = extract_first_num(part) {
-                                skipped = n;
-                            }
+            if (line_trimmed.contains(" passed")
+                || line_trimmed.contains(" failed")
+                || line_trimmed.contains(" error"))
+                && line_trimmed.starts_with("===")
+                && line_trimmed.ends_with("===")
+            {
+                let parts: Vec<&str> = line_trimmed.split(',').collect();
+                for part in parts {
+                    let part = part.trim_matches(|c: char| c == '=' || c.is_whitespace());
+                    if part.contains("passed") {
+                        if let Some(n) = extract_first_num(part) {
+                            passed = n;
                         }
+                    } else if part.contains("failed") || part.contains("error") {
+                        if let Some(n) = extract_first_num(part) {
+                            failed += n;
+                        }
+                    } else if part.contains("skipped")
+                        && let Some(n) = extract_first_num(part)
+                    {
+                        skipped = n;
                     }
                 }
             }

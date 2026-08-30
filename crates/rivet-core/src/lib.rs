@@ -4,13 +4,13 @@
 //! View Compilation -> Model Controller -> ACCP Authorization ->
 //! Runtime Execution -> Praxis Verification -> Noesis State Update.
 
-use std::sync::Arc;
-use accp::{ActionDecision, ActionDecisionVerdict, AccpSemanticGate};
+use accp::{AccpSemanticGate, ActionDecision, ActionDecisionVerdict};
 use noesis::{CognitiveView, HardState, NoesisEvent, SoftWorkspace};
 use rivet_model::{CognitiveAction, ModelBackend, ModelRequest};
 use rivet_runtime::Runtime;
 use rivet_store::HardStateStore;
 use rivet_types::*;
+use std::sync::Arc;
 use tokio::sync::Mutex;
 
 /// Explicit phase state machine for a single cognitive cycle

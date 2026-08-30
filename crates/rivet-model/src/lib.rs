@@ -3,13 +3,13 @@
 //! Provides the provider-agnostic ModelBackend trait, CognitiveAction representations,
 //! and invocation receipts for compute accounting.
 
-use std::sync::Arc;
 use accp::ActionProposal;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use noesis::CognitiveView;
 use rivet_types::*;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 /// Concrete cognitive action emitted by the model controller
 #[derive(Debug, Clone, Serialize, Deserialize)]

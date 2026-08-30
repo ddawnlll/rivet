@@ -2,10 +2,10 @@
 //!
 //! Parses Istanbul/c8 JSON and LCOV coverage reports and extracts per-file and total metrics.
 
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
-use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Metric {
@@ -42,10 +42,26 @@ impl Default for CoverageResult {
     fn default() -> Self {
         Self {
             total: CoverageTotals {
-                lines: Metric { total: 0, covered: 0, pct: 0.0 },
-                branches: Metric { total: 0, covered: 0, pct: 0.0 },
-                functions: Metric { total: 0, covered: 0, pct: 0.0 },
-                statements: Metric { total: 0, covered: 0, pct: 0.0 },
+                lines: Metric {
+                    total: 0,
+                    covered: 0,
+                    pct: 0.0,
+                },
+                branches: Metric {
+                    total: 0,
+                    covered: 0,
+                    pct: 0.0,
+                },
+                functions: Metric {
+                    total: 0,
+                    covered: 0,
+                    pct: 0.0,
+                },
+                statements: Metric {
+                    total: 0,
+                    covered: 0,
+                    pct: 0.0,
+                },
             },
             files: Vec::new(),
             parse_success: false,
@@ -60,18 +76,23 @@ impl CoverageParser {
     pub fn parse_file(path: impl AsRef<Path>) -> CoverageResult {
         let p = path.as_ref();
         if !p.exists() {
-            let mut res = CoverageResult::default();
-            res.raw_path = Some(p.to_string_lossy().to_string());
-            return res;
+            return CoverageResult {
+                raw_path: Some(p.to_string_lossy().to_string()),
+                ..CoverageResult::default()
+            };
         }
 
         let Ok(content) = fs::read_to_string(p) else {
-            let mut res = CoverageResult::default();
-            res.raw_path = Some(p.to_string_lossy().to_string());
-            return res;
+            return CoverageResult {
+                raw_path: Some(p.to_string_lossy().to_string()),
+                ..CoverageResult::default()
+            };
         };
 
-        if p.extension().map_or(false, |ext| ext == "info") || content.starts_with("TN:") || content.starts_with("SF:") {
+        if p.extension().is_some_and(|ext| ext == "info")
+            || content.starts_with("TN:")
+            || content.starts_with("SF:")
+        {
             Self::parse_lcov(&content)
         } else {
             Self::parse_istanbul_json(&content)
@@ -95,7 +116,11 @@ impl CoverageParser {
         let mut c_stmts = 0;
 
         for (file_path, file_data) in data {
-            let path = file_data.get("path").and_then(|v| v.as_str()).unwrap_or(&file_path).to_string();
+            let path = file_data
+                .get("path")
+                .and_then(|v| v.as_str())
+                .unwrap_or(&file_path)
+                .to_string();
 
             // Lines
             let (tot_l, cov_l) = count_map(file_data.get("l"));
@@ -106,29 +131,73 @@ impl CoverageParser {
             // Statements
             let (tot_s, cov_s) = count_map(file_data.get("s"));
 
-            let pct_l = if tot_l > 0 { round((cov_l as f64 / tot_l as f64) * 100.0) } else { 0.0 };
-            let pct_b = if tot_b > 0 { round((cov_b as f64 / tot_b as f64) * 100.0) } else { 0.0 };
-            let pct_f = if tot_f > 0 { round((cov_f as f64 / tot_f as f64) * 100.0) } else { 0.0 };
+            let pct_l = if tot_l > 0 {
+                round((cov_l as f64 / tot_l as f64) * 100.0)
+            } else {
+                0.0
+            };
+            let pct_b = if tot_b > 0 {
+                round((cov_b as f64 / tot_b as f64) * 100.0)
+            } else {
+                0.0
+            };
+            let pct_f = if tot_f > 0 {
+                round((cov_f as f64 / tot_f as f64) * 100.0)
+            } else {
+                0.0
+            };
 
             files.push(FileCoverage {
                 path,
-                lines: Metric { total: tot_l, covered: cov_l, pct: pct_l },
-                branches: Metric { total: tot_b, covered: cov_b, pct: pct_b },
-                functions: Metric { total: tot_f, covered: cov_f, pct: pct_f },
+                lines: Metric {
+                    total: tot_l,
+                    covered: cov_l,
+                    pct: pct_l,
+                },
+                branches: Metric {
+                    total: tot_b,
+                    covered: cov_b,
+                    pct: pct_b,
+                },
+                functions: Metric {
+                    total: tot_f,
+                    covered: cov_f,
+                    pct: pct_f,
+                },
             });
 
-            t_lines += tot_l; c_lines += cov_l;
-            t_branches += tot_b; c_branches += cov_b;
-            t_funcs += tot_f; c_funcs += cov_f;
-            t_stmts += tot_s; c_stmts += cov_s;
+            t_lines += tot_l;
+            c_lines += cov_l;
+            t_branches += tot_b;
+            c_branches += cov_b;
+            t_funcs += tot_f;
+            c_funcs += cov_f;
+            t_stmts += tot_s;
+            c_stmts += cov_s;
         }
 
         CoverageResult {
             total: CoverageTotals {
-                lines: Metric { total: t_lines, covered: c_lines, pct: calc_pct(c_lines, t_lines) },
-                branches: Metric { total: t_branches, covered: c_branches, pct: calc_pct(c_branches, t_branches) },
-                functions: Metric { total: t_funcs, covered: c_funcs, pct: calc_pct(c_funcs, t_funcs) },
-                statements: Metric { total: t_stmts, covered: c_stmts, pct: calc_pct(c_stmts, t_stmts) },
+                lines: Metric {
+                    total: t_lines,
+                    covered: c_lines,
+                    pct: calc_pct(c_lines, t_lines),
+                },
+                branches: Metric {
+                    total: t_branches,
+                    covered: c_branches,
+                    pct: calc_pct(c_branches, t_branches),
+                },
+                functions: Metric {
+                    total: t_funcs,
+                    covered: c_funcs,
+                    pct: calc_pct(c_funcs, t_funcs),
+                },
+                statements: Metric {
+                    total: t_stmts,
+                    covered: c_stmts,
+                    pct: calc_pct(c_stmts, t_stmts),
+                },
             },
             files,
             parse_success: true,
@@ -158,9 +227,12 @@ impl CoverageParser {
             let line = line.trim();
             if let Some(path) = line.strip_prefix("SF:") {
                 current_file = path.to_string();
-                cur_lines_found = 0; cur_lines_hit = 0;
-                cur_funcs_found = 0; cur_funcs_hit = 0;
-                cur_branches_found = 0; cur_branches_hit = 0;
+                cur_lines_found = 0;
+                cur_lines_hit = 0;
+                cur_funcs_found = 0;
+                cur_funcs_hit = 0;
+                cur_branches_found = 0;
+                cur_branches_hit = 0;
             } else if let Some(val) = line.strip_prefix("LF:") {
                 cur_lines_found = val.parse().unwrap_or(0);
             } else if let Some(val) = line.strip_prefix("LH:") {
@@ -180,23 +252,54 @@ impl CoverageParser {
 
                 files.push(FileCoverage {
                     path: current_file.clone(),
-                    lines: Metric { total: cur_lines_found, covered: cur_lines_hit, pct: pct_l },
-                    branches: Metric { total: cur_branches_found, covered: cur_branches_hit, pct: pct_b },
-                    functions: Metric { total: cur_funcs_found, covered: cur_funcs_hit, pct: pct_f },
+                    lines: Metric {
+                        total: cur_lines_found,
+                        covered: cur_lines_hit,
+                        pct: pct_l,
+                    },
+                    branches: Metric {
+                        total: cur_branches_found,
+                        covered: cur_branches_hit,
+                        pct: pct_b,
+                    },
+                    functions: Metric {
+                        total: cur_funcs_found,
+                        covered: cur_funcs_hit,
+                        pct: pct_f,
+                    },
                 });
 
-                t_lines += cur_lines_found; c_lines += cur_lines_hit;
-                t_branches += cur_branches_found; c_branches += cur_branches_hit;
-                t_funcs += cur_funcs_found; c_funcs += cur_funcs_hit;
+                t_lines += cur_lines_found;
+                c_lines += cur_lines_hit;
+                t_branches += cur_branches_found;
+                c_branches += cur_branches_hit;
+                t_funcs += cur_funcs_found;
+                c_funcs += cur_funcs_hit;
             }
         }
 
         CoverageResult {
             total: CoverageTotals {
-                lines: Metric { total: t_lines, covered: c_lines, pct: calc_pct(c_lines, t_lines) },
-                branches: Metric { total: t_branches, covered: c_branches, pct: calc_pct(c_branches, t_branches) },
-                functions: Metric { total: t_funcs, covered: c_funcs, pct: calc_pct(c_funcs, t_funcs) },
-                statements: Metric { total: t_lines, covered: c_lines, pct: calc_pct(c_lines, t_lines) },
+                lines: Metric {
+                    total: t_lines,
+                    covered: c_lines,
+                    pct: calc_pct(c_lines, t_lines),
+                },
+                branches: Metric {
+                    total: t_branches,
+                    covered: c_branches,
+                    pct: calc_pct(c_branches, t_branches),
+                },
+                functions: Metric {
+                    total: t_funcs,
+                    covered: c_funcs,
+                    pct: calc_pct(c_funcs, t_funcs),
+                },
+                statements: Metric {
+                    total: t_lines,
+                    covered: c_lines,
+                    pct: calc_pct(c_lines, t_lines),
+                },
             },
             files,
             parse_success: true,

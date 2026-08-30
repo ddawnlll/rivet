@@ -1,4 +1,3 @@
-use std::sync::Arc;
 use accp::{ActionProposal, ActionRisk};
 use async_trait::async_trait;
 use chrono::Utc;
@@ -8,6 +7,7 @@ use rivet_model::{CognitiveAction, ModelBackend, ModelRequest, ModelResponse, To
 use rivet_runtime::Runtime;
 use rivet_store::MemoryStore;
 use rivet_types::*;
+use std::sync::Arc;
 use tokio::sync::Mutex;
 
 /// Mock ModelBackend for deterministic testing
@@ -148,9 +148,7 @@ async fn test_completion_rejected_if_obligation_unclosed() {
         .unwrap();
 
     // Model attempt to complete MUST FAIL with SemanticViolation
-    let res = harness
-        .step("Fix issue", "Finish the task")
-        .await;
+    let res = harness.step("Fix issue", "Finish the task").await;
 
     assert!(res.is_err());
     let err_msg = res.unwrap_err().to_string();
@@ -175,7 +173,11 @@ async fn test_completion_rejected_if_obligation_unclosed() {
         usage: TokenUsage::default(),
     }]));
 
-    let harness2 = HarnessCore::new(store.clone(), model2, Arc::new(Runtime::new(tmp_dir.path())));
+    let harness2 = HarnessCore::new(
+        store.clone(),
+        model2,
+        Arc::new(Runtime::new(tmp_dir.path())),
+    );
     let res2 = harness2.step("Fix issue", "Finish the task").await;
     assert!(res2.is_ok());
     assert!(res2.unwrap().contains("Task completed"));

@@ -2,11 +2,11 @@
 //!
 //! Orchestrates the full 8-Gate Verity Truth Kernel Pipeline.
 
-use std::path::{Path, PathBuf};
 use accp::VerificationReceipt;
 use chrono::Utc;
 use rivet_types::*;
 use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
 
 use crate::gates::coverage_gate::CoverageGate;
 use crate::gates::evidence_gate::EvidenceGate;
@@ -69,7 +69,10 @@ impl VerityPipeline {
         gate_results.push(g1);
 
         // 2. LockGate
-        let lock_path = self.repo_root.join(".praxis").join(format!("{}.lock.json", plan.metadata.plan_id));
+        let lock_path = self
+            .repo_root
+            .join(".praxis")
+            .join(format!("{}.lock.json", plan.metadata.plan_id));
         let (g2, _) = LockGate::evaluate(plan, &lock_path, self.lock_mode, attempt_id);
         gate_results.push(g2);
 

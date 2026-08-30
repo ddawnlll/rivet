@@ -3,8 +3,8 @@
 //! Strongly typed shared identifiers, revision counters, epistemic classes,
 //! and fundamental value objects used across Rivet.
 
-use std::fmt;
 use serde::{Deserialize, Serialize};
+use std::fmt;
 use uuid::Uuid;
 
 /// Macro to generate type-safe prefixed string IDs
@@ -65,7 +65,9 @@ define_id!(ActionId, "act");
 define_id!(ReceiptId, "rcpt");
 
 /// Monotonically increasing revision counter bound to mutable state
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, Default)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, Default,
+)]
 pub struct Revision(pub u64);
 
 impl Revision {

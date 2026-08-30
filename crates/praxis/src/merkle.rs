@@ -4,8 +4,8 @@
 //! (RFC 6962-style). Used for EvidenceBundle.merkleRoot computation and
 //! inclusion-proof verification.
 
-use sha2::{Digest, Sha256};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 pub const MERKLE_LEAF_PREFIX: u8 = 0x00;
 pub const MERKLE_NODE_PREFIX: u8 = 0x01;
@@ -91,14 +91,14 @@ pub fn inclusion_proof(leaf_hashes: &[[u8; 32]], index: usize) -> Result<MerkleP
 
     while level.len() > 1 {
         let is_last_odd = level.len() % 2 == 1 && i == level.len() - 1;
-        let sibling = if is_last_odd {
-            level[i]
-        } else {
-            level[i ^ 1]
-        };
+        let sibling = if is_last_odd { level[i] } else { level[i ^ 1] };
 
         steps.push(MerkleProofStep {
-            side: if (i & 1) == 0 { "right".into() } else { "left".into() },
+            side: if (i & 1) == 0 {
+                "right".into()
+            } else {
+                "left".into()
+            },
             hash: hex::encode(sibling),
         });
 

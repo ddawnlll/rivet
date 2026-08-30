@@ -3,14 +3,14 @@
 //! Pluggable test output parsers for multi-language mechanical verification.
 
 pub mod cargo;
-pub mod pytest;
-pub mod jest;
 pub mod go;
+pub mod jest;
+pub mod pytest;
 
 pub use cargo::CargoTestParser;
-pub use pytest::PytestParser;
-pub use jest::JestParser;
 pub use go::GoTestParser;
+pub use jest::JestParser;
+pub use pytest::PytestParser;
 
 use serde::{Deserialize, Serialize};
 

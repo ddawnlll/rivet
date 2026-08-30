@@ -2,11 +2,11 @@
 //!
 //! Sandboxed process execution, file mutations, and environment observations.
 
-use std::path::{Path, PathBuf};
-use std::time::Instant;
 use accp::{ActionProposal, ExecutionReceipt};
 use chrono::Utc;
 use rivet_types::*;
+use std::path::{Path, PathBuf};
+use std::time::Instant;
 use tokio::process::Command;
 
 pub struct Runtime {
@@ -37,7 +37,12 @@ impl Runtime {
                 .output(),
         )
         .await
-        .map_err(|_| RivetError::Runtime(format!("Command '{}' timed out after {}s", cmd, timeout_seconds)))?
+        .map_err(|_| {
+            RivetError::Runtime(format!(
+                "Command '{}' timed out after {}s",
+                cmd, timeout_seconds
+            ))
+        })?
         .map_err(|e| RivetError::Runtime(e.to_string()))?;
 
         let duration_ms = start.elapsed().as_millis() as u64;
@@ -69,11 +74,19 @@ impl Runtime {
                     .and_then(|v| v.as_str())
                     .unwrap_or("");
                 match tokio::fs::write(&path, content).await {
-                    Ok(_) => (true, Some(0), format!("Wrote {} bytes to {}", content.len(), proposal.target)),
+                    Ok(_) => (
+                        true,
+                        Some(0),
+                        format!("Wrote {} bytes to {}", content.len(), proposal.target),
+                    ),
                     Err(e) => (false, Some(1), format!("Failed to write: {}", e)),
                 }
             }
-            _ => (false, Some(1), format!("Unknown capability: {}", proposal.capability)),
+            _ => (
+                false,
+                Some(1),
+                format!("Unknown capability: {}", proposal.capability),
+            ),
         };
 
         let duration_ms = start.elapsed().as_millis() as u64;

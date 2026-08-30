@@ -3,9 +3,9 @@
 //! Gate 4: WiringGate
 //! Validates task dependency graphs, detecting cycles and unresolved references.
 
-use std::collections::{HashMap, HashSet};
-use chrono::Utc;
 use crate::types::*;
+use chrono::Utc;
+use std::collections::{HashMap, HashSet};
 
 pub struct WiringGate;
 
@@ -15,7 +15,8 @@ impl WiringGate {
         let mut diagnostics = Vec::new();
         let failed_criteria_ids = Vec::new();
 
-        let task_map: HashMap<String, &PlanTask> = plan.tasks.iter().map(|t| (t.id.clone(), t)).collect();
+        let task_map: HashMap<String, &PlanTask> =
+            plan.tasks.iter().map(|t| (t.id.clone(), t)).collect();
 
         // 1. Check unresolved dependencies
         for task in &plan.tasks {
@@ -35,7 +36,9 @@ impl WiringGate {
         let mut rec_stack = HashSet::new();
 
         for task in &plan.tasks {
-            if !visited.contains(&task.id) && has_cycle(&task.id, &task_map, &mut visited, &mut rec_stack) {
+            if !visited.contains(&task.id)
+                && has_cycle(&task.id, &task_map, &mut visited, &mut rec_stack)
+            {
                 reason_codes.push(reason_codes::CIRCULAR_DEPENDENCY.to_string());
                 diagnostics.push(Diagnostic::error(
                     "CIRCULAR_DEPENDENCY",
@@ -130,6 +133,9 @@ mod tests {
 
         let res = WiringGate::evaluate(&plan, "att-1");
         assert_eq!(res.verdict, GateVerdict::Fail);
-        assert!(res.reason_codes.contains(&reason_codes::CIRCULAR_DEPENDENCY.to_string()));
+        assert!(
+            res.reason_codes
+                .contains(&reason_codes::CIRCULAR_DEPENDENCY.to_string())
+        );
     }
 }

@@ -3,10 +3,10 @@
 //! Gate 6: CoverageGate
 //! Evaluates code coverage metrics from reports against threshold requirements.
 
-use std::path::Path;
-use chrono::Utc;
 use crate::coverage::CoverageParser;
 use crate::types::*;
+use chrono::Utc;
+use std::path::Path;
 
 pub struct CoverageGate;
 
@@ -23,7 +23,13 @@ impl CoverageGate {
         let Some(path) = report_path else {
             // No coverage report requested -> pass
             reason_codes.push(reason_codes::COVERAGE_PASS.to_string());
-            return build_result(GateVerdict::Pass, reason_codes, diagnostics, evidence_refs, attempt_id);
+            return build_result(
+                GateVerdict::Pass,
+                reason_codes,
+                diagnostics,
+                evidence_refs,
+                attempt_id,
+            );
         };
 
         let path = path.as_ref();
@@ -35,7 +41,13 @@ impl CoverageGate {
                 "COVERAGE_PARSE_ERROR",
                 format!("Failed to parse coverage report at {}", path.display()),
             ));
-            return build_result(GateVerdict::Fail, reason_codes, diagnostics, evidence_refs, attempt_id);
+            return build_result(
+                GateVerdict::Fail,
+                reason_codes,
+                diagnostics,
+                evidence_refs,
+                attempt_id,
+            );
         }
 
         evidence_refs.push(format!("cov-{}", path.display()));
@@ -49,16 +61,31 @@ impl CoverageGate {
                     coverage.total.lines.pct, min_line_pct
                 ),
             ));
-            return build_result(GateVerdict::Fail, reason_codes, diagnostics, evidence_refs, attempt_id);
+            return build_result(
+                GateVerdict::Fail,
+                reason_codes,
+                diagnostics,
+                evidence_refs,
+                attempt_id,
+            );
         }
 
         reason_codes.push(reason_codes::COVERAGE_PASS.to_string());
         diagnostics.push(Diagnostic::info(
             "COVERAGE_MET",
-            format!("Coverage requirement satisfied: {:.1}% >= {:.1}%", coverage.total.lines.pct, min_line_pct),
+            format!(
+                "Coverage requirement satisfied: {:.1}% >= {:.1}%",
+                coverage.total.lines.pct, min_line_pct
+            ),
         ));
 
-        build_result(GateVerdict::Pass, reason_codes, diagnostics, evidence_refs, attempt_id)
+        build_result(
+            GateVerdict::Pass,
+            reason_codes,
+            diagnostics,
+            evidence_refs,
+            attempt_id,
+        )
     }
 }
 

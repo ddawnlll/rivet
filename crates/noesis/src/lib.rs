@@ -3,10 +3,10 @@
 //! Owns the authoritative Hard State, bounded Soft Workspace, event replay,
 //! state promotion, and cognitive view compilation.
 
-use std::collections::HashMap;
 use chrono::{DateTime, Utc};
 use rivet_types::*;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 /// Materialized durable claim in Hard State
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -200,7 +200,10 @@ pub struct CognitiveView {
 impl CognitiveView {
     pub fn format_prompt_block(&self) -> String {
         let mut out = String::new();
-        out.push_str(&format!("### CURRENT GOAL (Revision: {})\n", self.hard_revision));
+        out.push_str(&format!(
+            "### CURRENT GOAL (Revision: {})\n",
+            self.hard_revision
+        ));
         out.push_str(&format!("{}\n\n", self.goal_description));
 
         if !self.active_claims.is_empty() {
@@ -259,7 +262,10 @@ mod tests {
         let state2 = HardState::replay(&events);
 
         assert_eq!(state1.revision, Revision(2));
-        assert_eq!(state1.claims.get(&c_id).unwrap().status, EpistemicStatus::Verified);
+        assert_eq!(
+            state1.claims.get(&c_id).unwrap().status,
+            EpistemicStatus::Verified
+        );
         assert_eq!(state1.revision, state2.revision);
     }
 }

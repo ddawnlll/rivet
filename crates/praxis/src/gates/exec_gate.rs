@@ -4,11 +4,11 @@
 //! Validates allowed commands, executes them with timeouts and sandbox constraints,
 //! and records stdout/stderr evidence.
 
+use crate::types::*;
+use chrono::Utc;
 use std::path::Path;
 use std::time::Instant;
-use chrono::Utc;
 use tokio::process::Command;
-use crate::types::*;
 
 #[derive(Debug, Clone)]
 pub struct CommandRunResult {
@@ -41,12 +41,19 @@ impl ExecGate {
         // 1. Validate commands against policy before running
         for cmd in &plan.commands.exact_allowed_commands {
             // Check hard denied
-            let is_denied = plan.commands.hard_denied_commands.iter().any(|d| cmd.command.contains(d));
+            let is_denied = plan
+                .commands
+                .hard_denied_commands
+                .iter()
+                .any(|d| cmd.command.contains(d));
             if is_denied {
                 reason_codes.push(reason_codes::COMMAND_DENIED.to_string());
                 diagnostics.push(Diagnostic::error(
                     "COMMAND_DENIED",
-                    format!("Command '{}' matches hardDeniedCommands policy", cmd.command),
+                    format!(
+                        "Command '{}' matches hardDeniedCommands policy",
+                        cmd.command
+                    ),
                 ));
                 run_results.push(CommandRunResult {
                     command_id: cmd.id.clone(),
@@ -112,7 +119,10 @@ impl ExecGate {
                 reason_codes.push(reason_codes::COMMAND_TIMEOUT.to_string());
                 diagnostics.push(Diagnostic::error(
                     "COMMAND_TIMEOUT",
-                    format!("Command '{}' timed out after {}s", cmd.command, timeout_secs),
+                    format!(
+                        "Command '{}' timed out after {}s",
+                        cmd.command, timeout_secs
+                    ),
                 ));
             } else if let Some(code) = exit_code {
                 let expected = cmd.expected_exit_code.unwrap_or(0);
@@ -122,7 +132,10 @@ impl ExecGate {
                     reason_codes.push(reason_codes::EXIT_CODE_NONZERO.to_string());
                     diagnostics.push(Diagnostic::error(
                         "EXIT_CODE_NONZERO",
-                        format!("Command '{}' exited with code {} (expected {})", cmd.command, code, expected),
+                        format!(
+                            "Command '{}' exited with code {} (expected {})",
+                            cmd.command, code, expected
+                        ),
                     ));
                 }
             }

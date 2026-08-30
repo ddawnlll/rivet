@@ -3,8 +3,8 @@
 //! Gate 1: SchemaGate
 //! Validates structural correctness, required fields, and unique IDs in the PlanSpec.
 
-use chrono::Utc;
 use crate::types::*;
+use chrono::Utc;
 
 pub struct SchemaGate;
 
@@ -16,12 +16,18 @@ impl SchemaGate {
 
         // 1. Check PlanMetadata
         if plan.metadata.plan_id.trim().is_empty() {
-            diagnostics.push(Diagnostic::error("MISSING_PLAN_ID", "PlanSpec missing metadata.plan_id"));
+            diagnostics.push(Diagnostic::error(
+                "MISSING_PLAN_ID",
+                "PlanSpec missing metadata.plan_id",
+            ));
             reason_codes.push(reason_codes::MISSING_REQUIRED_FIELD.to_string());
         }
 
         if plan.metadata.version.trim().is_empty() {
-            diagnostics.push(Diagnostic::error("MISSING_VERSION", "PlanSpec missing metadata.version"));
+            diagnostics.push(Diagnostic::error(
+                "MISSING_VERSION",
+                "PlanSpec missing metadata.version",
+            ));
             reason_codes.push(reason_codes::MISSING_REQUIRED_FIELD.to_string());
         }
 
@@ -30,13 +36,19 @@ impl SchemaGate {
         let mut seen_criterion_ids = std::collections::HashSet::new();
 
         if plan.tasks.is_empty() {
-            diagnostics.push(Diagnostic::warning("EMPTY_TASKS", "PlanSpec contains no tasks"));
+            diagnostics.push(Diagnostic::warning(
+                "EMPTY_TASKS",
+                "PlanSpec contains no tasks",
+            ));
             reason_codes.push(reason_codes::SCHEMA_VALIDATION_ERROR.to_string());
         }
 
         for task in &plan.tasks {
             if !seen_task_ids.insert(task.id.clone()) {
-                diagnostics.push(Diagnostic::error("DUPLICATE_TASK_ID", format!("Duplicate task id '{}'", task.id)));
+                diagnostics.push(Diagnostic::error(
+                    "DUPLICATE_TASK_ID",
+                    format!("Duplicate task id '{}'", task.id),
+                ));
                 reason_codes.push(reason_codes::SCHEMA_VALIDATION_ERROR.to_string());
             }
 

@@ -2,9 +2,9 @@
 //!
 //! Circuit breaker and failure rate tracker for execution and gate pipelines.
 
+use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
-use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -17,9 +17,9 @@ pub enum CircuitBreakerState {
 #[derive(Debug, Clone)]
 pub struct CircuitBreakerConfig {
     pub failure_rate_threshold: f64, // e.g. 0.5 (50%)
-    pub minimum_requests: usize,      // e.g. 5
-    pub window_size: usize,           // e.g. 10
-    pub reset_timeout: Duration,      // e.g. 30s
+    pub minimum_requests: usize,     // e.g. 5
+    pub window_size: usize,          // e.g. 10
+    pub reset_timeout: Duration,     // e.g. 30s
 }
 
 impl Default for CircuitBreakerConfig {
