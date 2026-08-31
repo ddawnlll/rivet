@@ -202,12 +202,15 @@ impl Runtime {
                             )
                         }
                     },
-                    Err(error) => (
-                        false,
-                        Some(1),
-                        format!("Failed to write temporary file: {error}"),
-                        serde_json::json!({ "kind": "file.write", "target": proposal.target }),
-                    ),
+                    Err(error) => {
+                        let _ = tokio::fs::remove_file(&temp_path).await;
+                        (
+                            false,
+                            Some(1),
+                            format!("Failed to write temporary file: {error}"),
+                            serde_json::json!({ "kind": "file.write", "target": proposal.target }),
+                        )
+                    }
                 }
             }
             _ => (
@@ -288,8 +291,21 @@ impl Runtime {
             .map_err(|error| {
                 RivetError::Runtime(format!("working directory is unavailable: {error}"))
             })?;
-        let candidate = root.join(target);
-        let check_path = if tokio::fs::try_exists(&candidate).await.unwrap_or(false) {
+        let norm_target = target.replace('\\', "/");
+        let candidate = root.join(&norm_target);
+
+        let is_existing = match tokio::fs::symlink_metadata(&candidate).await {
+            Ok(meta) => {
+                if meta.is_symlink() {
+                    tokio::fs::canonicalize(&candidate).await.is_ok()
+                } else {
+                    true
+                }
+            }
+            Err(_) => false,
+        };
+
+        let check_path = if is_existing {
             tokio::fs::canonicalize(&candidate)
                 .await
                 .map_err(|error| RivetError::Runtime(error.to_string()))?
