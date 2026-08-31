@@ -1,5 +1,7 @@
 pub mod goal_compiler;
-pub use goal_compiler::{GoalCompiler, GoalSpec, ObligationGraph, ObligationNode, ObligationPredicate, ObligationStatus};
+pub use goal_compiler::{
+    GoalCompiler, GoalSpec, ObligationGraph, ObligationNode, ObligationPredicate, ObligationStatus,
+};
 
 use accp::{
     AccpEnvelope, AccpMessage, AccpSemanticGate, ActionAuthorizationPolicy, CompletionProposal,
@@ -165,7 +167,12 @@ impl HarnessCore {
 
         let mut signals = Vec::new();
         for dir in census.active_directory_frontier(8) {
-            signals.push(format!("{}: {} files ({} KB)", dir.relative_path, dir.file_count, dir.total_bytes / 1024));
+            signals.push(format!(
+                "{}: {} files ({} KB)",
+                dir.relative_path,
+                dir.file_count,
+                dir.total_bytes / 1024
+            ));
         }
         self.set_repository_signals(signals).await;
 
@@ -195,6 +202,10 @@ impl HarnessCore {
 
     pub async fn current_phase(&self) -> RunPhase {
         *self.phase.lock().await
+    }
+
+    pub async fn cancel(&self) {
+        self.set_phase(RunPhase::Cancelled).await;
     }
 
     async fn set_phase(&self, phase: RunPhase) {
@@ -406,9 +417,7 @@ impl HarnessCore {
                         &proposal_message,
                     )?
                     .validate_direction()?;
-                    let invocation_revision = view_revision.next();
-                    self.run_verification_at(request, invocation_revision)
-                        .await?;
+                    self.run_verification_at(request, view_revision).await?;
                 }
                 CognitiveAction::ClaimProposal(proposal) => {
                     self.set_phase(RunPhase::RevisingState).await;
@@ -666,9 +675,10 @@ impl HarnessCore {
         expected_revision: Revision,
     ) -> RivetResult<accp::VerificationReceipt> {
         let current_revision = self.hard_state.lock().await.revision;
+        let invocation_revision = expected_revision.next();
         if request.target_scope.repository != self.repository_id
             || request.target_scope.revision != expected_revision
-            || current_revision != expected_revision
+            || (current_revision != expected_revision && current_revision != invocation_revision)
         {
             return Err(RivetError::SemanticViolation(
                 "Verification request is outside the current repository or state revision".into(),
@@ -750,11 +760,16 @@ impl HarnessCore {
             let mut tracker = self.failure_tracker.lock().await;
             tracker.record_failure(
                 &request.predicate,
-                receipt.diagnostics.as_deref().unwrap_or("verification failed"),
+                receipt
+                    .diagnostics
+                    .as_deref()
+                    .unwrap_or("verification failed"),
             );
             if self.hephaestus.should_intervene(&tracker) {
                 let mut soft = self.soft_workspace.lock().await;
-                let reframing = self.hephaestus.analyze_and_reframe(&tracker, &soft.hypotheses);
+                let reframing = self
+                    .hephaestus
+                    .analyze_and_reframe(&tracker, &soft.hypotheses);
                 soft.hypotheses.clear();
                 for hyp in reframing.new_hypothesis_candidates {
                     soft.add_hypothesis(format!("[Hephaestus Reframed] {}", hyp));
@@ -885,12 +900,13 @@ impl HarnessCore {
             }
             _ => {}
         }
-        let expected = hard.revision.next();
-        let revision = self.store.append_event(&event).await?;
-        if revision != expected {
+        let expected_revision = hard.revision;
+        let revision = self.store.append_event(expected_revision, &event).await?;
+        if revision != expected_revision.next() {
             return Err(RivetError::Storage(format!(
                 "event store revision {} does not match expected {}",
-                revision, expected
+                revision,
+                expected_revision.next()
             )));
         }
         hard.apply(&event);

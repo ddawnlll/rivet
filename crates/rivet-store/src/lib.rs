@@ -14,7 +14,11 @@ const STATE_TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("noesis_m
 
 #[async_trait]
 pub trait HardStateStore: Send + Sync {
-    async fn append_event(&self, event: &NoesisEvent) -> RivetResult<Revision>;
+    async fn append_event(
+        &self,
+        expected_revision: Revision,
+        event: &NoesisEvent,
+    ) -> RivetResult<Revision>;
     async fn read_events(&self, from_revision: Revision) -> RivetResult<Vec<NoesisEvent>>;
     async fn save_checkpoint(&self, state: &HardState) -> RivetResult<()>;
     async fn load_checkpoint(&self) -> RivetResult<Option<HardState>>;
@@ -43,11 +47,22 @@ impl Default for MemoryStore {
 
 #[async_trait]
 impl HardStateStore for MemoryStore {
-    async fn append_event(&self, event: &NoesisEvent) -> RivetResult<Revision> {
+    async fn append_event(
+        &self,
+        expected_revision: Revision,
+        event: &NoesisEvent,
+    ) -> RivetResult<Revision> {
         let mut events = self
             .events
             .lock()
             .map_err(|_| RivetError::Storage("memory store mutex poisoned".into()))?;
+        let actual_revision = Revision(events.len() as u64);
+        if actual_revision != expected_revision {
+            return Err(RivetError::StaleState {
+                expected: expected_revision,
+                actual: actual_revision,
+            });
+        }
         events.push(event.clone());
         Ok(Revision(events.len() as u64))
     }
@@ -114,7 +129,11 @@ impl RedbStore {
 
 #[async_trait]
 impl HardStateStore for RedbStore {
-    async fn append_event(&self, event: &NoesisEvent) -> RivetResult<Revision> {
+    async fn append_event(
+        &self,
+        expected_revision: Revision,
+        event: &NoesisEvent,
+    ) -> RivetResult<Revision> {
         let _guard = self
             .write_lock
             .lock()
@@ -130,10 +149,16 @@ impl HardStateStore for RedbStore {
             let mut table = write_txn
                 .open_table(EVENTS_TABLE)
                 .map_err(|e| RivetError::Storage(e.to_string()))?;
-            let next_rev = table
+            let actual_revision = table
                 .len()
-                .map_err(|e| RivetError::Storage(e.to_string()))?
-                + 1;
+                .map_err(|e| RivetError::Storage(e.to_string()))?;
+            if Revision(actual_revision) != expected_revision {
+                return Err(RivetError::StaleState {
+                    expected: expected_revision,
+                    actual: Revision(actual_revision),
+                });
+            }
+            let next_rev = actual_revision + 1;
             table
                 .insert(next_rev, serialized.as_slice())
                 .map_err(|e| RivetError::Storage(e.to_string()))?;
@@ -142,18 +167,7 @@ impl HardStateStore for RedbStore {
             .commit()
             .map_err(|e| RivetError::Storage(e.to_string()))?;
 
-        // Read total count to determine current revision
-        let read_txn = self
-            .db
-            .begin_read()
-            .map_err(|e| RivetError::Storage(e.to_string()))?;
-        let table = read_txn
-            .open_table(EVENTS_TABLE)
-            .map_err(|e| RivetError::Storage(e.to_string()))?;
-        let count = table
-            .len()
-            .map_err(|e| RivetError::Storage(e.to_string()))?;
-        Ok(Revision(count))
+        Ok(expected_revision.next())
     }
 
     async fn read_events(&self, from_revision: Revision) -> RivetResult<Vec<NoesisEvent>> {

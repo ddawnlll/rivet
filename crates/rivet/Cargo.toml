@@ -29,4 +29,7 @@ anyhow = { workspace = true }
 ratatui = { workspace = true }
 crossterm = { workspace = true }
 arboard = "3.4"
+hjkl-clipboard = "0.41"
 unicode-width = "0.2"
+base64 = "0.22"
+thiserror = "1.0"

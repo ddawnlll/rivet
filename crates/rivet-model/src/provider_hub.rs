@@ -8,8 +8,8 @@
 //! Supports dynamic endpoint discovery (/v1/models & /api/tags), custom provider addition,
 //! and OpenCode-style configuration resolution.
 
-use crate::auth::{normalize_provider_id, AuthStore};
 use crate::RivetResult;
+use crate::auth::{AuthStore, normalize_provider_id};
 use rivet_types::*;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
@@ -66,7 +66,9 @@ pub fn get_known_providers() -> Vec<KnownProvider> {
         KnownProvider {
             id: "gemini".into(),
             name: "Google Gemini".into(),
-            default_base_url: Some("https://generativelanguage.googleapis.com/v1beta/openai".into()),
+            default_base_url: Some(
+                "https://generativelanguage.googleapis.com/v1beta/openai".into(),
+            ),
             env_vars: vec!["GEMINI_API_KEY".into(), "GOOGLE_API_KEY".into()],
             default_model: "gemini-2.0-flash".into(),
             description: "Next-gen speed, reasoning & 2M context".into(),
@@ -86,10 +88,7 @@ pub fn get_known_providers() -> Vec<KnownProvider> {
             env_vars: vec!["DEEPSEEK_API_KEY".into()],
             default_model: "deepseek-chat".into(),
             description: "DeepSeek V3 / R1 reasoning MoE".into(),
-            standard_models: vec![
-                "deepseek-chat".into(),
-                "deepseek-reasoner".into(),
-            ],
+            standard_models: vec!["deepseek-chat".into(), "deepseek-reasoner".into()],
             requires_api_key: true,
             is_popular: true,
         },
@@ -179,10 +178,7 @@ pub fn get_known_providers() -> Vec<KnownProvider> {
             env_vars: vec!["CEREBRAS_API_KEY".into()],
             default_model: "llama3.3-70b".into(),
             description: "Ultra-fast CS-3 wafer scale inference".into(),
-            standard_models: vec![
-                "llama3.3-70b".into(),
-                "llama3.1-8b".into(),
-            ],
+            standard_models: vec!["llama3.3-70b".into(), "llama3.1-8b".into()],
             requires_api_key: true,
             is_popular: false,
         },
@@ -287,11 +283,7 @@ pub fn get_known_providers() -> Vec<KnownProvider> {
             env_vars: vec!["AZURE_OPENAI_API_KEY".into(), "AZURE_API_KEY".into()],
             default_model: "gpt-4o".into(),
             description: "Microsoft Azure Enterprise OpenAI Service".into(),
-            standard_models: vec![
-                "gpt-4o".into(),
-                "gpt-4o-mini".into(),
-                "o1-mini".into(),
-            ],
+            standard_models: vec!["gpt-4o".into(), "gpt-4o-mini".into(), "o1-mini".into()],
             requires_api_key: true,
             is_popular: false,
         },
@@ -314,7 +306,10 @@ pub fn get_known_providers() -> Vec<KnownProvider> {
             id: "google-vertex".into(),
             name: "Google Vertex AI".into(),
             default_base_url: None,
-            env_vars: vec!["GOOGLE_APPLICATION_CREDENTIALS".into(), "VERTEX_API_KEY".into()],
+            env_vars: vec![
+                "GOOGLE_APPLICATION_CREDENTIALS".into(),
+                "VERTEX_API_KEY".into(),
+            ],
             default_model: "gemini-2.0-flash".into(),
             description: "Google Cloud Enterprise Vertex AI Platform".into(),
             standard_models: vec![
@@ -361,10 +356,7 @@ pub fn get_known_providers() -> Vec<KnownProvider> {
             env_vars: vec!["GITLAB_TOKEN".into(), "GITLAB_API_KEY".into()],
             default_model: "duo-chat".into(),
             description: "GitLab Duo AI developer platform".into(),
-            standard_models: vec![
-                "duo-chat".into(),
-                "code-suggestions".into(),
-            ],
+            standard_models: vec!["duo-chat".into(), "code-suggestions".into()],
             requires_api_key: true,
             is_popular: false,
         },
@@ -390,9 +382,7 @@ pub fn get_known_providers() -> Vec<KnownProvider> {
             env_vars: vec!["OPENCODE_API_KEY".into(), "OPENCODE_ZEN_API_KEY".into()],
             default_model: "muse-spark-1.2-contributor-free".into(),
             description: "OpenCode community developer models".into(),
-            standard_models: vec![
-                "muse-spark-1.2-contributor-free".into(),
-            ],
+            standard_models: vec!["muse-spark-1.2-contributor-free".into()],
             requires_api_key: true,
             is_popular: true,
         },
@@ -420,7 +410,10 @@ pub struct ModelCatalogEntry {
 }
 
 /// Dynamic Model discovery from standard OpenAI-compatible `/v1/models` and Ollama endpoints
-pub async fn fetch_remote_models(base_url: &str, api_key: Option<&str>) -> RivetResult<Vec<String>> {
+pub async fn fetch_remote_models(
+    base_url: &str,
+    api_key: Option<&str>,
+) -> RivetResult<Vec<String>> {
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(8))
         .build()
@@ -441,10 +434,9 @@ pub async fn fetch_remote_models(base_url: &str, api_key: Option<&str>) -> Rivet
         req = req.header("Authorization", format!("Bearer {}", key));
     }
 
-    let resp = req
-        .send()
-        .await
-        .map_err(|e| RivetError::Model(format!("Failed to connect to model endpoint {url}: {e}")))?;
+    let resp = req.send().await.map_err(|e| {
+        RivetError::Model(format!("Failed to connect to model endpoint {url}: {e}"))
+    })?;
 
     if !resp.status().is_success() {
         // Fallback for native Ollama /api/tags if /v1/models is not supported
@@ -524,7 +516,8 @@ impl ProviderRegistry {
             "openai".into()
         } else if std::env::var("ANTHROPIC_API_KEY").is_ok() {
             "anthropic".into()
-        } else if std::env::var("GEMINI_API_KEY").is_ok() || std::env::var("GOOGLE_API_KEY").is_ok() {
+        } else if std::env::var("GEMINI_API_KEY").is_ok() || std::env::var("GOOGLE_API_KEY").is_ok()
+        {
             "gemini".into()
         } else if std::env::var("DEEPSEEK_API_KEY").is_ok() {
             "deepseek".into()
@@ -684,18 +677,23 @@ mod tests {
         let path = tmp.path().join("auth.json");
         let store = AuthStore::with_path(&path);
 
-        store.set_provider_config(
-            "cerebras",
-            "csk-test1234",
-            Some("https://api.cerebras.ai/v1"),
-            Some("llama3.3-70b"),
-            vec!["llama3.3-70b".into()],
-        ).unwrap();
+        store
+            .set_provider_config(
+                "cerebras",
+                "csk-test1234",
+                Some("https://api.cerebras.ai/v1"),
+                Some("llama3.3-70b"),
+                vec!["llama3.3-70b".into()],
+            )
+            .unwrap();
         store.set_active_provider("cerebras").unwrap();
 
         let resolved = ProviderRegistry::resolve(None, None, &store).unwrap();
         assert_eq!(resolved.provider, "cerebras");
         assert_eq!(resolved.model_id, "llama3.3-70b");
-        assert_eq!(resolved.base_url.as_deref(), Some("https://api.cerebras.ai/v1"));
+        assert_eq!(
+            resolved.base_url.as_deref(),
+            Some("https://api.cerebras.ai/v1")
+        );
     }
 }

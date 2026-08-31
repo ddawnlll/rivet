@@ -3,8 +3,8 @@ pub mod provider_hub;
 
 pub use auth::{AuthData, AuthInfo, AuthStore};
 pub use provider_hub::{
-    fetch_remote_models, get_known_providers, KnownProvider, ModelCatalogEntry, ProviderRegistry,
-    ResolvedProviderConfig,
+    KnownProvider, ModelCatalogEntry, ProviderRegistry, ResolvedProviderConfig,
+    fetch_remote_models, get_known_providers,
 };
 
 use accp::{ActionProposal, ClaimProposal, StateTransitionProposal, VerificationRequest};
@@ -199,5 +199,37 @@ pub trait ModelBackend: Send + Sync {
     /// simple providers retain the same semantic contract via one chunk.
     async fn stream(&self, request: ModelRequest) -> RivetResult<Vec<String>> {
         Ok(vec![self.invoke(request).await?.text_content])
+    }
+}
+
+/// Thread-safe dynamic model backend adapter allowing hot-swapping providers and models at runtime.
+#[derive(Clone)]
+pub struct DynamicModelBackend {
+    inner: Arc<tokio::sync::RwLock<Arc<dyn ModelBackend>>>,
+}
+
+impl DynamicModelBackend {
+    pub fn new(initial: Arc<dyn ModelBackend>) -> Self {
+        Self {
+            inner: Arc::new(tokio::sync::RwLock::new(initial)),
+        }
+    }
+
+    pub async fn set_backend(&self, new_backend: Arc<dyn ModelBackend>) {
+        let mut w = self.inner.write().await;
+        *w = new_backend;
+    }
+}
+
+#[async_trait]
+impl ModelBackend for DynamicModelBackend {
+    async fn invoke(&self, request: ModelRequest) -> RivetResult<ModelResponse> {
+        let backend = { self.inner.read().await.clone() };
+        backend.invoke(request).await
+    }
+
+    async fn stream(&self, request: ModelRequest) -> RivetResult<Vec<String>> {
+        let backend = { self.inner.read().await.clone() };
+        backend.stream(request).await
     }
 }

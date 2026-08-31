@@ -176,9 +176,9 @@ impl Ledger {
 
         let data = lines.join("\n") + "\n";
         let count = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let staging_path = self
-            .path
-            .with_extension(format!("staging.{}.{}", std::process::id(), count));
+        let staging_path =
+            self.path
+                .with_extension(format!("staging.{}.{}", std::process::id(), count));
         fs::write(&staging_path, data).map_err(|e| e.to_string())?;
         fs::rename(&staging_path, &self.path).map_err(|e| e.to_string())?;
         Ok(())

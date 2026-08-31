@@ -1,6 +1,6 @@
 use chrono::Utc;
 use noesis::{HardState, NoesisEvent};
-use rivet_store::{HardStateStore, RedbStore};
+use rivet_store::{HardStateStore, MemoryStore, RedbStore};
 use rivet_types::*;
 use std::process::Command;
 
@@ -29,10 +29,19 @@ async fn test_redb_persistence_and_replay_across_reopen() {
     // 1. First session: open store, append events, save checkpoint, close
     {
         let store = RedbStore::open(&db_path).unwrap();
-        let rev1 = store.append_event(&event1).await.unwrap();
+        let rev1 = store.append_event(Revision::ZERO, &event1).await.unwrap();
         assert_eq!(rev1, Revision(1));
 
-        let rev2 = store.append_event(&event2).await.unwrap();
+        let stale = store.append_event(Revision::ZERO, &event2).await;
+        assert!(matches!(
+            stale,
+            Err(RivetError::StaleState {
+                expected: Revision::ZERO,
+                actual: Revision(1)
+            })
+        ));
+
+        let rev2 = store.append_event(Revision(1), &event2).await.unwrap();
         assert_eq!(rev2, Revision(2));
 
         let events = store.read_events(Revision::ZERO).await.unwrap();
@@ -81,7 +90,10 @@ async fn uncheckpointed_events_are_recoverable_from_append_log() {
 
     {
         let store = RedbStore::open(&db_path).unwrap();
-        assert_eq!(store.append_event(&event).await.unwrap(), Revision(1));
+        assert_eq!(
+            store.append_event(Revision::ZERO, &event).await.unwrap(),
+            Revision(1)
+        );
         // Simulate a process ending after the append and before checkpoint.
     }
 
@@ -103,12 +115,15 @@ async fn crash_child_appends_then_exits_before_checkpoint() {
     };
     let store = RedbStore::open(db_path).unwrap();
     store
-        .append_event(&NoesisEvent::EvidenceRecorded {
-            evidence_id: EvidenceId::new(),
-            source: "crash-child".into(),
-            summary: "append committed before simulated process crash".into(),
-            timestamp: Utc::now(),
-        })
+        .append_event(
+            Revision::ZERO,
+            &NoesisEvent::EvidenceRecorded {
+                evidence_id: EvidenceId::new(),
+                source: "crash-child".into(),
+                summary: "append committed before simulated process crash".into(),
+                timestamp: Utc::now(),
+            },
+        )
         .await
         .unwrap();
     std::process::exit(101);
@@ -148,4 +163,49 @@ async fn test_read_events_at_max_revision() {
 
     let events = store.read_events(Revision(u64::MAX)).await.unwrap();
     assert!(events.is_empty());
+}
+
+#[tokio::test]
+async fn concurrent_append_at_stale_revision_returns_stale_state() {
+    let store = std::sync::Arc::new(MemoryStore::new());
+    let first = NoesisEvent::EvidenceRecorded {
+        evidence_id: EvidenceId::new(),
+        source: "concurrent-one".into(),
+        summary: "first append wins".into(),
+        timestamp: Utc::now(),
+    };
+    let second = NoesisEvent::EvidenceRecorded {
+        evidence_id: EvidenceId::new(),
+        source: "concurrent-two".into(),
+        summary: "stale append is rejected".into(),
+        timestamp: Utc::now(),
+    };
+
+    let (left, right) = tokio::join!(
+        store.append_event(Revision::ZERO, &first),
+        store.append_event(Revision::ZERO, &second)
+    );
+    let results = [left, right];
+    assert_eq!(
+        results
+            .iter()
+            .filter(|result| matches!(result, Ok(Revision(1))))
+            .count(),
+        1
+    );
+    assert_eq!(
+        results
+            .iter()
+            .filter(|result| {
+                matches!(
+                    result,
+                    Err(RivetError::StaleState {
+                        expected: Revision::ZERO,
+                        actual: Revision(1)
+                    })
+                )
+            })
+            .count(),
+        1
+    );
 }

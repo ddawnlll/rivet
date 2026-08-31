@@ -3,22 +3,22 @@
 //! Provides automated evaluation harness, standard V8 coding benchmarks,
 //! ablation mode isolation, and empirical comparison scorecard generation.
 
-pub mod scenario;
 pub mod ablation;
 pub mod metrics;
 pub mod runner;
+pub mod scenario;
 
-pub use scenario::{BenchmarkScenario, ScenarioSuite};
 pub use ablation::AblationMode;
-pub use metrics::{ScenarioResult, AblationScorecard};
+pub use metrics::{AblationScorecard, ScenarioResult};
 pub use runner::EvalRunner;
+pub use scenario::{BenchmarkScenario, ScenarioSuite};
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
     use rivet_model::*;
     use rivet_types::*;
+    use std::sync::Arc;
 
     struct MockEvalModel;
 
@@ -46,7 +46,8 @@ mod tests {
         let mut results = Vec::new();
 
         for scenario in &scenarios {
-            let res = EvalRunner::run_scenario(scenario, AblationMode::FullRivet, model.clone()).await;
+            let res =
+                EvalRunner::run_scenario(scenario, AblationMode::FullRivet, model.clone()).await;
             results.push(res);
         }
 

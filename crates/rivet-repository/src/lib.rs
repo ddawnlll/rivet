@@ -331,8 +331,14 @@ impl IgnoreRules {
 }
 
 fn relative_path(root: &Path, path: &Path) -> String {
-    let clean_root = root.to_string_lossy().replace(r"\\?\", "").replace('\\', "/");
-    let clean_path = path.to_string_lossy().replace(r"\\?\", "").replace('\\', "/");
+    let clean_root = root
+        .to_string_lossy()
+        .replace(r"\\?\", "")
+        .replace('\\', "/");
+    let clean_path = path
+        .to_string_lossy()
+        .replace(r"\\?\", "")
+        .replace('\\', "/");
     let root_trimmed = clean_root.trim_end_matches('/');
 
     if let Some(stripped) = clean_path.strip_prefix(root_trimmed) {

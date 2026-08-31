@@ -66,6 +66,13 @@ impl RigBackend {
             "openrouter" => RigProvider::OpenRouter {
                 api_key: config.api_key.clone(),
             },
+            "opencode" | "opencode-go" | "opencode_go" => RigProvider::OpenAI {
+                api_key: config.api_key.clone(),
+                base_url: config
+                    .base_url
+                    .clone()
+                    .or_else(|| Some("https://opencode.ai/zen/go/v1".into())),
+            },
             "ollama" | "local" | "mistral-rs" => RigProvider::Local {
                 base_url: config
                     .base_url
@@ -94,29 +101,23 @@ impl RigBackend {
             )
         } else if let Ok(key) = std::env::var("ANTHROPIC_API_KEY") {
             Self::new(
-                RigProvider::Anthropic {
-                    api_key: Some(key),
-                },
+                RigProvider::Anthropic { api_key: Some(key) },
                 "claude-3-7-sonnet-latest",
             )
         } else if let Ok(key) = std::env::var("DEEPSEEK_API_KEY") {
             Self::new(
-                RigProvider::DeepSeek {
-                    api_key: Some(key),
-                },
+                RigProvider::DeepSeek { api_key: Some(key) },
                 "deepseek-chat",
             )
-        } else if let Ok(key) = std::env::var("GEMINI_API_KEY")
-            .or_else(|_| std::env::var("GOOGLE_API_KEY"))
+        } else if let Ok(key) =
+            std::env::var("GEMINI_API_KEY").or_else(|_| std::env::var("GOOGLE_API_KEY"))
         {
             Self::new(
-                RigProvider::Gemini {
-                    api_key: Some(key),
-                },
+                RigProvider::Gemini { api_key: Some(key) },
                 "gemini-2.0-flash",
             )
-        } else if let Ok(base_url) = std::env::var("MISTRAL_RS_BASE_URL")
-            .or_else(|_| std::env::var("OLLAMA_HOST"))
+        } else if let Ok(base_url) =
+            std::env::var("MISTRAL_RS_BASE_URL").or_else(|_| std::env::var("OLLAMA_HOST"))
         {
             Self::new(
                 RigProvider::Local {
@@ -152,8 +153,7 @@ impl ModelBackend for RigBackend {
             "--- SYSTEM INSTRUCTIONS ---\n{}\n\n--- COGNITIVE VIEW (r{}) ---\n{}\n\n--- USER REQUEST ---\n{}",
             request.system_prompt,
             request.cognitive_view.hard_revision.0,
-            serde_json::to_string_pretty(&*request.cognitive_view)
-                .unwrap_or_else(|_| "{}".into()),
+            serde_json::to_string_pretty(&*request.cognitive_view).unwrap_or_else(|_| "{}".into()),
             request.user_prompt
         );
 

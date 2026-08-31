@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 
 use crate::gates::coverage_gate::CoverageGate;
 use crate::gates::evidence_gate::EvidenceGate;
-use crate::gates::exec_gate::ExecGate;
+use crate::gates::exec_gate::{DEFAULT_MAX_COMMAND_OUTPUT_BYTES, ExecGate};
 use crate::gates::final_gate::FinalGate;
 use crate::gates::lock_gate::{LockGate, LockMode};
 use crate::gates::schema_gate::SchemaGate;
@@ -31,6 +31,7 @@ pub struct VerityPipeline {
     repo_root: PathBuf,
     lock_mode: LockMode,
     coverage_threshold_pct: Option<f64>,
+    command_output_limit: usize,
 }
 
 impl VerityPipeline {
@@ -39,6 +40,7 @@ impl VerityPipeline {
             repo_root: repo_root.as_ref().to_path_buf(),
             lock_mode: LockMode::CreateIfMissing,
             coverage_threshold_pct: None,
+            command_output_limit: DEFAULT_MAX_COMMAND_OUTPUT_BYTES,
         }
     }
 
@@ -49,6 +51,11 @@ impl VerityPipeline {
 
     pub fn with_coverage_threshold(mut self, min_pct: f64) -> Self {
         self.coverage_threshold_pct = Some(min_pct);
+        self
+    }
+
+    pub fn with_command_output_limit(mut self, limit: usize) -> Self {
+        self.command_output_limit = limit.max(1);
         self
     }
 
@@ -73,7 +80,13 @@ impl VerityPipeline {
             .metadata
             .plan_id
             .chars()
-            .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+            .map(|c| {
+                if c.is_alphanumeric() || c == '-' || c == '_' {
+                    c
+                } else {
+                    '_'
+                }
+            })
             .collect();
         let lock_path = self
             .repo_root
@@ -90,8 +103,41 @@ impl VerityPipeline {
         let g4 = WiringGate::evaluate(plan, attempt_id);
         gate_results.push(g4);
 
-        // 5. ExecGate
-        let (g5, command_results) = ExecGate::execute_all(plan, &self.repo_root, attempt_id).await;
+        // 5. ExecGate: a failed or held prerequisite is fail-closed. In
+        // particular, do not execute commands from a plan that has not passed
+        // schema, lock, evidence, and wiring validation.
+        let prerequisites_pass = gate_results
+            .iter()
+            .all(|gate| gate.verdict == GateVerdict::Pass);
+        let (g5, command_results) = if prerequisites_pass {
+            ExecGate::execute_all_with_output_limit(
+                plan,
+                &self.repo_root,
+                attempt_id,
+                self.command_output_limit,
+            )
+            .await
+        } else {
+            (
+                GateResult {
+                    gate_name: "ExecGate".into(),
+                    verdict: GateVerdict::Hold,
+                    reason_codes: vec![reason_codes::PRIOR_GATE_NOT_PASS.to_string()],
+                    diagnostics: vec![Diagnostic::warning(
+                        "PRIOR_GATE_NOT_PASS",
+                        "ExecGate was skipped because a prerequisite gate did not PASS",
+                    )],
+                    failed_criteria_ids: Vec::new(),
+                    evidence_refs: Vec::new(),
+                    attempt_id: attempt_id.to_string(),
+                    timestamp: Utc::now(),
+                    repair_hint: Some(
+                        "Resolve all prerequisite gate failures before executing commands".into(),
+                    ),
+                },
+                Vec::new(),
+            )
+        };
         gate_results.push(g5);
 
         // 6. CoverageGate

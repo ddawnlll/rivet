@@ -32,9 +32,15 @@ impl GoTestParser {
         if !has_verbose_lines {
             for line in combined.lines() {
                 let line_trimmed = line.trim();
-                if line_trimmed.starts_with("ok  ") || line_trimmed.starts_with("ok\t") || line_trimmed == "PASS" {
+                if line_trimmed.starts_with("ok  ")
+                    || line_trimmed.starts_with("ok\t")
+                    || line_trimmed == "PASS"
+                {
                     passed += 1;
-                } else if line_trimmed.starts_with("FAIL\t") || line_trimmed.starts_with("FAIL ") || line_trimmed == "FAIL" {
+                } else if line_trimmed.starts_with("FAIL\t")
+                    || line_trimmed.starts_with("FAIL ")
+                    || line_trimmed == "FAIL"
+                {
                     failed += 1;
                 }
             }

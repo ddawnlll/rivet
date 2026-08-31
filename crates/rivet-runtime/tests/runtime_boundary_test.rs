@@ -3,6 +3,7 @@ use chrono::Utc;
 use rivet_runtime::Runtime;
 use rivet_types::*;
 use std::sync::Arc;
+use std::time::Duration;
 
 fn proposal(
     capability: &str,
@@ -148,4 +149,116 @@ async fn concurrent_retries_share_one_authoritative_receipt() {
             .unwrap(),
         "first writer only"
     );
+}
+
+#[tokio::test]
+async fn command_output_is_bounded_and_marks_truncation() {
+    let directory = tempfile::tempdir().unwrap();
+    let runtime = Runtime::new(directory.path()).with_command_output_limit(1024);
+
+    #[cfg(windows)]
+    let (program, args) = (
+        "cmd",
+        vec!["/C", "for /L %i in (1,1,10000) do @echo 0123456789"],
+    );
+    #[cfg(not(windows))]
+    let (program, args) = ("sh", vec!["-c", "yes 0123456789 | head -c 200000"]);
+
+    let (_, stdout, stderr, _) = runtime.execute_command(program, &args, 30).await.unwrap();
+
+    assert!(stdout.len() <= 1024);
+    assert!(stderr.len() <= 1024);
+    assert!(stdout.contains("[output truncated]") || stderr.contains("[output truncated]"));
+}
+
+#[tokio::test]
+async fn timeout_terminates_the_process_group() {
+    let directory = tempfile::tempdir().unwrap();
+    let pid_path = directory.path().join("child.pid");
+
+    #[cfg(windows)]
+    let (program, args, pid_check) = {
+        let escaped_pid_path = pid_path.to_string_lossy().replace('\'', "''");
+        let script = format!(
+            "$p = Start-Process -FilePath powershell -ArgumentList @('-NoProfile','-Command','Start-Sleep -Seconds 30') -PassThru; Set-Content -LiteralPath '{}' -Value $p.Id; Wait-Process -Id $p.Id",
+            escaped_pid_path
+        );
+        (
+            "powershell",
+            vec!["-NoProfile".into(), "-Command".into(), script],
+            "powershell",
+        )
+    };
+    #[cfg(unix)]
+    let (program, args, pid_check) = (
+        "sh",
+        vec!["-c".into(), "sleep 30 & echo $! > child.pid; wait".into()],
+        "kill",
+    );
+
+    let runtime = Runtime::new(directory.path());
+    let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    let timeout_result = runtime.execute_command(program, &arg_refs, 1).await;
+    assert!(matches!(
+        timeout_result,
+        Err(RivetError::Runtime(message)) if message.contains("timed out")
+    ));
+
+    let child_pid = {
+        let mut found = None;
+        for _ in 0..30 {
+            if let Ok(pid) = tokio::fs::read_to_string(&pid_path).await
+                && let Ok(pid) = pid.trim().parse::<u32>()
+            {
+                found = Some(pid);
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        found
+    };
+    let child_pid = child_pid.expect("the child process must publish its pid");
+
+    for _ in 0..30 {
+        let running = if cfg!(windows) {
+            let filter = format!(
+                "if (Get-Process -Id {} -ErrorAction SilentlyContinue) {{ exit 1 }} else {{ exit 0 }}",
+                child_pid
+            );
+            std::process::Command::new(pid_check)
+                .args(["-NoProfile", "-NonInteractive", "-Command", &filter])
+                .status()
+                .map(|status| !status.success())
+                .unwrap_or(false)
+        } else {
+            std::process::Command::new(pid_check)
+                .args(["-0", &child_pid.to_string()])
+                .status()
+                .map(|status| status.success())
+                .unwrap_or(false)
+        };
+        if !running {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    let still_running = if cfg!(windows) {
+        let filter = format!(
+            "if (Get-Process -Id {} -ErrorAction SilentlyContinue) {{ exit 1 }} else {{ exit 0 }}",
+            child_pid
+        );
+        std::process::Command::new(pid_check)
+            .args(["-NoProfile", "-NonInteractive", "-Command", &filter])
+            .status()
+            .map(|status| !status.success())
+            .unwrap_or(false)
+    } else {
+        std::process::Command::new(pid_check)
+            .args(["-0", &child_pid.to_string()])
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false)
+    };
+    assert!(!still_running, "child process {child_pid} survived timeout");
 }

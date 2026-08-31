@@ -6,12 +6,11 @@
 
 use clap::{Parser, Subcommand};
 use rivet_core::HarnessCore;
+use rivet_model::ModelBackend;
 use rivet_model::auth::AuthStore;
 use rivet_model::provider_hub::{
-    fetch_remote_models, get_known_providers, ProviderRegistry, ResolvedProviderConfig,
+    ProviderRegistry, ResolvedProviderConfig, fetch_remote_models, get_known_providers,
 };
-use rivet_model::ModelBackend;
-use rivet_model_genai::GenAiBackend;
 use rivet_model_rig::RigBackend;
 use rivet_repository::CensusRunner;
 use rivet_runtime::Runtime;
@@ -21,6 +20,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tracing_subscriber::EnvFilter;
+pub mod clipboard;
 pub mod tui;
 
 #[derive(Parser)]
@@ -36,7 +36,10 @@ struct Cli {
     #[arg(long, help = "Launch full Ratatui interactive cockpit")]
     tui: bool,
 
-    #[arg(long, help = "Select model provider (openai, anthropic, gemini, deepseek, ollama, custom)")]
+    #[arg(
+        long,
+        help = "Select model provider (openai, anthropic, gemini, deepseek, ollama, custom)"
+    )]
     provider: Option<String>,
 
     #[arg(long, help = "Select model ID")]
@@ -147,11 +150,15 @@ async fn main() -> anyhow::Result<()> {
 
     // Resolve provider & model credentials
     let (req_p, req_m) = match &cli.command {
-        Some(Commands::Chat { provider, model, .. }) => (
+        Some(Commands::Chat {
+            provider, model, ..
+        }) => (
             provider.as_deref().or(cli.provider.as_deref()),
             model.as_deref().or(cli.model.as_deref()),
         ),
-        Some(Commands::Tui { provider, model, .. }) => (
+        Some(Commands::Tui {
+            provider, model, ..
+        }) => (
             provider.as_deref().or(cli.provider.as_deref()),
             model.as_deref().or(cli.model.as_deref()),
         ),
@@ -194,11 +201,7 @@ async fn main() -> anyhow::Result<()> {
 }
 
 fn create_backend(config: &ResolvedProviderConfig) -> Arc<dyn ModelBackend> {
-    if config.provider == "opencode" {
-        Arc::new(GenAiBackend::new())
-    } else {
-        Arc::new(RigBackend::from_resolved(config))
-    }
+    Arc::new(RigBackend::from_resolved(config))
 }
 
 async fn run_tui(
@@ -209,7 +212,8 @@ async fn run_tui(
     let state_dir = target_dir.join(".rivet");
     tokio::fs::create_dir_all(&state_dir).await?;
     let store: Arc<dyn HardStateStore> = Arc::new(RedbStore::open(state_dir.join("state.redb"))?);
-    let model = create_backend(&config);
+    let initial_model = create_backend(&config);
+    let dynamic_backend = Arc::new(rivet_model::DynamicModelBackend::new(initial_model));
     let runtime = Arc::new(Runtime::new(target_dir));
     let repository_id = target_dir
         .file_name()
@@ -217,12 +221,18 @@ async fn run_tui(
         .filter(|name| !name.is_empty())
         .unwrap_or("rivet");
     let harness = Arc::new(
-        HarnessCore::open(store, model, runtime)
+        HarnessCore::open(store, dynamic_backend.clone(), runtime)
             .await?
             .with_repository_id(repository_id),
     );
 
-    let mut app = tui::TuiApp::new(harness, auth_store, config, target_dir.to_path_buf());
+    let mut app = tui::TuiApp::new(
+        harness,
+        dynamic_backend,
+        auth_store,
+        config,
+        target_dir.to_path_buf(),
+    );
     app.run().await
 }
 
@@ -270,8 +280,14 @@ async fn run_chat(target_dir: &Path, config: ResolvedProviderConfig) -> anyhow::
     );
 
     if config.api_key.is_none() && !matches!(config.provider.as_str(), "ollama" | "local") {
-        println!("\n⚠️  No API key configured for provider '{}'.", config.provider);
-        println!("👉 Run `rivet auth login {}` or pass `--api-key <key>` to configure.", config.provider);
+        println!(
+            "\n⚠️  No API key configured for provider '{}'.",
+            config.provider
+        );
+        println!(
+            "👉 Run `rivet auth login {}` or pass `--api-key <key>` to configure.",
+            config.provider
+        );
     }
 
     println!("\n💬 Interactive session. Type :quit or /help for options.");
@@ -297,7 +313,10 @@ async fn run_chat(target_dir: &Path, config: ResolvedProviderConfig) -> anyhow::
         if prompt.starts_with("/goal ") {
             let g = prompt.strip_prefix("/goal ").unwrap().trim();
             match harness.initialize_goal(g).await {
-                Ok(spec) => println!("🎯 Compiled GoalSpec with {} obligations.", spec.graph.nodes.len()),
+                Ok(spec) => println!(
+                    "🎯 Compiled GoalSpec with {} obligations.",
+                    spec.graph.nodes.len()
+                ),
                 Err(e) => println!("⚠️ Goal compilation error: {}", e),
             }
             continue;
@@ -322,7 +341,9 @@ async fn handle_auth_command(sub: AuthSubcommands, store: &AuthStore) -> anyhow:
             let provider = if let Some(p) = provider {
                 p.to_lowercase()
             } else {
-                print!("Select Provider [openai, anthropic, gemini, deepseek, openrouter, groq, ollama, custom]: ");
+                print!(
+                    "Select Provider [openai, anthropic, gemini, deepseek, openrouter, groq, ollama, custom]: "
+                );
                 io::stdout().flush()?;
                 let mut p = String::new();
                 io::stdin().read_line(&mut p)?;
@@ -337,7 +358,11 @@ async fn handle_auth_command(sub: AuthSubcommands, store: &AuthStore) -> anyhow:
             let base_url = if let Some(b) = base_url {
                 Some(b)
             } else if provider == "custom" || provider == "ollama" {
-                let default_url = if provider == "ollama" { "http://localhost:11434/v1" } else { "http://localhost:8000/v1" };
+                let default_url = if provider == "ollama" {
+                    "http://localhost:11434/v1"
+                } else {
+                    "http://localhost:8000/v1"
+                };
                 print!("Enter Base URL Endpoint [{}]: ", default_url);
                 io::stdout().flush()?;
                 let mut b = String::new();
@@ -367,7 +392,11 @@ async fn handle_auth_command(sub: AuthSubcommands, store: &AuthStore) -> anyhow:
             // Attempt remote discovery
             let mut discovered = Vec::new();
             if let Some(ref url) = base_url {
-                let k = if key.is_empty() || key == "none" { None } else { Some(key.as_str()) };
+                let k = if key.is_empty() || key == "none" {
+                    None
+                } else {
+                    Some(key.as_str())
+                };
                 if let Ok(m) = fetch_remote_models(url, k).await {
                     discovered = m;
                 }
@@ -394,7 +423,10 @@ async fn handle_auth_command(sub: AuthSubcommands, store: &AuthStore) -> anyhow:
         AuthSubcommands::List => {
             let all = store.all()?;
             let active = store.get_active_provider()?.unwrap_or_default();
-            println!("🔑 Configured Provider Credentials (stored in {}):", AuthStore::default_auth_path().display());
+            println!(
+                "🔑 Configured Provider Credentials (stored in {}):",
+                AuthStore::default_auth_path().display()
+            );
             if all.is_empty() {
                 println!("  (No credentials configured yet. Run `rivet auth login <provider>`)");
                 return Ok(());
@@ -446,13 +478,22 @@ async fn handle_models_command(
 
     println!("📚 Configured Providers & Dynamic Models:");
     if auth_data.providers.is_empty() {
-        println!("  (No providers connected yet. Run `rivet auth login <provider>` or `rivet tui`)");
+        println!(
+            "  (No providers connected yet. Run `rivet auth login <provider>` or `rivet tui`)"
+        );
     } else {
         for (p_id, info) in &auth_data.providers {
-            let active_tag = if auth_data.active_provider.as_deref() == Some(p_id) { " [ACTIVE]" } else { "" };
+            let active_tag = if auth_data.active_provider.as_deref() == Some(p_id) {
+                " [ACTIVE]"
+            } else {
+                ""
+            };
             let models = ProviderRegistry::get_available_models(p_id, store).await;
             println!("\n  📦 Provider: {}{}", p_id, active_tag);
-            println!("     Endpoint: {}", info.base_url().unwrap_or("Standard API"));
+            println!(
+                "     Endpoint: {}",
+                info.base_url().unwrap_or("Standard API")
+            );
             println!("     Models ({}) : {}", models.len(), models.join(", "));
         }
     }
@@ -460,9 +501,15 @@ async fn handle_models_command(
     println!("\n🌐 Known Providers available to connect:");
     for p in known {
         let is_connected = auth_data.providers.contains_key(&p.id);
-        let status = if is_connected { "✓ Connected" } else { "+ Available" };
+        let status = if is_connected {
+            "✓ Connected"
+        } else {
+            "+ Available"
+        };
         println!("  • {:<12} {:<15} {}", p.id, status, p.description);
     }
-    println!("\n💡 Tip: Connect any custom endpoint with `rivet auth login custom --base-url http://localhost:8000/v1`");
+    println!(
+        "\n💡 Tip: Connect any custom endpoint with `rivet auth login custom --base-url http://localhost:8000/v1`"
+    );
     Ok(())
 }

@@ -3,6 +3,14 @@ use praxis::gates::lock_gate::LockMode;
 use praxis::*;
 use std::fs;
 
+#[test]
+fn pipeline_exec_sentinel_child() {
+    let cwd = std::env::current_dir().unwrap();
+    if cwd.join("execute-sentinel.enable").exists() {
+        fs::write(cwd.join("execute-sentinel.txt"), "executed").unwrap();
+    }
+}
+
 #[tokio::test]
 async fn test_full_verity_8_gate_pipeline_success() {
     let tmp_dir = tempfile::tempdir().unwrap();
@@ -102,9 +110,65 @@ async fn test_full_verity_8_gate_pipeline_success() {
 }
 
 #[tokio::test]
+async fn exec_gate_bounds_command_output_and_marks_truncation() {
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let command = if cfg!(windows) {
+        "cmd /C \"for /L %i in (1,1,10000) do @echo 0123456789\"".to_string()
+    } else {
+        "sh -c 'yes 0123456789 | head -c 200000'".to_string()
+    };
+    let plan = PlanSpec {
+        metadata: PlanMetadata {
+            plan_id: "output-limit".into(),
+            title: "Output limit".into(),
+            version: "1.0.0".into(),
+        },
+        workspace: PlanWorkspace::default(),
+        commands: PlanCommands {
+            exact_allowed_commands: vec![ExactAllowedCommand {
+                id: "large-output".into(),
+                command,
+                cwd: None,
+                kind: "test".into(),
+                timeout_seconds: Some(30),
+                expected_exit_code: Some(0),
+                shell_allowed: Some(false),
+                no_tests_found_is_failure: Some(false),
+                expected_output_patterns: Vec::new(),
+            }],
+            hard_denied_commands: Vec::new(),
+        },
+        tasks: Vec::new(),
+    };
+
+    let (gate, results) = ExecGate::execute_all_with_output_limit(
+        &plan,
+        tmp_dir.path(),
+        "output-limit-attempt",
+        1024,
+    )
+    .await;
+
+    assert_eq!(gate.verdict, GateVerdict::Pass);
+    let result = results.first().unwrap();
+    assert!(result.stdout.len() <= 1024);
+    assert!(result.stderr.len() <= 1024);
+    assert!(
+        result.stdout.contains("[output truncated]")
+            || result.stderr.contains("[output truncated]")
+    );
+}
+
+#[tokio::test]
 async fn test_verity_pipeline_forbidden_file_security_block() {
     let tmp_dir = tempfile::tempdir().unwrap();
     let repo_root = tmp_dir.path();
+    fs::write(repo_root.join("execute-sentinel.enable"), "enabled").unwrap();
+    let child_exe = std::env::current_exe()
+        .unwrap()
+        .display()
+        .to_string()
+        .replace('\\', "/");
 
     let plan = PlanSpec {
         metadata: PlanMetadata {
@@ -116,7 +180,22 @@ async fn test_verity_pipeline_forbidden_file_security_block() {
             allowed_files: vec!["src/**".into()],
             forbidden_files: vec!["production.env".into()],
         },
-        commands: PlanCommands::default(),
+        commands: PlanCommands {
+            exact_allowed_commands: vec![ExactAllowedCommand {
+                id: "sentinel".into(),
+                command: format!(
+                    "\"{child_exe}\" --exact pipeline_exec_sentinel_child --nocapture"
+                ),
+                cwd: None,
+                kind: "test".into(),
+                timeout_seconds: Some(30),
+                expected_exit_code: Some(0),
+                shell_allowed: Some(false),
+                no_tests_found_is_failure: Some(false),
+                expected_output_patterns: Vec::new(),
+            }],
+            hard_denied_commands: Vec::new(),
+        },
         tasks: vec![PlanTask {
             id: "t1".into(),
             name: "Modify env".into(),
@@ -170,4 +249,16 @@ async fn test_verity_pipeline_forbidden_file_security_block() {
             .contains(&reason_codes::FORBIDDEN_FILE_CHANGED.to_string())
     );
     assert!(result.final_receipt.is_none());
+    assert!(!repo_root.join("execute-sentinel.txt").exists());
+    let exec_res = result
+        .gate_results
+        .iter()
+        .find(|g| g.gate_name == "ExecGate")
+        .unwrap();
+    assert_eq!(exec_res.verdict, GateVerdict::Hold);
+    assert!(
+        exec_res
+            .reason_codes
+            .contains(&reason_codes::PRIOR_GATE_NOT_PASS.to_string())
+    );
 }

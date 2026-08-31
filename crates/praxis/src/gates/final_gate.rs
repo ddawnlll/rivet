@@ -74,6 +74,7 @@ impl FinalGate {
         // 3. Evaluate each criterion
         let mut deterministic_passed = 0;
         let mut deterministic_failed = 0;
+        let mut deterministic_unexecuted = 0;
         let mut deterministic_total = 0;
 
         for crit in all_criteria {
@@ -101,7 +102,7 @@ impl FinalGate {
                 } else {
                     // Command was not executed or not found
                     if is_deterministic {
-                        deterministic_failed += 1;
+                        deterministic_unexecuted += 1;
                     }
                 }
             } else if is_deterministic {
@@ -139,7 +140,10 @@ impl FinalGate {
         let verdict = if deterministic_failed > 0 {
             reason_codes.push(reason_codes::CRITERIA_FAILED.to_string());
             GateVerdict::Fail
-        } else if deterministic_passed == deterministic_total && !prior_hold {
+        } else if prior_hold || deterministic_unexecuted > 0 {
+            reason_codes.push(reason_codes::CRITERIA_PARTIAL.to_string());
+            GateVerdict::Hold
+        } else if deterministic_passed == deterministic_total {
             reason_codes.push(reason_codes::ALL_CRITERIA_MET.to_string());
             GateVerdict::Pass
         } else {

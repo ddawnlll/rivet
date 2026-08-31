@@ -37,10 +37,7 @@ pub enum AuthInfo {
         enterprise_url: Option<String>,
     },
     #[serde(rename = "wellknown")]
-    WellKnown {
-        key: String,
-        token: String,
-    },
+    WellKnown { key: String, token: String },
 }
 
 impl AuthInfo {
@@ -114,11 +111,15 @@ impl AuthStore {
 
         #[cfg(windows)]
         {
-            if let Ok(appdata) = std::env::var("LOCALAPPDATA").or_else(|_| std::env::var("APPDATA")) {
+            if let Ok(appdata) = std::env::var("LOCALAPPDATA").or_else(|_| std::env::var("APPDATA"))
+            {
                 return Path::new(&appdata).join("rivet").join("auth.json");
             }
             if let Ok(userprofile) = std::env::var("USERPROFILE") {
-                return Path::new(&userprofile).join(".config").join("rivet").join("auth.json");
+                return Path::new(&userprofile)
+                    .join(".config")
+                    .join("rivet")
+                    .join("auth.json");
             }
         }
 
@@ -136,8 +137,8 @@ impl AuthStore {
 
     /// Read raw AuthData from environment variable or file
     pub fn load(&self) -> RivetResult<AuthData> {
-        if let Ok(content) = std::env::var("RIVET_AUTH_CONTENT")
-            .or_else(|_| std::env::var("OPENCODE_AUTH_CONTENT"))
+        if let Ok(content) =
+            std::env::var("RIVET_AUTH_CONTENT").or_else(|_| std::env::var("OPENCODE_AUTH_CONTENT"))
         {
             if let Ok(data) = serde_json::from_str::<AuthData>(&content) {
                 return Ok(data);
@@ -151,11 +152,48 @@ impl AuthStore {
             }
         }
 
-        if !self.path.exists() {
-            return Ok(AuthData::default());
-        }
+        let file_path = if self.path.exists() {
+            Some(self.path.clone())
+        } else {
+            let mut candidates = Vec::new();
+            if let Ok(userprofile) = std::env::var("USERPROFILE") {
+                candidates.push(
+                    Path::new(&userprofile)
+                        .join(".local")
+                        .join("share")
+                        .join("opencode")
+                        .join("auth.json"),
+                );
+                candidates.push(
+                    Path::new(&userprofile)
+                        .join(".config")
+                        .join("opencode")
+                        .join("auth.json"),
+                );
+            }
+            if let Ok(home) = std::env::var("HOME") {
+                candidates.push(
+                    Path::new(&home)
+                        .join(".local")
+                        .join("share")
+                        .join("opencode")
+                        .join("auth.json"),
+                );
+                candidates.push(
+                    Path::new(&home)
+                        .join(".config")
+                        .join("opencode")
+                        .join("auth.json"),
+                );
+            }
+            candidates.into_iter().find(|p| p.exists())
+        };
 
-        let mut file = File::open(&self.path)
+        let Some(path) = file_path else {
+            return Ok(AuthData::default());
+        };
+
+        let mut file = File::open(&path)
             .map_err(|e| RivetError::Storage(format!("failed to open auth file: {e}")))?;
         let mut content = String::new();
         file.read_to_string(&mut content)
@@ -165,19 +203,57 @@ impl AuthStore {
             return Ok(AuthData::default());
         }
 
-        if let Ok(data) = serde_json::from_str::<AuthData>(&content) {
-            return Ok(data);
-        }
-
-        if let Ok(providers) = serde_json::from_str::<HashMap<String, AuthInfo>>(&content) {
-            return Ok(AuthData {
+        let mut auth_data = if let Ok(data) = serde_json::from_str::<AuthData>(&content) {
+            data
+        } else if let Ok(providers) = serde_json::from_str::<HashMap<String, AuthInfo>>(&content) {
+            AuthData {
                 active_provider: None,
                 active_model: None,
                 providers,
-            });
+            }
+        } else {
+            AuthData::default()
+        };
+
+        // Normalize and populate default base_url for opencode / opencode-go if present
+        if let Some(opencode_info) = auth_data
+            .providers
+            .remove("opencode-go")
+            .or_else(|| auth_data.providers.remove("opencode_go"))
+        {
+            let api_key = opencode_info.api_key().to_string();
+            let base_url = opencode_info
+                .base_url()
+                .map(str::to_string)
+                .or_else(|| Some("https://opencode.ai/zen/go/v1".into()));
+            let def_model = opencode_info
+                .default_model()
+                .map(str::to_string)
+                .or_else(|| Some("muse-spark-1.2-contributor-free".into()));
+            let models = if opencode_info.models().is_empty() {
+                vec!["muse-spark-1.2-contributor-free".into()]
+            } else {
+                opencode_info.models().to_vec()
+            };
+            auth_data.providers.insert(
+                "opencode".into(),
+                AuthInfo::Api {
+                    key: api_key,
+                    base_url,
+                    default_model: def_model,
+                    models,
+                    metadata: None,
+                },
+            );
+            if auth_data.active_provider.as_deref() == Some("opencode-go")
+                || auth_data.active_provider.is_none()
+            {
+                auth_data.active_provider = Some("opencode".into());
+                auth_data.active_model = Some("muse-spark-1.2-contributor-free".into());
+            }
         }
 
-        Ok(AuthData::default())
+        Ok(auth_data)
     }
 
     /// Save AuthData with strict 0o600 permissions
@@ -261,7 +337,11 @@ impl AuthStore {
     pub fn set_api_key(&self, provider_id: &str, key: &str) -> RivetResult<()> {
         let current_base = self.get_base_url(provider_id).unwrap_or(None);
         let current_models = self.get_models(provider_id).unwrap_or_default();
-        let current_default = self.get(provider_id).ok().flatten().and_then(|i| i.default_model().map(str::to_string));
+        let current_default = self
+            .get(provider_id)
+            .ok()
+            .flatten()
+            .and_then(|i| i.default_model().map(str::to_string));
 
         self.set(
             provider_id,
@@ -295,7 +375,11 @@ impl AuthStore {
         )
     }
 
-    pub fn save_models_for_provider(&self, provider_id: &str, models: Vec<String>) -> RivetResult<()> {
+    pub fn save_models_for_provider(
+        &self,
+        provider_id: &str,
+        models: Vec<String>,
+    ) -> RivetResult<()> {
         let norm = normalize_provider_id(provider_id);
         let mut data = self.load()?;
         if let Some(AuthInfo::Api { models: m, .. }) = data.providers.get_mut(&norm) {
@@ -368,7 +452,9 @@ mod tests {
         assert!(store.all().unwrap().is_empty());
         assert_eq!(store.get("openai").unwrap(), None);
 
-        store.set_api_key("openai", "sk-proj-1234567890abcdef").unwrap();
+        store
+            .set_api_key("openai", "sk-proj-1234567890abcdef")
+            .unwrap();
         assert_eq!(
             store.get_api_key("openai").unwrap(),
             Some("sk-proj-1234567890abcdef".into())
@@ -380,15 +466,20 @@ mod tests {
         assert!(masked.ends_with("cdef"));
         assert!(masked.contains("..."));
 
-        store.set_provider_config(
-            "custom-vllm",
-            "none",
-            Some("http://localhost:8000/v1"),
-            Some("llama-3.3"),
-            vec!["llama-3.3".into(), "deepseek-coder".into()],
-        ).unwrap();
+        store
+            .set_provider_config(
+                "custom-vllm",
+                "none",
+                Some("http://localhost:8000/v1"),
+                Some("llama-3.3"),
+                vec!["llama-3.3".into(), "deepseek-coder".into()],
+            )
+            .unwrap();
 
-        assert_eq!(store.get_base_url("custom-vllm").unwrap(), Some("http://localhost:8000/v1".into()));
+        assert_eq!(
+            store.get_base_url("custom-vllm").unwrap(),
+            Some("http://localhost:8000/v1".into())
+        );
         assert_eq!(store.get_models("custom-vllm").unwrap().len(), 2);
 
         store.remove("openai").unwrap();

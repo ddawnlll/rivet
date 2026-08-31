@@ -8,18 +8,23 @@ use accp::{ActionProposal, ExecutionReceipt};
 use chrono::Utc;
 use rivet_types::*;
 use std::collections::HashMap;
+use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
-use tokio::process::Command;
+use tokio::io::{AsyncRead, AsyncReadExt};
+use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
 
 const MAX_OBSERVATION_BYTES: usize = 64 * 1024;
+pub const DEFAULT_MAX_COMMAND_OUTPUT_BYTES: usize = 1024 * 1024;
+const OUTPUT_TRUNCATION_MARKER: &str = "\n[output truncated]";
 
 pub struct Runtime {
     working_dir: PathBuf,
     executed_actions: Arc<Mutex<HashMap<String, CachedAction>>>,
     execution_lock: Arc<Mutex<()>>,
+    command_output_limit: usize,
 }
 
 #[derive(Clone)]
@@ -34,11 +39,17 @@ impl Runtime {
             working_dir: working_dir.as_ref().to_path_buf(),
             executed_actions: Arc::new(Mutex::new(HashMap::new())),
             execution_lock: Arc::new(Mutex::new(())),
+            command_output_limit: DEFAULT_MAX_COMMAND_OUTPUT_BYTES,
         }
     }
 
     pub fn working_dir(&self) -> &Path {
         &self.working_dir
+    }
+
+    pub fn with_command_output_limit(mut self, limit: usize) -> Self {
+        self.command_output_limit = limit.max(1);
+        self
     }
 
     /// Execute a command in the environment with a bounded wall-clock time.
@@ -50,27 +61,58 @@ impl Runtime {
     ) -> RivetResult<(i32, String, String, u64)> {
         let start = Instant::now();
 
-        let output = tokio::time::timeout(
-            std::time::Duration::from_secs(timeout_seconds),
-            Command::new(cmd)
-                .args(args)
-                .current_dir(&self.working_dir)
-                .kill_on_drop(true)
-                .output(),
-        )
-        .await
-        .map_err(|_| {
-            RivetError::Runtime(format!(
-                "Command '{}' timed out after {}s",
-                cmd, timeout_seconds
-            ))
-        })?
-        .map_err(|e| RivetError::Runtime(e.to_string()))?;
+        let mut command = Command::new(cmd);
+        command
+            .args(args)
+            .current_dir(&self.working_dir)
+            .kill_on_drop(true)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        let mut child =
+            ManagedChild::spawn(command).map_err(|e| RivetError::Runtime(e.to_string()))?;
+        let stdout = child
+            .child
+            .stdout
+            .take()
+            .ok_or_else(|| RivetError::Runtime("command stdout was not piped".into()))?;
+        let stderr = child
+            .child
+            .stderr
+            .take()
+            .ok_or_else(|| RivetError::Runtime("command stderr was not piped".into()))?;
+
+        let output =
+            match tokio::time::timeout(std::time::Duration::from_secs(timeout_seconds), async {
+                let (status, stdout, stderr) = tokio::join!(
+                    child.wait(),
+                    read_bounded(stdout, self.command_output_limit),
+                    read_bounded(stderr, self.command_output_limit),
+                );
+                (
+                    status.map_err(|e| RivetError::Runtime(e.to_string())),
+                    stdout,
+                    stderr,
+                )
+            })
+            .await
+            {
+                Ok(output) => output,
+                Err(_) => {
+                    child.terminate().await;
+                    return Err(RivetError::Runtime(format!(
+                        "Command '{}' timed out after {}s",
+                        cmd, timeout_seconds
+                    )));
+                }
+            };
+
+        let (status, (stdout, stdout_truncated), (stderr, stderr_truncated)) = output;
+        let status = status?;
 
         let duration_ms = start.elapsed().as_millis() as u64;
-        let exit_code = output.status.code().unwrap_or(-1);
-        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        let exit_code = status.code().unwrap_or(-1);
+        let stdout = bounded_string(&stdout, stdout_truncated, self.command_output_limit);
+        let stderr = bounded_string(&stderr, stderr_truncated, self.command_output_limit);
 
         Ok((exit_code, stdout, stderr, duration_ms))
     }
@@ -328,5 +370,264 @@ impl Runtime {
             return Err(RivetError::InvalidPath(target.into()));
         }
         Ok(candidate)
+    }
+}
+
+async fn read_bounded<R: AsyncRead + Unpin>(mut reader: R, limit: usize) -> (Vec<u8>, bool) {
+    let mut retained = Vec::with_capacity(limit);
+    let mut buffer = [0_u8; 8192];
+    let mut truncated = false;
+
+    loop {
+        let read = match reader.read(&mut buffer).await {
+            Ok(0) => break,
+            Ok(read) => read,
+            Err(_) => break,
+        };
+        let remaining = limit.saturating_sub(retained.len());
+        let retained_now = remaining.min(read);
+        retained.extend_from_slice(&buffer[..retained_now]);
+        if retained_now < read {
+            truncated = true;
+        }
+    }
+
+    (retained, truncated)
+}
+
+fn bounded_string(bytes: &[u8], truncated: bool, limit: usize) -> String {
+    let text_limit = if truncated {
+        limit.saturating_sub(OUTPUT_TRUNCATION_MARKER.len())
+    } else {
+        limit
+    };
+    let mut text = String::from_utf8_lossy(bytes).into_owned();
+    if text.len() > text_limit {
+        let mut end = text_limit;
+        while end > 0 && !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        text.truncate(end);
+    }
+    if truncated {
+        let remaining = limit.saturating_sub(text.len());
+        let marker_end = OUTPUT_TRUNCATION_MARKER
+            .char_indices()
+            .map(|(index, _)| index)
+            .chain(std::iter::once(OUTPUT_TRUNCATION_MARKER.len()))
+            .rfind(|&index| index <= remaining)
+            .unwrap_or(0);
+        text.push_str(&OUTPUT_TRUNCATION_MARKER[..marker_end]);
+    }
+    text
+}
+
+struct ManagedChild {
+    child: Child,
+    #[cfg(unix)]
+    pid: u32,
+    #[cfg(windows)]
+    job: usize,
+    completed: bool,
+}
+
+impl ManagedChild {
+    fn spawn(mut command: Command) -> io::Result<Self> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            unsafe {
+                command.pre_exec(|| {
+                    if setpgid(0, 0) == -1 {
+                        Err(io::Error::last_os_error())
+                    } else {
+                        Ok(())
+                    }
+                });
+            }
+        }
+
+        let child = command.spawn()?;
+        #[cfg(unix)]
+        let pid = child
+            .id()
+            .ok_or_else(|| io::Error::other("spawned process has no pid"))?;
+        #[cfg(windows)]
+        let job = create_job_for_child(&child)?;
+
+        Ok(Self {
+            child,
+            #[cfg(unix)]
+            pid,
+            #[cfg(windows)]
+            job,
+            completed: false,
+        })
+    }
+
+    async fn wait(&mut self) -> io::Result<std::process::ExitStatus> {
+        let result = self.child.wait().await;
+        if result.is_ok() {
+            self.completed = true;
+        }
+        result
+    }
+
+    async fn terminate(&mut self) {
+        #[cfg(unix)]
+        unsafe {
+            let _ = kill(-(self.pid as i32), 9);
+        }
+        #[cfg(windows)]
+        terminate_job(self.job);
+        let _ = self.child.kill().await;
+        let _ = self.child.wait().await;
+        self.completed = true;
+    }
+}
+
+impl Drop for ManagedChild {
+    fn drop(&mut self) {
+        if !self.completed {
+            #[cfg(unix)]
+            unsafe {
+                let _ = kill(-(self.pid as i32), 9);
+            }
+            #[cfg(windows)]
+            terminate_job(self.job);
+        }
+        #[cfg(windows)]
+        close_job(self.job);
+    }
+}
+
+#[cfg(unix)]
+unsafe extern "C" {
+    fn setpgid(pid: i32, pgid: i32) -> i32;
+    fn kill(pid: i32, signal: i32) -> i32;
+}
+
+#[cfg(windows)]
+#[repr(C)]
+struct JobObjectBasicLimitInformation {
+    per_process_user_time_limit: i64,
+    per_job_user_time_limit: i64,
+    limit_flags: u32,
+    minimum_working_set_size: usize,
+    maximum_working_set_size: usize,
+    active_process_limit: u32,
+    affinity: usize,
+    priority_class: u32,
+    scheduling_class: u32,
+}
+
+#[cfg(windows)]
+#[repr(C)]
+struct IoCounters {
+    read_operations: u64,
+    write_operations: u64,
+    other_operations: u64,
+    read_bytes: u64,
+    write_bytes: u64,
+    other_bytes: u64,
+}
+
+#[cfg(windows)]
+#[repr(C)]
+struct JobObjectExtendedLimitInformation {
+    basic_limit_information: JobObjectBasicLimitInformation,
+    io_info: IoCounters,
+    process_memory_limit: usize,
+    job_memory_limit: usize,
+    peak_process_memory_used: usize,
+    peak_job_memory_used: usize,
+}
+
+#[cfg(windows)]
+const JOB_OBJECT_EXTENDED_LIMIT_INFORMATION: u32 = 9;
+#[cfg(windows)]
+const JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE: u32 = 0x2000;
+
+#[cfg(windows)]
+unsafe extern "system" {
+    fn CreateJobObjectW(attributes: *mut std::ffi::c_void, name: *const u16) -> usize;
+    fn SetInformationJobObject(
+        job: usize,
+        information_class: u32,
+        information: *mut std::ffi::c_void,
+        information_length: u32,
+    ) -> i32;
+    fn AssignProcessToJobObject(job: usize, process: usize) -> i32;
+    fn TerminateJobObject(job: usize, exit_code: u32) -> i32;
+    fn CloseHandle(handle: usize) -> i32;
+}
+
+#[cfg(windows)]
+fn create_job_for_child(child: &Child) -> io::Result<usize> {
+    let job = unsafe { CreateJobObjectW(std::ptr::null_mut(), std::ptr::null()) };
+    if job == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let mut limits = JobObjectExtendedLimitInformation {
+        basic_limit_information: JobObjectBasicLimitInformation {
+            per_process_user_time_limit: 0,
+            per_job_user_time_limit: 0,
+            limit_flags: JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+            minimum_working_set_size: 0,
+            maximum_working_set_size: 0,
+            active_process_limit: 0,
+            affinity: 0,
+            priority_class: 0,
+            scheduling_class: 0,
+        },
+        io_info: IoCounters {
+            read_operations: 0,
+            write_operations: 0,
+            other_operations: 0,
+            read_bytes: 0,
+            write_bytes: 0,
+            other_bytes: 0,
+        },
+        process_memory_limit: 0,
+        job_memory_limit: 0,
+        peak_process_memory_used: 0,
+        peak_job_memory_used: 0,
+    };
+    let Some(process_handle) = child.raw_handle() else {
+        unsafe {
+            CloseHandle(job);
+        }
+        return Err(io::Error::other("spawned process has no process handle"));
+    };
+    let configured = unsafe {
+        SetInformationJobObject(
+            job,
+            JOB_OBJECT_EXTENDED_LIMIT_INFORMATION,
+            (&mut limits as *mut JobObjectExtendedLimitInformation).cast(),
+            std::mem::size_of::<JobObjectExtendedLimitInformation>() as u32,
+        )
+    } != 0;
+    let assigned =
+        configured && unsafe { AssignProcessToJobObject(job, process_handle as usize) != 0 };
+    if !assigned {
+        unsafe {
+            CloseHandle(job);
+        }
+        return Err(io::Error::last_os_error());
+    }
+    Ok(job)
+}
+
+#[cfg(windows)]
+fn terminate_job(job: usize) {
+    unsafe {
+        let _ = TerminateJobObject(job, 1);
+    }
+}
+
+#[cfg(windows)]
+fn close_job(job: usize) {
+    unsafe {
+        let _ = CloseHandle(job);
     }
 }

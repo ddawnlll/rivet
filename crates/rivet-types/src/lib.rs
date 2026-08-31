@@ -268,6 +268,12 @@ pub enum RivetError {
     #[error("Storage error: {0}")]
     Storage(String),
 
+    #[error("STALE_STATE: expected current revision {expected}, actual {actual}")]
+    StaleState {
+        expected: Revision,
+        actual: Revision,
+    },
+
     #[error("Model provider error: {0}")]
     Model(String),
 

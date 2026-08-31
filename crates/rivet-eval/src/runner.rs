@@ -2,14 +2,14 @@
 //!
 //! Executes benchmark scenarios against the HarnessCore across different ablation modes.
 
-use std::fs;
-use std::sync::Arc;
-use std::time::Instant;
 use chrono::Utc;
 use rivet_core::HarnessCore;
 use rivet_model::ModelBackend;
 use rivet_runtime::Runtime;
 use rivet_store::{HardStateStore, MemoryStore};
+use std::fs;
+use std::sync::Arc;
+use std::time::Instant;
 
 use crate::ablation::AblationMode;
 use crate::metrics::ScenarioResult;
@@ -88,7 +88,10 @@ impl EvalRunner {
             }
         }
 
-        let events = store.read_events(rivet_types::Revision::ZERO).await.unwrap_or_default();
+        let events = store
+            .read_events(rivet_types::Revision::ZERO)
+            .await
+            .unwrap_or_default();
         let hard_state = noesis::HardState::replay(&events);
         let mut total_in_tok = 0;
         let mut total_out_tok = 0;

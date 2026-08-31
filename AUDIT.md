@@ -92,7 +92,16 @@ Statuses use the requested taxonomy exactly. `COMPLETE-UNVERIFIED` means impleme
 - [UNKNOWN-USER-AUTHORITY] Should repository/model/message/ledger identifiers become newtypes? This changes public API and cannot be inferred from the raw-string scan alone.
 - [UNKNOWN-USER-AUTHORITY] Is process-group termination required on Windows and Unix with a shared portable abstraction, or is child-only termination accepted for the current slice?
 
-## Campaign state
+## Campaign after-state
 
-[OBSERVATION] No source or test patch was made. No sub-agent implementer/reviewer/verifier loop was launched because the active edit stream makes write scopes and verification receipts non-deterministic. All candidate bugs remain open; see `bugs/` and `REPORT.md`.
+The matrix above is the historical audit snapshot. The following records the authorized follow-up campaign at current HEAD `91fff718fecc76d7a29e74b77a59e9fbbf7de316`.
 
+- [OBSERVATION] The TUI process was no longer running when stabilization was checked. The tree remained dirty because it contains pre-existing/user-authorized edits plus campaign edits; it was stable enough for serialized verification.
+- [OBSERVATION] BUG-001's historical ACCP compile mismatch did not reproduce after stabilization; no BUG-001 source diff was needed.
+- [OBSERVATION] BUG-002, BUG-003, BUG-005, BUG-006, and BUG-007 have focused regression receipts and pass the final workspace gates. Per-bug records are in [bugs/](/C:/Users/dresden/Documents/rivet/bugs/).
+- [OBSERVATION] BUG-004's descendant-termination test passed on the current Windows host. Its Unix `cfg` path was compile-present but not execution-tested here; it remains an explicit UNKNOWN in [bugs/BUG-004.md](/C:/Users/dresden/Documents/rivet/bugs/BUG-004.md).
+- [OBSERVATION] Final `cargo fmt --check`, strict clippy, `cargo check --workspace`, and `cargo test --workspace` all exited 0. Receipts: [.rivet/audit/baseline/](/C:/Users/dresden/Documents/rivet/.rivet/audit/baseline/).
+- [OBSERVATION] No test attribute or test function was removed, no `#[ignore]` attribute was found, and the final workspace test output contains zero failed and zero ignored tests. Receipt: [.rivet/audit/self-check/test-integrity.txt](/C:/Users/dresden/Documents/rivet/.rivet/audit/self-check/test-integrity.txt).
+- [UNKNOWN] No separate sub-agent implementation/review/verifier tool was exposed in this session. The per-bug receipts therefore document orchestrator review plus mechanical verification, not an independent-context reviewer.
+
+The updated machine-readable before/after matrix is [AUDIT_MATRIX_AFTER.json](/C:/Users/dresden/Documents/rivet/AUDIT_MATRIX_AFTER.json). Residual structural gaps from the historical audit remain: absent `rivet-view`/`rivet-mcp`, missing explicit view provenance/rejected-path sections, no CLI `--trace`, and Hephaestus default activation.

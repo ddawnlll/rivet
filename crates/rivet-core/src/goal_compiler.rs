@@ -3,10 +3,10 @@
 //! Compiles unstructured natural language requests into structured, verifiable
 //! GoalSpecs and ObligationGraphs with typed predicates.
 
-use std::collections::HashMap;
 use chrono::Utc;
 use rivet_types::*;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 /// Status of an obligation within the graph
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -34,13 +34,9 @@ pub enum ObligationPredicate {
         content_pattern: Option<String>,
     },
     /// A set of claims must be verified in Noesis
-    ClaimsVerified {
-        claim_propositions: Vec<String>,
-    },
+    ClaimsVerified { claim_propositions: Vec<String> },
     /// Pure manual confirmation (only for human-in-the-loop)
-    HumanApproval {
-        prompt: String,
-    },
+    HumanApproval { prompt: String },
 }
 
 /// A single node in the ObligationGraph
@@ -110,11 +106,7 @@ pub struct GoalCompiler;
 
 impl GoalCompiler {
     /// Compiles a user prompt into a formal GoalSpec and ObligationGraph
-    pub fn compile(
-        user_prompt: &str,
-        repo_name: &str,
-        current_revision: Revision,
-    ) -> GoalSpec {
+    pub fn compile(user_prompt: &str, repo_name: &str, current_revision: Revision) -> GoalSpec {
         let goal_id = TaskId::new();
         let mut graph = ObligationGraph::new();
 
@@ -124,7 +116,10 @@ impl GoalCompiler {
         let root_oblg_id = ObligationId::new();
         let root_scope = Scope::global(repo_name, current_revision);
 
-        let predicate = if prompt_lower.contains("test") || prompt_lower.contains("verify") || prompt_lower.contains("fix") {
+        let predicate = if prompt_lower.contains("test")
+            || prompt_lower.contains("verify")
+            || prompt_lower.contains("fix")
+        {
             ObligationPredicate::CommandPass {
                 command: "cargo test".into(),
                 expected_exit_code: 0,
@@ -150,7 +145,9 @@ impl GoalCompiler {
         // 2. Detect mentioned files and attach file constraints
         for word in user_prompt.split_whitespace() {
             if (word.contains('.') || word.contains('/')) && !word.starts_with("http") {
-                let clean_path = word.trim_matches(|c: char| !c.is_alphanumeric() && c != '.' && c != '/' && c != '_' && c != '-');
+                let clean_path = word.trim_matches(|c: char| {
+                    !c.is_alphanumeric() && c != '.' && c != '/' && c != '_' && c != '-'
+                });
                 if clean_path.len() > 3 {
                     let file_oblg_id = ObligationId::new();
                     graph.add_obligation(ObligationNode {

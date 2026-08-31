@@ -43,6 +43,58 @@ impl ModelBackend for ScriptedModelBackend {
     }
 }
 
+struct ViewRevisionVerificationBackend {
+    obligation_id: ObligationId,
+}
+
+#[async_trait]
+impl ModelBackend for ViewRevisionVerificationBackend {
+    async fn invoke(&self, request: ModelRequest) -> RivetResult<ModelResponse> {
+        Ok(ModelResponse {
+            text_content: "Run the verification shown in the view.".into(),
+            actions: vec![CognitiveAction::VerificationRequest(
+                accp::VerificationRequest {
+                    obligation_id: self.obligation_id.clone(),
+                    predicate: "cargo --version".into(),
+                    target_scope: Scope::global("rivet", request.cognitive_view.hard_revision),
+                    timeout_seconds: 30,
+                    timestamp: Utc::now(),
+                },
+            )],
+            usage: TokenUsage::default(),
+        })
+    }
+}
+
+#[tokio::test]
+async fn model_verification_uses_the_revision_shown_in_its_view() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let store = Arc::new(MemoryStore::new());
+    let obligation_id = ObligationId::new();
+    let harness = HarnessCore::new(
+        store,
+        Arc::new(ViewRevisionVerificationBackend {
+            obligation_id: obligation_id.clone(),
+        }),
+        Arc::new(Runtime::new(temp_dir.path())),
+    );
+
+    harness
+        .record_event(NoesisEvent::ObligationCreated {
+            obligation_id,
+            description: "verification must run".into(),
+            scope: Scope::global("rivet", Revision::ZERO),
+            timestamp: Utc::now(),
+        })
+        .await
+        .unwrap();
+
+    harness
+        .step("Run verification", "Please verify the obligation")
+        .await
+        .expect("a request bound to the model's view revision must be accepted");
+}
+
 #[tokio::test]
 async fn test_end_to_end_cognitive_cycle() {
     let tmp_dir = tempfile::tempdir().unwrap();

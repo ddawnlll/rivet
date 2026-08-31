@@ -1,4 +1,3 @@
-use std::sync::Arc;
 use accp::VerificationRequest;
 use chrono::Utc;
 use rivet_core::*;
@@ -6,6 +5,7 @@ use rivet_model::*;
 use rivet_runtime::Runtime;
 use rivet_store::MemoryStore;
 use rivet_types::*;
+use std::sync::Arc;
 
 struct StubModel;
 
@@ -69,5 +69,9 @@ async fn test_goal_compiler_and_hephaestus_reframing_loop() {
     // Check that phase became Stagnated and SoftWorkspace was reframed
     assert_eq!(harness.current_phase().await, RunPhase::Stagnated);
     let soft = harness.soft_workspace.lock().await;
-    assert!(soft.hypotheses.iter().any(|h| h.contains("[Hephaestus Reframed]")));
+    assert!(
+        soft.hypotheses
+            .iter()
+            .any(|h| h.contains("[Hephaestus Reframed]"))
+    );
 }
