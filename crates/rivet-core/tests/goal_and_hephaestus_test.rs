@@ -42,22 +42,24 @@ async fn test_goal_compiler_and_hephaestus_reframing_loop() {
     assert!(open_oblg >= 2);
 
     // 2. Test Hephaestus Stagnation & Auto-Reframing
-    let oblg_id = harness
-        .hard_state
-        .lock()
-        .await
-        .obligations
-        .keys()
-        .next()
-        .unwrap()
-        .clone();
+    let (oblg_id, target_scope) = {
+        let hard = harness.hard_state.lock().await;
+        hard.obligation_scopes
+            .iter()
+            .find(|(_, s)| s.path_pattern.is_none())
+            .map(|(id, s)| (id.clone(), s.clone()))
+            .unwrap()
+    };
 
-    for i in 0..3 {
+    for _i in 0..3 {
         let current_rev = harness.hard_state.lock().await.revision;
         let failing_req = VerificationRequest {
             obligation_id: oblg_id.clone(),
             predicate: "cargo test".into(),
-            target_scope: Scope::global("rivet", current_rev),
+            target_scope: Scope {
+                revision: current_rev,
+                ..target_scope.clone()
+            },
             timeout_seconds: 10,
             timestamp: Utc::now(),
         };

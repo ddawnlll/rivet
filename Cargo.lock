@@ -1929,12 +1929,13 @@ dependencies = [
  "async-trait",
  "chrono",
  "noesis",
+ "reqwest 0.12.28",
  "rivet-types",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror",
  "tokio",
- "tracing",
 ]
 
 [[package]]

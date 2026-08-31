@@ -1,7 +1,11 @@
-//! # rivet-model (Model Contracts & Gateway)
-//!
-//! Provides the provider-agnostic ModelBackend trait, CognitiveAction representations,
-//! and invocation receipts for compute accounting.
+pub mod auth;
+pub mod provider_hub;
+
+pub use auth::{AuthData, AuthInfo, AuthStore};
+pub use provider_hub::{
+    fetch_remote_models, get_known_providers, KnownProvider, ModelCatalogEntry, ProviderRegistry,
+    ResolvedProviderConfig,
+};
 
 use accp::{ActionProposal, ClaimProposal, StateTransitionProposal, VerificationRequest};
 use async_trait::async_trait;

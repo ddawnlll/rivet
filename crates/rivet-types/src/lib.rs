@@ -220,6 +220,17 @@ pub fn is_safe_relative_path(path: impl AsRef<Path>) -> bool {
     if path.is_absolute() || path.has_root() {
         return false;
     }
+    let s = path.to_string_lossy();
+    if s.starts_with('/') || s.starts_with('\\') {
+        return false;
+    }
+    // Check for Windows drive letter like C: or c:
+    if s.len() >= 2
+        && s.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
+        && s.chars().nth(1) == Some(':')
+    {
+        return false;
+    }
     !path
         .components()
         .any(|component| matches!(component, std::path::Component::ParentDir))

@@ -803,12 +803,12 @@ impl HarnessCore {
                         .into(),
                 ));
             }
-            NoesisEvent::ObligationCreated { scope, .. } => {
-                if scope.repository != self.repository_id || scope.revision > hard.revision {
-                    return Err(RivetError::SemanticViolation(
-                        "obligation scope is outside the active Harness repository revision".into(),
-                    ));
-                }
+            NoesisEvent::ObligationCreated { scope, .. }
+                if scope.repository != self.repository_id || scope.revision > hard.revision =>
+            {
+                return Err(RivetError::SemanticViolation(
+                    "obligation scope is outside the active Harness repository revision".into(),
+                ));
             }
             NoesisEvent::ObligationClosed {
                 obligation_id,

@@ -19,6 +19,12 @@ pub struct GenAiBackend {
     api_key_env: String,
 }
 
+impl Default for GenAiBackend {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl GenAiBackend {
     pub fn new() -> Self {
         let _ = dotenvy::dotenv();
@@ -136,10 +142,10 @@ impl ModelBackend for GenAiBackend {
                 }
             }
         }
-        if !buffer.is_empty() {
-            if let Some(content) = parse_sse_line(&String::from_utf8_lossy(&buffer))? {
-                chunks.push(content);
-            }
+        if !buffer.is_empty()
+            && let Some(content) = parse_sse_line(&String::from_utf8_lossy(&buffer))?
+        {
+            chunks.push(content);
         }
         if chunks.is_empty() {
             return Err(RivetError::Model(
