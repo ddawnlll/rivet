@@ -77,3 +77,5 @@ tempfile = "3.17"
 sha2 = "0.10"
 hex = "0.4"
 regex = "1.11"
+libc = "0.2"
+

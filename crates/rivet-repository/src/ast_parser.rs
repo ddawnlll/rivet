@@ -164,45 +164,45 @@ impl AstParser {
                     });
                 }
                 is_test_next = false;
-            } else if trimmed.starts_with("pub struct ") || trimmed.starts_with("struct ") {
-                if let Some(name) = Self::extract_identifier(trimmed, "struct") {
-                    symbols.push(ExtractedSymbol {
-                        symbol_uri: format!("symbol://{}/{}", file_path, name),
-                        name,
-                        kind: SymbolKind::Struct,
-                        line_number: idx + 1,
-                        byte_start: current_byte,
-                        byte_end: current_byte + line.len(),
-                        signature: trimmed.to_string(),
-                        docstring: None,
-                    });
-                }
-            } else if trimmed.starts_with("pub enum ") || trimmed.starts_with("enum ") {
-                if let Some(name) = Self::extract_identifier(trimmed, "enum") {
-                    symbols.push(ExtractedSymbol {
-                        symbol_uri: format!("symbol://{}/{}", file_path, name),
-                        name,
-                        kind: SymbolKind::Enum,
-                        line_number: idx + 1,
-                        byte_start: current_byte,
-                        byte_end: current_byte + line.len(),
-                        signature: trimmed.to_string(),
-                        docstring: None,
-                    });
-                }
-            } else if trimmed.starts_with("pub trait ") || trimmed.starts_with("trait ") {
-                if let Some(name) = Self::extract_identifier(trimmed, "trait") {
-                    symbols.push(ExtractedSymbol {
-                        symbol_uri: format!("symbol://{}/{}", file_path, name),
-                        name,
-                        kind: SymbolKind::Trait,
-                        line_number: idx + 1,
-                        byte_start: current_byte,
-                        byte_end: current_byte + line.len(),
-                        signature: trimmed.to_string(),
-                        docstring: None,
-                    });
-                }
+            } else if (trimmed.starts_with("pub struct ") || trimmed.starts_with("struct "))
+                && let Some(name) = Self::extract_identifier(trimmed, "struct")
+            {
+                symbols.push(ExtractedSymbol {
+                    symbol_uri: format!("symbol://{}/{}", file_path, name),
+                    name,
+                    kind: SymbolKind::Struct,
+                    line_number: idx + 1,
+                    byte_start: current_byte,
+                    byte_end: current_byte + line.len(),
+                    signature: trimmed.to_string(),
+                    docstring: None,
+                });
+            } else if (trimmed.starts_with("pub enum ") || trimmed.starts_with("enum "))
+                && let Some(name) = Self::extract_identifier(trimmed, "enum")
+            {
+                symbols.push(ExtractedSymbol {
+                    symbol_uri: format!("symbol://{}/{}", file_path, name),
+                    name,
+                    kind: SymbolKind::Enum,
+                    line_number: idx + 1,
+                    byte_start: current_byte,
+                    byte_end: current_byte + line.len(),
+                    signature: trimmed.to_string(),
+                    docstring: None,
+                });
+            } else if (trimmed.starts_with("pub trait ") || trimmed.starts_with("trait "))
+                && let Some(name) = Self::extract_identifier(trimmed, "trait")
+            {
+                symbols.push(ExtractedSymbol {
+                    symbol_uri: format!("symbol://{}/{}", file_path, name),
+                    name,
+                    kind: SymbolKind::Trait,
+                    line_number: idx + 1,
+                    byte_start: current_byte,
+                    byte_end: current_byte + line.len(),
+                    signature: trimmed.to_string(),
+                    docstring: None,
+                });
             }
 
             current_byte += line_len;
