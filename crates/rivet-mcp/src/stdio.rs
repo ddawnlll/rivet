@@ -183,10 +183,10 @@ impl StdioProcessTransport {
                     continue;
                 }
                 // Try parse JSON-RPC response
-                if let Ok(resp) = serde_json::from_str::<JsonRpcResponse>(trimmed) {
-                    if resp.id == Some(id) {
-                        return Ok(resp);
-                    }
+                if let Ok(resp) = serde_json::from_str::<JsonRpcResponse>(trimmed)
+                    && resp.id == Some(id)
+                {
+                    return Ok(resp);
                 }
             }
         };
