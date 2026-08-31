@@ -222,7 +222,7 @@ async fn run_tui(
             .with_repository_id(repository_id),
     );
 
-    let mut app = tui::TuiApp::new(harness, auth_store, config);
+    let mut app = tui::TuiApp::new(harness, auth_store, config, target_dir.to_path_buf());
     app.run().await
 }
 
