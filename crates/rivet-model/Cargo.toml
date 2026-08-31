@@ -16,7 +16,11 @@ tokio = { workspace = true }
 thiserror = { workspace = true }
 chrono = { workspace = true }
 reqwest = { workspace = true }
+keyring = { workspace = true }
+secrecy = { workspace = true }
+zeroize = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+
 

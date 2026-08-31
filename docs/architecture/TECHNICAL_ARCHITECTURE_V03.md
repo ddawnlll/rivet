@@ -96,18 +96,30 @@ Rust seçimi yalnız performans gerekçesi değildir. Rivet çok sayıda invalid
 | Async I/O | `tokio` | Model streaming, process I/O, timeouts, cancellation, MCP/network; ecosystem standardı. |
 | CLI | `clap` | Stable command/config surface. |
 | TUI | `ratatui` + `crossterm` | Chat-first terminal surface; research iteration UI'dan bağımsız kalır. |
-| Serialization | `serde`, `serde_json` | Provider/audit/config boundaries. Internal domain model stringly JSON değildir. |
+| Filesystem capability | `cap-std` | Directory-scoped capability; ambient global filesystem yetkisini kaldırır, path traversal ve symlink TOCTOU açıklarını önler. |
+| Linux Sandbox | `landlock` + `seccompiler` + `rlimit` | Çok katmanlı izolasyon: Landlock fs erişim kısıtlaması, seccomp BPF syscall filtreleme ve rlimit kaynak sınırları. |
+| Windows containment | `windows` | Microsoft resmi Win32 API binding'i (`Win32_System_JobObjects`); manuel unsafe FFI ve struct padding risklerini ortadan kaldırır. |
+| AST & Syntax Engine | `tree-sitter` (Rust, TS, Py, Go) | Çok dilli, incremental, hataya dayanıklı Concrete Syntax Tree (CST) çıkarımı ve byte-range symbol lokasyonu. |
+| Structural Patch & Diff | `tree-sitter` ranges + `similar` | CST byte-range tabanlı güvenli sözdizimsel yama ve insan/model diff görselleştirme. |
+| Semantic Engine | `async-lsp` | Tower tabanlı asenkron LSP istemcisi; cross-file referanslar, tanım bulma ve gerçek semantik rename. |
+| Git substrate | `gix` (Gitoxide) + CLI fallback | Pure-Rust Git nesne veritabanı, discovery, HEAD, packed-refs ve config trust modeli; karmaşık porcelain için CLI fallback. |
+| Ignore & Traversal | `ignore::WalkBuilder` + `globset` | Nested `.gitignore`, `.ignore`, global exclude kuralları ve paralel deterministik dizin taraması; policy eşleştirmesi için globset. |
+| Cryptographic Receipts | `rs_merkle` + RFC 6962 custom Hasher | Domain-separated (`0x00` leaf, `0x01` node) RFC 6962 hasher + `tree_size` taahhüdü; Merkle collision (CVE-2012-2459) korumalı. |
+| Test Verification | `cargo-nextest` / JUnit + `junit-parser` | Yapısal JUnit XML/JSON ingestion ile güvenilir test verdict çıkarımı; stdout dize ayrıştırmasını sonlandırır. |
+| Terminal Logging | `strip-ansi-escapes` | Terminal loglarını temiz görüntüleme (asla doğrulama kararı üretmek için kullanılmaz). |
+| MCP edge | `rmcp` | Resmi Model Context Protocol Rust SDK'sı (stdio transport, bildirimler, araçlar ve kaynak abonelikleri). |
+| SSE Streaming | `eventsource-stream` | HTTP byte stream'den çok satırlı SSE framing ayrıştırması; tehlikeli otomatik reconnect döngülerinden arındırılmış. |
+| Secret & Key Store | `keyring` + `secrecy` + `zeroize` | `CredentialStore` trait arkasında OS Keychain/CredManager entegrasyonu, log sızıntısı önleme ve bellek temizliği. |
+| Serialization | `serde`, `serde_json`, `serde-saphyr` | JSON/YAML provider/audit/view sınırları. `serde-saphyr` ile fuzz-tested, panic-free ve streaming uyumlu YAML. |
 | Shared immutable buffers | `bytes::Bytes`, `Arc<str>`, `Arc<[T]>`, `Cow` | Large artifact/model-view copies'i azaltma. |
 | Error taxonomy | `thiserror`; binary boundary'de gerekirse `anyhow` | Library errors typed kalır; CLI aggregation ergonomik olur. |
 | Tracing | `tracing` + `tracing-subscriber` | Cognitive cycle, provider, tool, verification ve state revision spans. |
-| Git | `gix` + explicit Git CLI fallback | Pure-Rust read/plumbing ve stable repo observations; missing porcelain için controlled escape hatch. |
-| Embedded store | `redb` first candidate | Pure Rust, ACID, MVCC, crash safety ve zero-copy oriented API; Noesis indexes Rivet tarafından kontrol edilir. |
-| Model multiprovider | `genai` behind Rivet trait | Provider-specific HTTP/protocol plumbing'i reuse eder; agent lifecycle'ını sahiplenmez. |
-| MCP edge | `rmcp` | External MCP ecosystem compatibility; internal bus değildir. |
+| Embedded store | `redb` | Pure Rust, ACID, MVCC, crash safety ve zero-copy oriented API; Noesis indexes Rivet tarafından kontrol edilir. |
+| Model multiprovider | `genai` / `rig-core` behind Rivet trait | Provider-specific HTTP/protocol plumbing'i reuse eder; agent lifecycle'ını sahiplenmez. |
 | Property tests | `proptest` | Promotion/invalidation/state-machine invariants. |
 | Microbench | `criterion` or equivalent | View compilation, census, persistence and allocation regressions. |
 
-Reference snapshot, 30 Aug 2026: Tokio describes itself as an asynchronous Rust runtime; Ratatui is a Rust terminal UI library; `redb` is a pure-Rust ACID embedded store with MVCC and zero-copy oriented access; `genai` is a multiprovider Rust client; `gix` is a pure-Rust Git implementation; the Rust MCP SDK uses Tokio. These are substrate choices, not evidence for Rivet's cognitive thesis.
+Reference snapshot, 1 Sep 2026: The Rust ecosystem substrate reflects production-hardened libraries: `cap-std` provides capability-oriented filesystem containment; `tree-sitter` provides universal CST parsing; `async-lsp` handles semantic LSP interactions; `landlock` + `seccompiler` + `rlimit` form the Linux sandboxing triad; `windows` provides official Win32 Job Object bindings; `rs_merkle` with RFC 6962 domain separation provides transparency receipts; `rmcp` is the official Model Context Protocol SDK; `serde-saphyr` provides panic-free YAML serialization; `keyring` + `secrecy` + `zeroize` manage credentials across OS keyrings.
 
 ## Zero-copy and allocation policy
 

@@ -1,5 +1,23 @@
 # Changelog
 
+## 2026-09-01 — Production Stack Hardening & Subsystem Consolidation
+
+**Architectural hardening pass:** Replaced ad-hoc in-house implementations across 13 subsystems with 2026 production-grade Rust ecosystem standards, eliminating silent failure modes, security bypasses, and data corruption vectors without weakening constitutional invariants (I-01..I-20):
+
+- **Filesystem Capability & Confinement (D-031):** Migrated from ad-hoc `canonicalize + starts_with` path checking to capability-oriented `cap-std::fs::Dir`, eliminating path traversal and symlink TOCTOU races at the kernel boundary.
+- **Multi-layer Linux Execution Sandbox (D-032):** Established the `landlock` (fs rights) + `seccompiler` (syscall filtering) + `rlimit` (resource governance) triad, re-classifying substring blacklists as upper-level `CommandPolicy`.
+- **Windows Process Containment (D-033):** Replaced manual Win32 extern FFI with Microsoft's official `windows` crate (`Win32_System_JobObjects`), guaranteeing cleanup of child process trees.
+- **Universal Multi-language AST (D-034):** Replaced string split heuristics with `tree-sitter` (`tree-sitter-rust`, `tree-sitter-python`, `tree-sitter-typescript`, `tree-sitter-go`) for robust Concrete Syntax Tree extraction.
+- **Two-tier Code Intelligence (D-035):** Separated local structural edits (Tree-sitter byte range replacement + `similar` diff rendering) from cross-file semantic refactoring (`async-lsp`).
+- **Deterministic Census & Nested Ignore (D-036):** Adopted `ignore::WalkBuilder` for multi-level `.gitignore`/`.ignore` handling and `globset` for policy matching, preventing accidental secret leakage.
+- **Pure-Rust Git Substrate (D-037):** Standardized on `gix` (Gitoxide) for repository discovery, packed-refs, and config trust models with CLI porcelain fallback.
+- **Cryptographic Transparency Receipts (D-038):** Hardened Merkle tree generation using `rs_merkle` with custom RFC 6962 domain-separated hashing (`0x00` leaf, `0x01` node) and `tree_size` commitment, preventing CVE-2012-2459 root collision flaws.
+- **Structured Test Ingestion (D-039):** Replaced human stdout regex parsing with `junit-parser` + `cargo-nextest` ingestion; restricted `strip-ansi-escapes` to telemetry display only.
+- **Official Model Context Protocol (D-040):** Adopted the official `rmcp` 3.x Rust SDK for bidirectional async notifications and streaming tool execution.
+- **Multi-line SSE Framing (D-041):** Integrated `eventsource-stream` for robust SSE framing without reconnect loops.
+- **Credential Storage & Memory Safety (D-042):** Introduced `CredentialStore` trait backed by OS `keyring`, `secrecy` (`SecretString`), and `zeroize` memory clearing.
+- **Panic-free YAML Serialization (D-043):** Adopted `serde-saphyr` for fuzz-tested, panic-free YAML output in Cognitive View compilation.
+
 ## 2026-08-30 — Research Monograph v0.3
 
 **Technical implementation pass; v0.2 body retained.** v0.3 does not replace the epistemic thesis or delete independent research material. It adds the implementation profile required to begin coding and aligns only the previously provisional implementation/adapter decisions with the now-canonical harness-owned architecture.

@@ -270,74 +270,28 @@ impl CensusRunner {
     }
 }
 
-#[derive(Debug, Clone)]
-struct IgnoreRule {
-    pattern: String,
-    negated: bool,
-    directory_only: bool,
-    anchored: bool,
-}
-
-#[derive(Debug, Default, Clone)]
+#[derive(Clone)]
 struct IgnoreRules {
-    rules: Vec<IgnoreRule>,
+    gitignore: ignore::gitignore::Gitignore,
 }
 
 impl IgnoreRules {
     async fn load(root: &Path) -> RivetResult<Self> {
-        let path = root.join(".gitignore");
-        let content = match tokio::fs::read_to_string(path).await {
-            Ok(content) => content,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                return Ok(Self::default());
-            }
-            Err(error) => return Err(RivetError::Repository(error.to_string())),
-        };
-
-        let mut rules = Vec::new();
-        for raw_line in content.lines() {
-            let line = raw_line.trim();
-            if line.is_empty() || line.starts_with('#') {
-                continue;
-            }
-            let (negated, line) = line
-                .strip_prefix('!')
-                .map_or((false, line), |rest| (true, rest));
-            let directory_only = line.ends_with('/');
-            let line = line.trim_end_matches('/');
-            if line.is_empty() {
-                continue;
-            }
-            let anchored = line.starts_with('/');
-            let pattern = line.trim_start_matches('/').replace('\\', "/");
-            rules.push(IgnoreRule {
-                pattern,
-                negated,
-                directory_only,
-                anchored,
-            });
+        let mut builder = ignore::gitignore::GitignoreBuilder::new(root);
+        let gitignore_path = root.join(".gitignore");
+        if gitignore_path.exists() {
+            let _ = builder.add(&gitignore_path);
         }
-        Ok(Self { rules })
+        let gitignore = builder
+            .build()
+            .map_err(|error| RivetError::Repository(error.to_string()))?;
+        Ok(Self { gitignore })
     }
 
     fn matches(&self, relative_path: &str, is_dir: bool) -> bool {
-        let mut ignored = false;
-        for rule in &self.rules {
-            if rule.directory_only && !is_dir {
-                continue;
-            }
-            let matches = if rule.anchored || rule.pattern.contains('/') {
-                wildcard_matches(&rule.pattern, relative_path)
-            } else {
-                relative_path
-                    .split('/')
-                    .any(|component| wildcard_matches(&rule.pattern, component))
-            };
-            if matches {
-                ignored = !rule.negated;
-            }
-        }
-        ignored
+        self.gitignore
+            .matched_path_or_any_parents(Path::new(relative_path), is_dir)
+            .is_ignore()
     }
 }
 
@@ -362,40 +316,6 @@ fn relative_path(root: &Path, path: &Path) -> String {
             .trim_start_matches('/')
             .to_string()
     }
-}
-
-fn wildcard_matches(pattern: &str, value: &str) -> bool {
-    let pattern = pattern.as_bytes();
-    let value = value.as_bytes();
-    let mut dp = vec![vec![false; value.len() + 1]; pattern.len() + 1];
-    dp[0][0] = true;
-    for p in 0..pattern.len() {
-        for v in 0..=value.len() {
-            if !dp[p][v] {
-                continue;
-            }
-            match pattern[p] {
-                b'*' => {
-                    let recursive = pattern.get(p + 1) == Some(&b'*');
-                    if recursive {
-                        dp[p + 2][v] = true;
-                        if pattern.get(p + 2) == Some(&b'/') {
-                            dp[p + 3][v] = true;
-                        }
-                    } else {
-                        dp[p + 1][v] = true;
-                    }
-                    if v < value.len() && (recursive || value[v] != b'/') {
-                        dp[p][v + 1] = true;
-                    }
-                }
-                b'?' if v < value.len() && value[v] != b'/' => dp[p + 1][v + 1] = true,
-                byte if v < value.len() && byte == value[v] => dp[p + 1][v + 1] = true,
-                _ => {}
-            }
-        }
-    }
-    dp[pattern.len()][value.len()]
 }
 
 fn frontier_score(path: &str) -> u8 {

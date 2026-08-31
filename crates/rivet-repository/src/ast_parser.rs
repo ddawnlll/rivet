@@ -1,12 +1,14 @@
 //! # rivet-repository::ast_parser
 //!
-//! Multi-language AST and Symbol Extractor for Rust, TypeScript/JavaScript, Python, and Go.
+//! Multi-language AST and Symbol Extractor for Rust, TypeScript/JavaScript, Python, and Go
+//! backed by production-grade `tree-sitter` concrete syntax trees.
 //! Extracts structured definitions, imports, test targets, and symbol call relations to
 //! populate the authoritative Project Graph.
 
 use crate::project_graph::{EdgeKind, EdgeProvenance, NodeKind, ProjectGraph};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
+use tree_sitter::{Node, Parser};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SymbolKind {
@@ -63,46 +65,71 @@ impl AstParser {
         }
     }
 
-    /// Parse source code content into structured AST symbols
+    /// Alias for parse_file for compatibility
     pub fn parse_source(file_path: &str, content: &str) -> ExtractedFileAst {
+        Self::parse_file(file_path, content)
+    }
+
+    /// Parse a source file into an ExtractedFileAst using tree-sitter
+    pub fn parse_file(file_path: &str, content: &str) -> ExtractedFileAst {
         let path = Path::new(file_path);
-        let language = Self::detect_language(path).unwrap_or("generic");
-        let file_uri = format!("file://{}", file_path);
+        let language = Self::detect_language(path).unwrap_or("unknown");
+        let file_uri = format!("file://{file_path}");
 
         let mut symbols = Vec::new();
         let mut imports = Vec::new();
         let mut test_targets = Vec::new();
 
-        match language {
-            "rust" => Self::parse_rust(
-                file_path,
-                content,
-                &mut symbols,
-                &mut imports,
-                &mut test_targets,
-            ),
-            "typescript" | "javascript" => Self::parse_js_ts(
-                file_path,
-                content,
-                &mut symbols,
-                &mut imports,
-                &mut test_targets,
-            ),
-            "python" => Self::parse_python(
-                file_path,
-                content,
-                &mut symbols,
-                &mut imports,
-                &mut test_targets,
-            ),
-            "go" => Self::parse_go(
-                file_path,
-                content,
-                &mut symbols,
-                &mut imports,
-                &mut test_targets,
-            ),
-            _ => Self::parse_generic(file_path, content, &mut symbols),
+        let mut parser = Parser::new();
+        let lang = match language {
+            "rust" => Some(tree_sitter_rust::LANGUAGE.into()),
+            "python" => Some(tree_sitter_python::LANGUAGE.into()),
+            "typescript" | "javascript" => Some(tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()),
+            "go" => Some(tree_sitter_go::LANGUAGE.into()),
+            _ => None,
+        };
+
+        if let Some(lang) = lang
+            && parser.set_language(&lang).is_ok()
+            && let Some(tree) = parser.parse(content, None)
+        {
+            let root_node = tree.root_node();
+            let bytes = content.as_bytes();
+            match language {
+                "rust" => Self::extract_rust(
+                    root_node,
+                    bytes,
+                    &file_uri,
+                    &mut symbols,
+                    &mut imports,
+                    &mut test_targets,
+                ),
+                "python" => Self::extract_python(
+                    root_node,
+                    bytes,
+                    &file_uri,
+                    &mut symbols,
+                    &mut imports,
+                    &mut test_targets,
+                ),
+                "typescript" | "javascript" => Self::extract_ts_js(
+                    root_node,
+                    bytes,
+                    &file_uri,
+                    &mut symbols,
+                    &mut imports,
+                    &mut test_targets,
+                ),
+                "go" => Self::extract_go(
+                    root_node,
+                    bytes,
+                    &file_uri,
+                    &mut symbols,
+                    &mut imports,
+                    &mut test_targets,
+                ),
+                _ => {}
+            }
         }
 
         ExtractedFileAst {
@@ -115,396 +142,666 @@ impl AstParser {
         }
     }
 
-    fn parse_rust(
-        file_path: &str,
-        content: &str,
+    /// Walk AST and populate a ProjectGraph with File, Symbol, and Test nodes & edges
+    pub fn populate_project_graph(graph: &mut ProjectGraph, ast: &ExtractedFileAst) {
+        let file_node_id = ast.file_uri.clone();
+        graph.add_node(&file_node_id, NodeKind::SourceFile, &ast.file_path);
+
+        for sym in &ast.symbols {
+            let (kind, sym_uri) = match sym.kind {
+                SymbolKind::TestFunction => (
+                    NodeKind::TestTarget,
+                    format!("test://{}/{}", ast.file_path, sym.name),
+                ),
+                _ => (
+                    NodeKind::Symbol,
+                    format!("symbol://{}/{}", ast.file_path, sym.name),
+                ),
+            };
+            graph.add_node(&sym_uri, kind, &sym.name);
+
+            graph.add_edge(
+                &file_node_id,
+                &sym_uri,
+                EdgeKind::Defines,
+                EdgeProvenance::default(),
+            );
+
+            if sym.kind == SymbolKind::TestFunction {
+                graph.add_edge(
+                    &file_node_id,
+                    &sym_uri,
+                    EdgeKind::TestedBy,
+                    EdgeProvenance::default(),
+                );
+            }
+        }
+
+        for imp in &ast.imports {
+            let imp_uri = format!("import://{imp}");
+            graph.add_node(&imp_uri, NodeKind::ExternalDependency, imp);
+            graph.add_edge(
+                &file_node_id,
+                &imp_uri,
+                EdgeKind::Imports,
+                EdgeProvenance::default(),
+            );
+        }
+    }
+
+    /// Build a complete multi-file ProjectGraph for a repository
+    pub fn build_project_graph(files: &[(String, String)], repo_name: &str) -> ProjectGraph {
+        let mut graph = ProjectGraph::new();
+        let repo_id = format!("repo://{repo_name}");
+        graph.add_node(&repo_id, NodeKind::Repository, repo_name);
+
+        for (path, content) in files {
+            let ast = Self::parse_file(path, content);
+            Self::populate_project_graph(&mut graph, &ast);
+            graph.add_edge(
+                &repo_id,
+                &ast.file_uri,
+                EdgeKind::Defines,
+                EdgeProvenance::default(),
+            );
+        }
+
+        graph
+    }
+
+    fn extract_rust(
+        node: Node,
+        bytes: &[u8],
+        file_uri: &str,
         symbols: &mut Vec<ExtractedSymbol>,
         imports: &mut Vec<String>,
         test_targets: &mut Vec<String>,
     ) {
-        let lines: Vec<&str> = content.lines().collect();
-        let mut current_byte = 0;
-        let mut is_test_next = false;
-
-        for (idx, line) in lines.iter().enumerate() {
-            let line_len = line.len() + 1; // +1 for newline
-            let trimmed = line.trim();
-
-            if trimmed.contains("#[test]") || trimmed.contains("#[tokio::test]") {
-                is_test_next = true;
-                current_byte += line_len;
-                continue;
-            }
-
-            if trimmed.starts_with("use ") {
-                let imp = trimmed
-                    .trim_start_matches("use ")
-                    .trim_end_matches(';')
-                    .trim();
-                imports.push(imp.to_string());
-            } else if trimmed.starts_with("pub fn ")
-                || trimmed.starts_with("fn ")
-                || trimmed.starts_with("pub async fn ")
-                || trimmed.starts_with("async fn ")
-            {
-                if let Some(name) = Self::extract_identifier(trimmed, "fn") {
-                    let kind = if is_test_next {
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            match child.kind() {
+                "function_item" => {
+                    let is_test = Self::rust_node_has_test_attr(child, bytes);
+                    let name = child
+                        .child_by_field_name("name")
+                        .and_then(|n| n.utf8_text(bytes).ok())
+                        .unwrap_or("anonymous")
+                        .to_string();
+                    let kind = if is_test {
                         test_targets.push(name.clone());
                         SymbolKind::TestFunction
                     } else {
                         SymbolKind::Function
                     };
+                    let sig = Self::node_first_line(child, bytes);
                     symbols.push(ExtractedSymbol {
-                        symbol_uri: format!("symbol://{}/{}", file_path, name),
-                        name,
+                        name: name.clone(),
+                        symbol_uri: format!("{file_uri}#{name}"),
                         kind,
-                        line_number: idx + 1,
-                        byte_start: current_byte,
-                        byte_end: current_byte + line.len(),
-                        signature: trimmed.to_string(),
-                        docstring: None,
+                        line_number: child.start_position().row + 1,
+                        byte_start: child.start_byte(),
+                        byte_end: child.end_byte(),
+                        signature: sig,
+                        docstring: Self::extract_doc_comments(child, bytes),
                     });
                 }
-                is_test_next = false;
-            } else if (trimmed.starts_with("pub struct ") || trimmed.starts_with("struct "))
-                && let Some(name) = Self::extract_identifier(trimmed, "struct")
-            {
-                symbols.push(ExtractedSymbol {
-                    symbol_uri: format!("symbol://{}/{}", file_path, name),
-                    name,
-                    kind: SymbolKind::Struct,
-                    line_number: idx + 1,
-                    byte_start: current_byte,
-                    byte_end: current_byte + line.len(),
-                    signature: trimmed.to_string(),
-                    docstring: None,
-                });
-            } else if (trimmed.starts_with("pub enum ") || trimmed.starts_with("enum "))
-                && let Some(name) = Self::extract_identifier(trimmed, "enum")
-            {
-                symbols.push(ExtractedSymbol {
-                    symbol_uri: format!("symbol://{}/{}", file_path, name),
-                    name,
-                    kind: SymbolKind::Enum,
-                    line_number: idx + 1,
-                    byte_start: current_byte,
-                    byte_end: current_byte + line.len(),
-                    signature: trimmed.to_string(),
-                    docstring: None,
-                });
-            } else if (trimmed.starts_with("pub trait ") || trimmed.starts_with("trait "))
-                && let Some(name) = Self::extract_identifier(trimmed, "trait")
-            {
-                symbols.push(ExtractedSymbol {
-                    symbol_uri: format!("symbol://{}/{}", file_path, name),
-                    name,
-                    kind: SymbolKind::Trait,
-                    line_number: idx + 1,
-                    byte_start: current_byte,
-                    byte_end: current_byte + line.len(),
-                    signature: trimmed.to_string(),
-                    docstring: None,
-                });
+                "struct_item" => {
+                    if let Some(name_node) = child.child_by_field_name("name")
+                        && let Ok(name) = name_node.utf8_text(bytes)
+                    {
+                        symbols.push(ExtractedSymbol {
+                            name: name.to_string(),
+                            symbol_uri: format!("{file_uri}#{name}"),
+                            kind: SymbolKind::Struct,
+                            line_number: child.start_position().row + 1,
+                            byte_start: child.start_byte(),
+                            byte_end: child.end_byte(),
+                            signature: Self::node_first_line(child, bytes),
+                            docstring: Self::extract_doc_comments(child, bytes),
+                        });
+                    }
+                }
+                "enum_item" => {
+                    if let Some(name_node) = child.child_by_field_name("name")
+                        && let Ok(name) = name_node.utf8_text(bytes)
+                    {
+                        symbols.push(ExtractedSymbol {
+                            name: name.to_string(),
+                            symbol_uri: format!("{file_uri}#{name}"),
+                            kind: SymbolKind::Enum,
+                            line_number: child.start_position().row + 1,
+                            byte_start: child.start_byte(),
+                            byte_end: child.end_byte(),
+                            signature: Self::node_first_line(child, bytes),
+                            docstring: Self::extract_doc_comments(child, bytes),
+                        });
+                    }
+                }
+                "trait_item" => {
+                    if let Some(name_node) = child.child_by_field_name("name")
+                        && let Ok(name) = name_node.utf8_text(bytes)
+                    {
+                        symbols.push(ExtractedSymbol {
+                            name: name.to_string(),
+                            symbol_uri: format!("{file_uri}#{name}"),
+                            kind: SymbolKind::Trait,
+                            line_number: child.start_position().row + 1,
+                            byte_start: child.start_byte(),
+                            byte_end: child.end_byte(),
+                            signature: Self::node_first_line(child, bytes),
+                            docstring: Self::extract_doc_comments(child, bytes),
+                        });
+                    }
+                }
+                "impl_item" => {
+                    if let Some(body) = child.child_by_field_name("body") {
+                        let mut impl_cursor = body.walk();
+                        for item in body.children(&mut impl_cursor) {
+                            if item.kind() == "function_item" {
+                                let name = item
+                                    .child_by_field_name("name")
+                                    .and_then(|n| n.utf8_text(bytes).ok())
+                                    .unwrap_or("anonymous")
+                                    .to_string();
+                                symbols.push(ExtractedSymbol {
+                                    name: name.clone(),
+                                    symbol_uri: format!("{file_uri}#{name}"),
+                                    kind: SymbolKind::Method,
+                                    line_number: item.start_position().row + 1,
+                                    byte_start: item.start_byte(),
+                                    byte_end: item.end_byte(),
+                                    signature: Self::node_first_line(item, bytes),
+                                    docstring: Self::extract_doc_comments(item, bytes),
+                                });
+                            }
+                        }
+                    }
+                }
+                "mod_item" => {
+                    if let Some(name_node) = child.child_by_field_name("name")
+                        && let Ok(name) = name_node.utf8_text(bytes)
+                    {
+                        symbols.push(ExtractedSymbol {
+                            name: name.to_string(),
+                            symbol_uri: format!("{file_uri}#{name}"),
+                            kind: SymbolKind::Module,
+                            line_number: child.start_position().row + 1,
+                            byte_start: child.start_byte(),
+                            byte_end: child.end_byte(),
+                            signature: format!("mod {name};"),
+                            docstring: None,
+                        });
+                    }
+                }
+                "use_declaration" => {
+                    if let Ok(text) = child.utf8_text(bytes) {
+                        let clean = text
+                            .trim()
+                            .trim_start_matches("use ")
+                            .trim_end_matches(';')
+                            .trim()
+                            .to_string();
+                        imports.push(clean);
+                    }
+                }
+                _ => {
+                    if child.child_count() > 0 {
+                        Self::extract_rust(child, bytes, file_uri, symbols, imports, test_targets);
+                    }
+                }
             }
-
-            current_byte += line_len;
         }
     }
 
-    fn parse_js_ts(
-        file_path: &str,
-        content: &str,
+    fn rust_node_has_test_attr(node: Node, bytes: &[u8]) -> bool {
+        let mut prev = node.prev_sibling();
+        while let Some(sibling) = prev {
+            if sibling.kind() == "attribute_item"
+                && let Ok(text) = sibling.utf8_text(bytes)
+                && text.contains("test")
+            {
+                return true;
+            } else if sibling.kind() != "line_comment" && sibling.kind() != "block_comment" {
+                break;
+            }
+            prev = sibling.prev_sibling();
+        }
+        false
+    }
+
+    fn extract_python(
+        node: Node,
+        bytes: &[u8],
+        file_uri: &str,
         symbols: &mut Vec<ExtractedSymbol>,
         imports: &mut Vec<String>,
         test_targets: &mut Vec<String>,
     ) {
-        let lines: Vec<&str> = content.lines().collect();
-        let mut current_byte = 0;
-
-        for (idx, line) in lines.iter().enumerate() {
-            let line_len = line.len() + 1;
-            let trimmed = line.trim();
-
-            if trimmed.starts_with("import ") {
-                imports.push(trimmed.to_string());
-            } else if (trimmed.starts_with("function ")
-                || trimmed.starts_with("export function ")
-                || trimmed.starts_with("export async function "))
-                && let Some(name) = Self::extract_identifier(trimmed, "function")
-            {
-                symbols.push(ExtractedSymbol {
-                    symbol_uri: format!("symbol://{}/{}", file_path, name),
-                    name,
-                    kind: SymbolKind::Function,
-                    line_number: idx + 1,
-                    byte_start: current_byte,
-                    byte_end: current_byte + line.len(),
-                    signature: trimmed.to_string(),
-                    docstring: None,
-                });
-            } else if (trimmed.starts_with("class ") || trimmed.starts_with("export class "))
-                && let Some(name) = Self::extract_identifier(trimmed, "class")
-            {
-                symbols.push(ExtractedSymbol {
-                    symbol_uri: format!("symbol://{}/{}", file_path, name),
-                    name,
-                    kind: SymbolKind::Class,
-                    line_number: idx + 1,
-                    byte_start: current_byte,
-                    byte_end: current_byte + line.len(),
-                    signature: trimmed.to_string(),
-                    docstring: None,
-                });
-            } else if (trimmed.starts_with("interface ")
-                || trimmed.starts_with("export interface "))
-                && let Some(name) = Self::extract_identifier(trimmed, "interface")
-            {
-                symbols.push(ExtractedSymbol {
-                    symbol_uri: format!("symbol://{}/{}", file_path, name),
-                    name,
-                    kind: SymbolKind::Interface,
-                    line_number: idx + 1,
-                    byte_start: current_byte,
-                    byte_end: current_byte + line.len(),
-                    signature: trimmed.to_string(),
-                    docstring: None,
-                });
-            } else if (trimmed.starts_with("it(") || trimmed.starts_with("test("))
-                && let Some(start) = trimmed.find('"').or_else(|| trimmed.find('\''))
-                && let Some(end) = trimmed[start + 1..]
-                    .find('"')
-                    .or_else(|| trimmed[start + 1..].find('\''))
-            {
-                let test_name = &trimmed[start + 1..start + 1 + end];
-                test_targets.push(test_name.to_string());
-                symbols.push(ExtractedSymbol {
-                    symbol_uri: format!("symbol://{}/{}", file_path, test_name),
-                    name: test_name.to_string(),
-                    kind: SymbolKind::TestFunction,
-                    line_number: idx + 1,
-                    byte_start: current_byte,
-                    byte_end: current_byte + line.len(),
-                    signature: trimmed.to_string(),
-                    docstring: None,
-                });
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            match child.kind() {
+                "function_definition" => {
+                    if let Some(name_node) = child.child_by_field_name("name")
+                        && let Ok(name) = name_node.utf8_text(bytes)
+                    {
+                        let is_test = name.starts_with("test_") || name.ends_with("_test");
+                        let kind = if is_test {
+                            test_targets.push(name.to_string());
+                            SymbolKind::TestFunction
+                        } else {
+                            SymbolKind::Function
+                        };
+                        symbols.push(ExtractedSymbol {
+                            name: name.to_string(),
+                            symbol_uri: format!("{file_uri}#{name}"),
+                            kind,
+                            line_number: child.start_position().row + 1,
+                            byte_start: child.start_byte(),
+                            byte_end: child.end_byte(),
+                            signature: Self::node_first_line(child, bytes),
+                            docstring: None,
+                        });
+                    }
+                }
+                "class_definition" => {
+                    if let Some(name_node) = child.child_by_field_name("name")
+                        && let Ok(name) = name_node.utf8_text(bytes)
+                    {
+                        symbols.push(ExtractedSymbol {
+                            name: name.to_string(),
+                            symbol_uri: format!("{file_uri}#{name}"),
+                            kind: SymbolKind::Class,
+                            line_number: child.start_position().row + 1,
+                            byte_start: child.start_byte(),
+                            byte_end: child.end_byte(),
+                            signature: Self::node_first_line(child, bytes),
+                            docstring: None,
+                        });
+                    }
+                    if let Some(body) = child.child_by_field_name("body") {
+                        Self::extract_python(body, bytes, file_uri, symbols, imports, test_targets);
+                    }
+                }
+                "import_statement" => {
+                    if let Ok(text) = child.utf8_text(bytes) {
+                        let clean = text.trim().trim_start_matches("import ").trim().to_string();
+                        imports.push(clean);
+                    }
+                }
+                "import_from_statement" => {
+                    if let Ok(text) = child.utf8_text(bytes) {
+                        let clean = text
+                            .trim()
+                            .trim_start_matches("from ")
+                            .replace(" import ", ".")
+                            .trim()
+                            .to_string();
+                        imports.push(clean);
+                    }
+                }
+                _ => {
+                    if child.child_count() > 0 && child.kind() != "class_definition" {
+                        Self::extract_python(
+                            child,
+                            bytes,
+                            file_uri,
+                            symbols,
+                            imports,
+                            test_targets,
+                        );
+                    }
+                }
             }
-
-            current_byte += line_len;
         }
     }
 
-    fn parse_python(
-        file_path: &str,
-        content: &str,
+    fn extract_ts_js(
+        node: Node,
+        bytes: &[u8],
+        file_uri: &str,
         symbols: &mut Vec<ExtractedSymbol>,
         imports: &mut Vec<String>,
         test_targets: &mut Vec<String>,
     ) {
-        let lines: Vec<&str> = content.lines().collect();
-        let mut current_byte = 0;
-
-        for (idx, line) in lines.iter().enumerate() {
-            let line_len = line.len() + 1;
-            let trimmed = line.trim();
-
-            if trimmed.starts_with("import ") || trimmed.starts_with("from ") {
-                imports.push(trimmed.to_string());
-            } else if (trimmed.starts_with("def ") || trimmed.starts_with("async def "))
-                && let Some(name) = Self::extract_identifier(trimmed, "def")
-            {
-                let kind = if name.starts_with("test_") {
-                    test_targets.push(name.clone());
-                    SymbolKind::TestFunction
-                } else {
-                    SymbolKind::Function
-                };
-                symbols.push(ExtractedSymbol {
-                    symbol_uri: format!("symbol://{}/{}", file_path, name),
-                    name,
-                    kind,
-                    line_number: idx + 1,
-                    byte_start: current_byte,
-                    byte_end: current_byte + line.len(),
-                    signature: trimmed.to_string(),
-                    docstring: None,
-                });
-            } else if trimmed.starts_with("class ")
-                && let Some(name) = Self::extract_identifier(trimmed, "class")
-            {
-                symbols.push(ExtractedSymbol {
-                    symbol_uri: format!("symbol://{}/{}", file_path, name),
-                    name,
-                    kind: SymbolKind::Class,
-                    line_number: idx + 1,
-                    byte_start: current_byte,
-                    byte_end: current_byte + line.len(),
-                    signature: trimmed.to_string(),
-                    docstring: None,
-                });
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            match child.kind() {
+                "function_declaration" | "generator_function_declaration" => {
+                    if let Some(name_node) = child.child_by_field_name("name")
+                        && let Ok(name) = name_node.utf8_text(bytes)
+                    {
+                        let is_test = name.starts_with("test") || name.starts_with("it");
+                        let kind = if is_test {
+                            test_targets.push(name.to_string());
+                            SymbolKind::TestFunction
+                        } else {
+                            SymbolKind::Function
+                        };
+                        symbols.push(ExtractedSymbol {
+                            name: name.to_string(),
+                            symbol_uri: format!("{file_uri}#{name}"),
+                            kind,
+                            line_number: child.start_position().row + 1,
+                            byte_start: child.start_byte(),
+                            byte_end: child.end_byte(),
+                            signature: Self::node_first_line(child, bytes),
+                            docstring: None,
+                        });
+                    }
+                }
+                "class_declaration" => {
+                    if let Some(name_node) = child.child_by_field_name("name")
+                        && let Ok(name) = name_node.utf8_text(bytes)
+                    {
+                        symbols.push(ExtractedSymbol {
+                            name: name.to_string(),
+                            symbol_uri: format!("{file_uri}#{name}"),
+                            kind: SymbolKind::Class,
+                            line_number: child.start_position().row + 1,
+                            byte_start: child.start_byte(),
+                            byte_end: child.end_byte(),
+                            signature: Self::node_first_line(child, bytes),
+                            docstring: None,
+                        });
+                    }
+                }
+                "interface_declaration" => {
+                    if let Some(name_node) = child.child_by_field_name("name")
+                        && let Ok(name) = name_node.utf8_text(bytes)
+                    {
+                        symbols.push(ExtractedSymbol {
+                            name: name.to_string(),
+                            symbol_uri: format!("{file_uri}#{name}"),
+                            kind: SymbolKind::Interface,
+                            line_number: child.start_position().row + 1,
+                            byte_start: child.start_byte(),
+                            byte_end: child.end_byte(),
+                            signature: Self::node_first_line(child, bytes),
+                            docstring: None,
+                        });
+                    }
+                }
+                "type_alias_declaration" => {
+                    if let Some(name_node) = child.child_by_field_name("name")
+                        && let Ok(name) = name_node.utf8_text(bytes)
+                    {
+                        symbols.push(ExtractedSymbol {
+                            name: name.to_string(),
+                            symbol_uri: format!("{file_uri}#{name}"),
+                            kind: SymbolKind::TypeAlias,
+                            line_number: child.start_position().row + 1,
+                            byte_start: child.start_byte(),
+                            byte_end: child.end_byte(),
+                            signature: Self::node_first_line(child, bytes),
+                            docstring: None,
+                        });
+                    }
+                }
+                "enum_declaration" => {
+                    if let Some(name_node) = child.child_by_field_name("name")
+                        && let Ok(name) = name_node.utf8_text(bytes)
+                    {
+                        symbols.push(ExtractedSymbol {
+                            name: name.to_string(),
+                            symbol_uri: format!("{file_uri}#{name}"),
+                            kind: SymbolKind::Enum,
+                            line_number: child.start_position().row + 1,
+                            byte_start: child.start_byte(),
+                            byte_end: child.end_byte(),
+                            signature: Self::node_first_line(child, bytes),
+                            docstring: None,
+                        });
+                    }
+                }
+                "import_statement" => {
+                    if let Ok(text) = child.utf8_text(bytes) {
+                        imports.push(text.trim().to_string());
+                    }
+                }
+                "expression_statement" => {
+                    // Check for test("name", ...) or it("name", ...) calls
+                    if let Some(call) = child.child(0)
+                        && call.kind() == "call_expression"
+                        && let Some(func) = call.child_by_field_name("function")
+                        && let Ok(func_name) = func.utf8_text(bytes)
+                        && (func_name == "test" || func_name == "it")
+                        && let Some(args) = call.child_by_field_name("arguments")
+                        && let Some(first_arg) = args.child(1)
+                        && let Ok(target) = first_arg.utf8_text(bytes)
+                    {
+                        let clean = target.trim_matches(|c| c == '"' || c == '\'' || c == '`');
+                        test_targets.push(clean.to_string());
+                    }
+                }
+                "export_statement" => {
+                    // Recurse into exported declarations
+                    Self::extract_ts_js(child, bytes, file_uri, symbols, imports, test_targets);
+                }
+                _ => {
+                    if child.child_count() > 0 && child.kind() != "class_declaration" {
+                        Self::extract_ts_js(child, bytes, file_uri, symbols, imports, test_targets);
+                    }
+                }
             }
-
-            current_byte += line_len;
         }
     }
 
-    fn parse_go(
-        file_path: &str,
-        content: &str,
+    fn extract_go(
+        node: Node,
+        bytes: &[u8],
+        file_uri: &str,
         symbols: &mut Vec<ExtractedSymbol>,
         imports: &mut Vec<String>,
         test_targets: &mut Vec<String>,
     ) {
-        let lines: Vec<&str> = content.lines().collect();
-        let mut current_byte = 0;
-
-        for (idx, line) in lines.iter().enumerate() {
-            let line_len = line.len() + 1;
-            let trimmed = line.trim();
-
-            if trimmed.starts_with("import ") {
-                imports.push(trimmed.to_string());
-            } else if trimmed.starts_with("func ")
-                && let Some(name) = Self::extract_identifier(trimmed, "func")
-            {
-                let kind = if name.starts_with("Test") {
-                    test_targets.push(name.clone());
-                    SymbolKind::TestFunction
-                } else {
-                    SymbolKind::Function
-                };
-                symbols.push(ExtractedSymbol {
-                    symbol_uri: format!("symbol://{}/{}", file_path, name),
-                    name,
-                    kind,
-                    line_number: idx + 1,
-                    byte_start: current_byte,
-                    byte_end: current_byte + line.len(),
-                    signature: trimmed.to_string(),
-                    docstring: None,
-                });
-            } else if trimmed.starts_with("type ")
-                && trimmed.contains("struct")
-                && let Some(name) = Self::extract_identifier(trimmed, "type")
-            {
-                symbols.push(ExtractedSymbol {
-                    symbol_uri: format!("symbol://{}/{}", file_path, name),
-                    name,
-                    kind: SymbolKind::Struct,
-                    line_number: idx + 1,
-                    byte_start: current_byte,
-                    byte_end: current_byte + line.len(),
-                    signature: trimmed.to_string(),
-                    docstring: None,
-                });
-            } else if trimmed.starts_with("type ")
-                && trimmed.contains("interface")
-                && let Some(name) = Self::extract_identifier(trimmed, "type")
-            {
-                symbols.push(ExtractedSymbol {
-                    symbol_uri: format!("symbol://{}/{}", file_path, name),
-                    name,
-                    kind: SymbolKind::Interface,
-                    line_number: idx + 1,
-                    byte_start: current_byte,
-                    byte_end: current_byte + line.len(),
-                    signature: trimmed.to_string(),
-                    docstring: None,
-                });
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            match child.kind() {
+                "function_declaration" => {
+                    if let Some(name_node) = child.child_by_field_name("name")
+                        && let Ok(name) = name_node.utf8_text(bytes)
+                    {
+                        let is_test = name.starts_with("Test");
+                        let kind = if is_test {
+                            test_targets.push(name.to_string());
+                            SymbolKind::TestFunction
+                        } else {
+                            SymbolKind::Function
+                        };
+                        symbols.push(ExtractedSymbol {
+                            name: name.to_string(),
+                            symbol_uri: format!("{file_uri}#{name}"),
+                            kind,
+                            line_number: child.start_position().row + 1,
+                            byte_start: child.start_byte(),
+                            byte_end: child.end_byte(),
+                            signature: Self::node_first_line(child, bytes),
+                            docstring: None,
+                        });
+                    }
+                }
+                "method_declaration" => {
+                    if let Some(name_node) = child.child_by_field_name("name")
+                        && let Ok(name) = name_node.utf8_text(bytes)
+                    {
+                        symbols.push(ExtractedSymbol {
+                            name: name.to_string(),
+                            symbol_uri: format!("{file_uri}#{name}"),
+                            kind: SymbolKind::Method,
+                            line_number: child.start_position().row + 1,
+                            byte_start: child.start_byte(),
+                            byte_end: child.end_byte(),
+                            signature: Self::node_first_line(child, bytes),
+                            docstring: None,
+                        });
+                    }
+                }
+                "type_declaration" => {
+                    if let Ok(text) = child.utf8_text(bytes) {
+                        let first_line = text.lines().next().unwrap_or("").trim();
+                        let kind = if first_line.contains("struct") {
+                            SymbolKind::Struct
+                        } else if first_line.contains("interface") {
+                            SymbolKind::Interface
+                        } else {
+                            SymbolKind::TypeAlias
+                        };
+                        let mut name = "type";
+                        for part in first_line.split_whitespace() {
+                            if part != "type"
+                                && part != "struct"
+                                && part != "interface"
+                                && !part.starts_with('{')
+                            {
+                                name = part;
+                                break;
+                            }
+                        }
+                        symbols.push(ExtractedSymbol {
+                            name: name.to_string(),
+                            symbol_uri: format!("{file_uri}#{name}"),
+                            kind,
+                            line_number: child.start_position().row + 1,
+                            byte_start: child.start_byte(),
+                            byte_end: child.end_byte(),
+                            signature: first_line.to_string(),
+                            docstring: None,
+                        });
+                    }
+                }
+                "import_declaration" => {
+                    if let Ok(text) = child.utf8_text(bytes) {
+                        for line in text.lines() {
+                            let clean = line
+                                .trim()
+                                .trim_start_matches("import ")
+                                .trim()
+                                .trim_matches(|c| c == '"' || c == '`' || c == '(' || c == ')');
+                            if !clean.is_empty() {
+                                imports.push(clean.to_string());
+                            }
+                        }
+                    }
+                }
+                _ => {
+                    if child.child_count() > 0 {
+                        Self::extract_go(child, bytes, file_uri, symbols, imports, test_targets);
+                    }
+                }
             }
+        }
+    }
 
-            current_byte += line_len;
+    fn node_first_line(node: Node, bytes: &[u8]) -> String {
+        if let Ok(text) = node.utf8_text(bytes) {
+            text.lines().next().unwrap_or("").trim().to_string()
+        } else {
+            String::new()
         }
     }
 
-    fn parse_generic(file_path: &str, content: &str, symbols: &mut Vec<ExtractedSymbol>) {
-        // Fallback for unrecognized files
-        symbols.push(ExtractedSymbol {
-            name: file_path.to_string(),
-            symbol_uri: format!("symbol://{}/root", file_path),
-            kind: SymbolKind::Module,
-            line_number: 1,
-            byte_start: 0,
-            byte_end: content.len(),
-            signature: file_path.to_string(),
-            docstring: None,
-        });
-    }
-
-    fn extract_identifier(line: &str, keyword: &str) -> Option<String> {
-        let after_keyword = line.split(keyword).nth(1)?.trim();
-        let name: String = after_keyword
-            .chars()
-            .take_while(|c| c.is_alphanumeric() || *c == '_')
-            .collect();
-        if name.is_empty() { None } else { Some(name) }
-    }
-
-    /// Build a populated ProjectGraph by scanning a directory
-    pub fn build_project_graph(files: &[(String, String)], repo_id: &str) -> ProjectGraph {
-        let mut graph = ProjectGraph::new();
-        graph.add_node(format!("repo://{}", repo_id), NodeKind::Repository, repo_id);
-
-        let prov = EdgeProvenance {
-            provider: "ast_parser".into(),
-            repo_snapshot: "r0".into(),
-            confidence: "authoritative".into(),
-            evidence_refs: vec![],
-        };
-
-        for (rel_path, content) in files {
-            let ast = Self::parse_source(rel_path, content);
-            let file_node_id = format!("file://{}", rel_path);
-
-            graph.add_node_with_metadata(
-                file_node_id.clone(),
-                NodeKind::SourceFile,
-                rel_path.clone(),
-                serde_json::json!({
-                    "language": ast.language,
-                    "symbols_count": ast.symbols.len(),
-                    "imports_count": ast.imports.len(),
-                }),
-            );
-
-            graph.add_edge(
-                format!("repo://{}", repo_id),
-                file_node_id.clone(),
-                EdgeKind::Defines,
-                prov.clone(),
-            );
-
-            for sym in &ast.symbols {
-                graph.add_node_with_metadata(
-                    sym.symbol_uri.clone(),
-                    NodeKind::Symbol,
-                    sym.name.clone(),
-                    serde_json::json!({
-                        "kind": format!("{:?}", sym.kind),
-                        "line": sym.line_number,
-                        "signature": sym.signature,
-                    }),
-                );
-
-                graph.add_edge(
-                    file_node_id.clone(),
-                    sym.symbol_uri.clone(),
-                    EdgeKind::Defines,
-                    prov.clone(),
-                );
+    fn extract_doc_comments(node: Node, bytes: &[u8]) -> Option<String> {
+        let mut prev = node.prev_sibling();
+        let mut comments = Vec::new();
+        while let Some(sibling) = prev {
+            if sibling.kind() == "line_comment"
+                && let Ok(text) = sibling.utf8_text(bytes)
+                && (text.starts_with("///") || text.starts_with("//!"))
+            {
+                comments.push(text.to_string());
+            } else {
+                break;
             }
-
-            for test in &ast.test_targets {
-                let test_uri = format!("test://{}/{}", rel_path, test);
-                graph.add_node(test_uri.clone(), NodeKind::TestTarget, test.clone());
-                graph.add_edge(
-                    test_uri,
-                    file_node_id.clone(),
-                    EdgeKind::TestedBy,
-                    prov.clone(),
-                );
-            }
+            prev = sibling.prev_sibling();
         }
+        if comments.is_empty() {
+            None
+        } else {
+            comments.reverse();
+            Some(comments.join("\n"))
+        }
+    }
+}
 
-        graph
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_rust_ast_with_tree_sitter() {
+        let rust_code = r#"
+/// Service authenticator
+pub struct Authenticator {
+    secret: String,
+}
+
+impl Authenticator {
+    pub fn new(secret: &str) -> Self {
+        Self { secret: secret.into() }
+    }
+}
+
+pub fn hash_token(token: &str) -> String {
+    format!("hash_{token}")
+}
+
+#[test]
+fn test_authenticator_flow() {
+    assert!(true);
+}
+"#;
+
+        let ast = AstParser::parse_file("src/auth.rs", rust_code);
+        assert_eq!(ast.language, "rust");
+
+        let struct_sym = ast
+            .symbols
+            .iter()
+            .find(|s| s.name == "Authenticator")
+            .unwrap();
+        assert_eq!(struct_sym.kind, SymbolKind::Struct);
+
+        let fn_sym = ast.symbols.iter().find(|s| s.name == "hash_token").unwrap();
+        assert_eq!(fn_sym.kind, SymbolKind::Function);
+
+        let test_sym = ast
+            .symbols
+            .iter()
+            .find(|s| s.name == "test_authenticator_flow")
+            .unwrap();
+        assert_eq!(test_sym.kind, SymbolKind::TestFunction);
+        assert!(
+            ast.test_targets
+                .contains(&"test_authenticator_flow".to_string())
+        );
+    }
+
+    #[test]
+    fn test_parse_python_ast_with_tree_sitter() {
+        let py_code = r#"
+import os
+from pathlib import Path
+
+class ModelRunner:
+    def execute(self, prompt: str):
+        pass
+
+def test_runner_execution():
+    assert True
+"#;
+
+        let ast = AstParser::parse_file("tests/test_model.py", py_code);
+        assert_eq!(ast.language, "python");
+        assert!(
+            ast.symbols
+                .iter()
+                .any(|s| s.name == "ModelRunner" && s.kind == SymbolKind::Class)
+        );
+        assert!(
+            ast.symbols
+                .iter()
+                .any(|s| s.name == "test_runner_execution" && s.kind == SymbolKind::TestFunction)
+        );
+        assert_eq!(ast.imports.len(), 2);
     }
 }

@@ -1,10 +1,5 @@
-//! # rivet-model-genai (OpenCode HTTP Model Backend)
-//!
-//! Direct OpenAI-compatible HTTP/SSE integration for OpenCode Go/Zen. The
-//! provider response remains untrusted model content until `rivet-model`
-//! decodes it into a controller proposal and the Harness applies ACCP policy.
-
 use async_trait::async_trait;
+use eventsource_stream::Eventsource;
 use futures_util::StreamExt;
 use reqwest::{Client, RequestBuilder, Response};
 use rivet_model::{ModelBackend, ModelRequest, ModelResponse, TokenUsage};
@@ -127,26 +122,23 @@ impl ModelBackend for GenAiBackend {
 
     async fn stream(&self, request: ModelRequest) -> RivetResult<Vec<String>> {
         let response = self.send(&request, true).await?;
-        let mut body_stream = response.bytes_stream();
-        let mut buffer = Vec::new();
+        let mut event_stream = response.bytes_stream().eventsource();
         let mut chunks = Vec::new();
-        while let Some(chunk) = body_stream.next().await {
-            let chunk = chunk.map_err(|error| {
+
+        while let Some(event_res) = event_stream.next().await {
+            let event = event_res.map_err(|error| {
                 RivetError::Model(format!("OpenCode SSE stream failed: {error}"))
             })?;
-            buffer.extend_from_slice(&chunk);
-            while let Some(newline) = buffer.iter().position(|byte| *byte == b'\n') {
-                let line: Vec<u8> = buffer.drain(..=newline).collect();
-                if let Some(content) = parse_sse_line(&String::from_utf8_lossy(&line))? {
-                    chunks.push(content);
-                }
+            if event.data == "[DONE]" {
+                break;
+            }
+            if let Ok(payload) = serde_json::from_str::<Value>(&event.data)
+                && let Some(content) = response_content(&payload)
+            {
+                chunks.push(content);
             }
         }
-        if !buffer.is_empty()
-            && let Some(content) = parse_sse_line(&String::from_utf8_lossy(&buffer))?
-        {
-            chunks.push(content);
-        }
+
         if chunks.is_empty() {
             return Err(RivetError::Model(
                 "OpenCode stream contained no assistant content".into(),
@@ -202,7 +194,7 @@ fn json_optional_u32(value: Option<&Value>) -> Option<u32> {
         .and_then(|value| u32::try_from(value).ok())
 }
 
-fn parse_sse_line(line: &str) -> RivetResult<Option<String>> {
+pub fn parse_sse_line(line: &str) -> RivetResult<Option<String>> {
     let Some(data) = line.trim_end_matches('\r').strip_prefix("data:") else {
         return Ok(None);
     };

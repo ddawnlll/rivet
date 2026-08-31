@@ -13,8 +13,10 @@ dotenvy = { workspace = true }
 futures-util = { workspace = true }
 async-trait = { workspace = true }
 serde_json = { workspace = true }
+eventsource-stream = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }
 noesis = { workspace = true }
 rivet-types = { workspace = true }
+

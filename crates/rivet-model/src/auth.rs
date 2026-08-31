@@ -439,6 +439,132 @@ pub fn normalize_provider_id(id: &str) -> String {
     id.trim().trim_end_matches('/').to_lowercase()
 }
 
+pub use secrecy::{ExposeSecret, SecretString};
+pub use zeroize::{Zeroize, ZeroizeOnDrop};
+
+/// Abstract credential store for production secret management across OS Keyrings and CI environments.
+pub trait CredentialStore: Send + Sync {
+    fn get_credential(&self, service: &str, key: &str) -> RivetResult<Option<SecretString>>;
+    fn set_credential(&self, service: &str, key: &str, secret: &str) -> RivetResult<()>;
+    fn delete_credential(&self, service: &str, key: &str) -> RivetResult<bool>;
+}
+
+pub struct KeyringCredentialStore;
+
+impl KeyringCredentialStore {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Default for KeyringCredentialStore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl CredentialStore for KeyringCredentialStore {
+    fn get_credential(&self, service: &str, key: &str) -> RivetResult<Option<SecretString>> {
+        let entry =
+            keyring::Entry::new(service, key).map_err(|e| RivetError::Storage(e.to_string()))?;
+        match entry.get_password() {
+            Ok(pass) => Ok(Some(SecretString::from(pass))),
+            Err(keyring::Error::NoEntry) => Ok(None),
+            Err(e) => Err(RivetError::Storage(format!("keyring get error: {e}"))),
+        }
+    }
+
+    fn set_credential(&self, service: &str, key: &str, secret: &str) -> RivetResult<()> {
+        let entry =
+            keyring::Entry::new(service, key).map_err(|e| RivetError::Storage(e.to_string()))?;
+        entry
+            .set_password(secret)
+            .map_err(|e| RivetError::Storage(format!("keyring set error: {e}")))
+    }
+
+    fn delete_credential(&self, service: &str, key: &str) -> RivetResult<bool> {
+        let entry =
+            keyring::Entry::new(service, key).map_err(|e| RivetError::Storage(e.to_string()))?;
+        match entry.delete_credential() {
+            Ok(_) => Ok(true),
+            Err(keyring::Error::NoEntry) => Ok(false),
+            Err(e) => Err(RivetError::Storage(format!("keyring delete error: {e}"))),
+        }
+    }
+}
+
+#[derive(Default)]
+pub struct EnvCredentialStore;
+
+impl CredentialStore for EnvCredentialStore {
+    fn get_credential(&self, _service: &str, key: &str) -> RivetResult<Option<SecretString>> {
+        let env_key = key.to_uppercase().replace('-', "_");
+        if let Ok(val) = std::env::var(&env_key) {
+            Ok(Some(SecretString::from(val)))
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn set_credential(&self, _service: &str, key: &str, secret: &str) -> RivetResult<()> {
+        let env_key = key.to_uppercase().replace('-', "_");
+        unsafe { std::env::set_var(env_key, secret) };
+        Ok(())
+    }
+
+    fn delete_credential(&self, _service: &str, key: &str) -> RivetResult<bool> {
+        let env_key = key.to_uppercase().replace('-', "_");
+        let exists = std::env::var(&env_key).is_ok();
+        if exists {
+            unsafe { std::env::remove_var(env_key) };
+        }
+        Ok(exists)
+    }
+}
+
+#[derive(Default, Clone)]
+pub struct EphemeralCredentialStore {
+    store: std::sync::Arc<std::sync::Mutex<HashMap<String, String>>>,
+}
+
+impl EphemeralCredentialStore {
+    pub fn new() -> Self {
+        Self {
+            store: std::sync::Arc::new(std::sync::Mutex::new(HashMap::new())),
+        }
+    }
+}
+
+impl CredentialStore for EphemeralCredentialStore {
+    fn get_credential(&self, service: &str, key: &str) -> RivetResult<Option<SecretString>> {
+        let map = self
+            .store
+            .lock()
+            .map_err(|_| RivetError::Storage("mutex poisoned".into()))?;
+        let entry_key = format!("{service}:{key}");
+        Ok(map.get(&entry_key).cloned().map(SecretString::from))
+    }
+
+    fn set_credential(&self, service: &str, key: &str, secret: &str) -> RivetResult<()> {
+        let mut map = self
+            .store
+            .lock()
+            .map_err(|_| RivetError::Storage("mutex poisoned".into()))?;
+        let entry_key = format!("{service}:{key}");
+        map.insert(entry_key, secret.to_string());
+        Ok(())
+    }
+
+    fn delete_credential(&self, service: &str, key: &str) -> RivetResult<bool> {
+        let mut map = self
+            .store
+            .lock()
+            .map_err(|_| RivetError::Storage("mutex poisoned".into()))?;
+        let entry_key = format!("{service}:{key}");
+        Ok(map.remove(&entry_key).is_some())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

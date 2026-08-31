@@ -496,7 +496,7 @@ struct ManagedChild {
     #[cfg(unix)]
     pid: u32,
     #[cfg(windows)]
-    job: usize,
+    job: windows::Win32::Foundation::HANDLE,
     completed: bool,
 }
 
@@ -506,7 +506,7 @@ impl ManagedChild {
         {
             unsafe {
                 command.pre_exec(|| {
-                    if setpgid(0, 0) == -1 {
+                    if libc::setpgid(0, 0) == -1 {
                         Err(io::Error::last_os_error())
                     } else {
                         Ok(())
@@ -544,7 +544,7 @@ impl ManagedChild {
     async fn terminate(&mut self) {
         #[cfg(unix)]
         unsafe {
-            let _ = kill(-(self.pid as i32), 9);
+            let _ = libc::kill(-(self.pid as i32), 9);
         }
         #[cfg(windows)]
         terminate_job(self.job);
@@ -559,7 +559,7 @@ impl Drop for ManagedChild {
         if !self.completed {
             #[cfg(unix)]
             unsafe {
-                let _ = kill(-(self.pid as i32), 9);
+                let _ = libc::kill(-(self.pid as i32), 9);
             }
             #[cfg(windows)]
             terminate_job(self.job);
@@ -569,132 +569,66 @@ impl Drop for ManagedChild {
     }
 }
 
-#[cfg(unix)]
-unsafe extern "C" {
-    fn setpgid(pid: i32, pgid: i32) -> i32;
-    fn kill(pid: i32, signal: i32) -> i32;
-}
+#[cfg(windows)]
+use windows::Win32::Foundation::{CloseHandle, HANDLE};
+#[cfg(windows)]
+use windows::Win32::System::JobObjects::{
+    AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
+    SetInformationJobObject, TerminateJobObject,
+};
 
 #[cfg(windows)]
-#[repr(C)]
-struct JobObjectBasicLimitInformation {
-    per_process_user_time_limit: i64,
-    per_job_user_time_limit: i64,
-    limit_flags: u32,
-    minimum_working_set_size: usize,
-    maximum_working_set_size: usize,
-    active_process_limit: u32,
-    affinity: usize,
-    priority_class: u32,
-    scheduling_class: u32,
-}
+fn create_job_for_child(child: &Child) -> io::Result<HANDLE> {
+    let job = unsafe { CreateJobObjectW(None, None) }
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
 
-#[cfg(windows)]
-#[repr(C)]
-struct IoCounters {
-    read_operations: u64,
-    write_operations: u64,
-    other_operations: u64,
-    read_bytes: u64,
-    write_bytes: u64,
-    other_bytes: u64,
-}
+    let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
 
-#[cfg(windows)]
-#[repr(C)]
-struct JobObjectExtendedLimitInformation {
-    basic_limit_information: JobObjectBasicLimitInformation,
-    io_info: IoCounters,
-    process_memory_limit: usize,
-    job_memory_limit: usize,
-    peak_process_memory_used: usize,
-    peak_job_memory_used: usize,
-}
-
-#[cfg(windows)]
-const JOB_OBJECT_EXTENDED_LIMIT_INFORMATION: u32 = 9;
-#[cfg(windows)]
-const JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE: u32 = 0x2000;
-
-#[cfg(windows)]
-unsafe extern "system" {
-    fn CreateJobObjectW(attributes: *mut std::ffi::c_void, name: *const u16) -> usize;
-    fn SetInformationJobObject(
-        job: usize,
-        information_class: u32,
-        information: *mut std::ffi::c_void,
-        information_length: u32,
-    ) -> i32;
-    fn AssignProcessToJobObject(job: usize, process: usize) -> i32;
-    fn TerminateJobObject(job: usize, exit_code: u32) -> i32;
-    fn CloseHandle(handle: usize) -> i32;
-}
-
-#[cfg(windows)]
-fn create_job_for_child(child: &Child) -> io::Result<usize> {
-    let job = unsafe { CreateJobObjectW(std::ptr::null_mut(), std::ptr::null()) };
-    if job == 0 {
-        return Err(io::Error::last_os_error());
-    }
-    let mut limits = JobObjectExtendedLimitInformation {
-        basic_limit_information: JobObjectBasicLimitInformation {
-            per_process_user_time_limit: 0,
-            per_job_user_time_limit: 0,
-            limit_flags: JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
-            minimum_working_set_size: 0,
-            maximum_working_set_size: 0,
-            active_process_limit: 0,
-            affinity: 0,
-            priority_class: 0,
-            scheduling_class: 0,
-        },
-        io_info: IoCounters {
-            read_operations: 0,
-            write_operations: 0,
-            other_operations: 0,
-            read_bytes: 0,
-            write_bytes: 0,
-            other_bytes: 0,
-        },
-        process_memory_limit: 0,
-        job_memory_limit: 0,
-        peak_process_memory_used: 0,
-        peak_job_memory_used: 0,
-    };
-    let Some(process_handle) = child.raw_handle() else {
-        unsafe {
-            CloseHandle(job);
-        }
-        return Err(io::Error::other("spawned process has no process handle"));
-    };
     let configured = unsafe {
         SetInformationJobObject(
             job,
-            JOB_OBJECT_EXTENDED_LIMIT_INFORMATION,
-            (&mut limits as *mut JobObjectExtendedLimitInformation).cast(),
-            std::mem::size_of::<JobObjectExtendedLimitInformation>() as u32,
+            JobObjectExtendedLimitInformation,
+            (&limits as *const JOBOBJECT_EXTENDED_LIMIT_INFORMATION).cast(),
+            std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
         )
-    } != 0;
-    let assigned =
-        configured && unsafe { AssignProcessToJobObject(job, process_handle as usize) != 0 };
-    if !assigned {
+    };
+
+    if configured.is_err() {
         unsafe {
-            CloseHandle(job);
+            let _ = CloseHandle(job);
         }
         return Err(io::Error::last_os_error());
     }
+
+    let Some(raw_handle) = child.raw_handle() else {
+        unsafe {
+            let _ = CloseHandle(job);
+        }
+        return Err(io::Error::other("spawned process has no process handle"));
+    };
+
+    let assigned = unsafe { AssignProcessToJobObject(job, HANDLE(raw_handle as _)) };
+    if assigned.is_err() {
+        unsafe {
+            let _ = CloseHandle(job);
+        }
+        return Err(io::Error::last_os_error());
+    }
+
     Ok(job)
 }
 
 #[cfg(windows)]
-fn terminate_job(job: usize) {
+fn terminate_job(job: HANDLE) {
     unsafe {
         let _ = TerminateJobObject(job, 1);
     }
 }
 
 #[cfg(windows)]
-fn close_job(job: usize) {
+fn close_job(job: HANDLE) {
     unsafe {
         let _ = CloseHandle(job);
     }

@@ -1,6 +1,6 @@
 //! # praxis::parsers::cargo
 //!
-//! Rust `cargo test` output parser.
+//! Rust `cargo test` output parser with ANSI stripping.
 
 use super::ParsedTestReport;
 
@@ -8,11 +8,14 @@ pub struct CargoTestParser;
 
 impl CargoTestParser {
     pub fn parse(stdout: &str, stderr: &str) -> ParsedTestReport {
+        let clean_bytes = strip_ansi_escapes::strip(stdout.as_bytes());
+        let clean_stdout = String::from_utf8_lossy(&clean_bytes);
+
         let mut passed = 0;
         let mut failed = 0;
         let mut skipped = 0;
 
-        for line in stdout.lines() {
+        for line in clean_stdout.lines() {
             let line_trimmed = line.trim();
             if line_trimmed.starts_with("test result:") {
                 // "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s"
@@ -25,15 +28,13 @@ impl CargoTestParser {
                 if let Some(s) = extract_num_before(line_trimmed, "ignored") {
                     skipped += s;
                 }
-            } else if line_trimmed.starts_with("test ") && line_trimmed.ends_with("... ok") {
-                // Single test line fallback
-                if passed == 0 && failed == 0 {
-                    // Only count individual if summary line hasn't been hit yet
-                }
             }
         }
 
         let total = passed + failed + skipped;
+
+        let clean_stderr =
+            String::from_utf8_lossy(&strip_ansi_escapes::strip(stderr.as_bytes())).into_owned();
 
         ParsedTestReport {
             framework: "cargo test".into(),
@@ -42,8 +43,8 @@ impl CargoTestParser {
             skipped_count: skipped,
             total_count: total,
             duration_ms: None,
-            raw_stdout: stdout.to_string(),
-            raw_stderr: stderr.to_string(),
+            raw_stdout: clean_stdout.into_owned(),
+            raw_stderr: clean_stderr,
         }
     }
 }

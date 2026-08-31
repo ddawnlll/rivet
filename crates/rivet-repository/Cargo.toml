@@ -18,6 +18,16 @@ sha2 = { workspace = true }
 hex = { workspace = true }
 regex = { workspace = true }
 lsp-types = { workspace = true }
+ignore = { workspace = true }
+globset = { workspace = true }
+tree-sitter = { workspace = true }
+tree-sitter-rust = { workspace = true }
+tree-sitter-python = { workspace = true }
+tree-sitter-typescript = { workspace = true }
+tree-sitter-go = { workspace = true }
+cap-std = { workspace = true }
+
 
 [dev-dependencies]
 tempfile = { workspace = true }
+

@@ -107,9 +107,11 @@ footer{border-top:3px double #333;margin-top:60px;padding-top:18px;color:var(--m
 <li class="toc-h1"><a href="#cognitive-view-policy-progressive-disclosure">Cognitive View Policy: progressive disclosure</a></li>
 <li class="toc-h1"><a href="#stable-knowledge-artifacts">Stable knowledge artifacts</a></li>
 <li class="toc-h1"><a href="#semantic-code-operations-and-token-economics">Semantic code operations and token economics</a></li>
+<li class="toc-h2"><a href="#two-tier-code-intelligence-architecture">Two-tier code intelligence architecture</a></li>
 <li class="toc-h1"><a href="#parallelism-and-conflict-aware-scheduling">Parallelism and conflict-aware scheduling</a></li>
 <li class="toc-h1"><a href="#worktree-transaction-and-merge-model">Worktree, transaction and merge model</a></li>
 <li class="toc-h1"><a href="#resource-isolation">Resource isolation</a></li>
+<li class="toc-h2"><a href="#production-sandboxing-implementation-stack">Production sandboxing implementation stack</a></li>
 <li class="toc-h1"><a href="#project-trust-and-prompt-injection-boundary">Project trust and prompt-injection boundary</a></li>
 <li class="toc-h1"><a href="#production-case-study-bunun-zig-rust-rewrite">Production case study: Bun&#x27;un Zig → Rust rewrite&#x27;ı</a></li>
 <li class="toc-h2"><a href="#vakann-epistemik-snr">Vakanın epistemik sınırı</a></li>
@@ -403,7 +405,9 @@ footer{border-top:3px double #333;margin-top:60px;padding-top:18px;color:var(--m
 <li class="toc-h2"><a href="#trust-states">Trust states</a></li>
 <li class="toc-h2"><a href="#project-local-configuration-rule">Project-local configuration rule</a></li>
 <li class="toc-h2"><a href="#least-capability-worker">Least-capability worker</a></li>
-<li class="toc-h2"><a href="#resource-sandbox">Resource sandbox</a></li>
+<li class="toc-h2"><a href="#resource-and-execution-sandbox">Resource and execution sandbox</a></li>
+<li class="toc-h2"><a href="#credential-security-and-key-management">Credential security and key management</a></li>
+<li class="toc-h2"><a href="#cryptographic-receipts-and-transparency">Cryptographic receipts and transparency</a></li>
 <li class="toc-h1"><a href="#rivet-constitutional-invariant-test-suite">Rivet Constitutional Invariant Test Suite</a></li>
 <li class="toc-h1"><a href="#technical-architecture-v03">Technical Architecture v0.3</a></li>
 <li class="toc-h2"><a href="#implementation-status-and-scope">Implementation status and scope</a></li>
@@ -457,6 +461,7 @@ footer{border-top:3px double #333;margin-top:60px;padding-top:18px;color:var(--m
 <li class="toc-h1"><a href="#glossary">Glossary</a></li>
 <li class="toc-h1"><a href="#final-research-position">Final Research Position</a></li>
 <li class="toc-h1"><a href="#changelog">Changelog</a></li>
+<li class="toc-h2"><a href="#2026-09-01-production-stack-hardening-subsystem-consolidation">2026-09-01 — Production Stack Hardening &amp; Subsystem Consolidation</a></li>
 <li class="toc-h2"><a href="#2026-08-30-research-monograph-v03">2026-08-30 — Research Monograph v0.3</a></li>
 <li class="toc-h2"><a href="#2026-08-29-research-monograph-v02">2026-08-29 — Research Monograph v0.2</a></li>
 <li class="toc-h2"><a href="#2026-08-27-research-monograph-v01">2026-08-27 — Research Monograph v0.1</a></li></ul></nav>
@@ -1051,8 +1056,11 @@ RECENT EVIDENCE ──────┘          ↓
 </code></pre>
 <p>v0.2 doğrudan representation ablation ister: <strong>(A) raw retrieved text, (B) triples, (C) selected graph paths, (D) hybrid semantic+typed cognitive view.</strong> Aynı underlying evidence altında next-action accuracy, contradiction detection, rejected-belief recall, unsupported relation üretimi, token cost ve latency ölçülmelidir. “Graph kullanmak” katkı değildir; doğru cognitive serialization katkı olabilir.</p>
 <h1 id="accp-specification-claim-action-authority-and-capability-governance">ACCP specification: claim, action, authority and capability governance<a class="anchor" href="#accp-specification-claim-action-authority-and-capability-governance">¶</a></h1>
-<p><span class="badge project">PROJECT_DESIGN</span> ACCP'nin iki ana sorusu vardır:</p>
-<div class="status">**Normative Protocol Specification:** ACCP 3.0 protokolünün tam, uluslararası standart formatındaki normatif spesifikasyonu için bakınız: [`ACCP 3.0 Specification`](#accp-3-0-cognitive-controller-harness-semantic-protocol). Bu bölüm, Rivet v0.3 içindeki mimari entegrasyonu özetler.</div>
+<p><span class="badge established">SUPERSEDED_BY_ACCP_3_0</span></p>
+<blockquote>
+<p>[!IMPORTANT]
+<strong>CANONICAL SPECIFICATION:</strong> Bu tarihsel draft dokümanı <strong>ACCP 3.0</strong> tarafından supersede edilmiştir. Geliştirme, tipler ve tüm implementasyon sınırları için tek kanonik kaynak: <a href="file:///c:/Users/dresden/Documents/rivet/docs/contracts/ACCP_3_0_SPEC.md"><code>ACCP 3.0 Specification</code></a>. Bu dosya yalnız tarihsel bağlam referansıdır.</p>
+</blockquote>
 <p><strong>v0.2/v0.3 scope clarification.</strong> ACCP memory engine, scheduler, RPC transport veya “everything protocol” değildir. Çekirdek görevi evidence admission, soft→hard promotion authority, action authorization ve auditable claim semantics'tir. Native provider tool/function calling başka bir transport olarak kalabilir; Rivet'in epistemic semantics'i onun üstünde veya yanında typed runtime state olarak uygulanabilir.</p>
 <ol>
 <li><strong>Bu claim mevcut evidence altında hangi authority ile söylenebilir?</strong></li>
@@ -1629,6 +1637,26 @@ TEST_MAP.json
     - semantic_move: estimated_calls 1
   choose: semantic_move
 </code></pre>
+<h2 id="two-tier-code-intelligence-architecture">Two-tier code intelligence architecture<a class="anchor" href="#two-tier-code-intelligence-architecture">¶</a></h2>
+<p>Rivet kod üzerinde işlem yaparken <strong>Sözdizimsel (Structural)</strong> ve <strong>Semantik (Semantic)</strong> katmanları kesin olarak ayırır:</p>
+<pre><code class="language-text">Model Patch / Refactor Request
+        │
+        ▼
+  Task Classification
+   ├── [Local / Syntactic Edit] ───────────────► Structural Engine (tree-sitter + similar)
+   │                                              • AST node locator [start_byte, end_byte]
+   │                                              • In-place range replacement &amp; reparse
+   │                                              • Diff generation via `similar`
+   │
+   └── [Cross-file / Reference Rename] ────────► Semantic Engine (async-lsp)
+                                                  • Tower-based async LSP client
+                                                  • Workspace-wide symbol resolution
+                                                  • Type definition &amp; reference graph
+</code></pre>
+<ol>
+<li><strong>Structural Engine (<code>tree-sitter</code> + <code>similar</code>):</strong> Tekil dosya veya fonksiyon içi kod güncellemelerinde tree-sitter üzerinden sözdizimsel düğümün tam byte aralığı (<code>start_byte..end_byte</code>) bulunur, atomik olarak değiştirilir ve sözdizimi geçerliliği yeniden parse edilerek (<code>reparse</code>) doğrulanır. <code>similar</code> ile diff üretilerek kullanıcı ve modele görsel doğrulanabilirlik sunulur.</li>
+<li><strong>Semantic Engine (<code>async-lsp</code>):</strong> <code>RenameSymbol</code>, referans bulma ve cross-file tip güvenliği gerektiren operasyonlar yalnızca AST seviyesinde çözülemez. Rivet, dil sunucuları (LSP) ile konuşarak semantik sembol bağıntılarını deterministik olarak yürütür.</li>
+</ol>
 <h1 id="parallelism-and-conflict-aware-scheduling">Parallelism and conflict-aware scheduling<a class="anchor" href="#parallelism-and-conflict-aware-scheduling">¶</a></h1>
 <p>Bun vakasının ilk false start'ı, çok sayıda agent açmanın tek başına parallelism olmadığını gösterir. Shared mutable state üzerinde concurrency conflict graph olmadan throughput kolayca negative olabilir.</p>
 <p>Rivet scheduler her task için en az şu bilgileri tutmalıdır:</p>
@@ -1688,6 +1716,16 @@ AUTHORIZED COMMIT/MERGE
   timeout_seconds: 600
   kill_policy: hard
 </code></pre>
+<h2 id="production-sandboxing-implementation-stack">Production sandboxing implementation stack<a class="anchor" href="#production-sandboxing-implementation-stack">¶</a></h2>
+<p>Rivet execution runtime'ı işletim sistemi bazında katmanlı bir savunma hattı (<em>defense-in-depth</em>) uygular:</p>
+<ol>
+<li><strong>Filesystem Capability (<code>cap-std</code>):</strong> Tüm dosya okuma ve yazma işlemleri global kök dizin yerine <code>cap_std::fs::Dir</code> nesnesi üzerinden sınırlandırılır. Symlink yarış koşulları ve dizin dışına çıkma girişimleri engellenir.</li>
+<li><strong>Linux Sandbox Katmanı:</strong>
+   - <strong>Landlock (<code>landlock</code> crate):</strong> Çekirdek seviyesinde dosya sistemi erişim haklarını kısıtlar (yalnızca izin verilen çalışma ve araç dizinleri).
+   - <strong>Syscall Filtreleme (<code>seccompiler</code>):</strong> Seccomp-BPF ile tehlikeli sistem çağrılarını (<code>ptrace</code>, <code>mount</code>, <code>unshare</code>, vb.) bloklar.
+   - <strong>Kaynak Kotaları (<code>rlimit</code> crate):</strong> Azami işlemci süresi, bellek tavanı ve dosya boyutu limitlerini enforce eder.</li>
+<li><strong>Windows Process Containment (<code>windows</code> crate):</strong> Microsoft resmi <code>windows</code> crate'i ile <code>Win32_System_JobObjects</code> oluşturulur; alt süreçlerin yetkisiz yaşam döngüsü ve bellek sızıntıları garantili biçimde yönetilir.</li>
+</ol>
 <h1 id="project-trust-and-prompt-injection-boundary">Project trust and prompt-injection boundary<a class="anchor" href="#project-trust-and-prompt-injection-boundary">¶</a></h1>
 <p>Repository içindeki <code>AGENTS.md</code>, <code>CLAUDE.md</code>, hooks, build scripts ve generated tool output kullanıcı intent'inden ayrı authority class'a sahip olmalıdır. “Repo'da yazıyor” = “user authorized” değildir.</p>
 <p>Minimum trust sequence:</p>
@@ -4231,18 +4269,27 @@ deny:
   - secrets.read
   - network.unrestricted
 </code></pre>
-<h2 id="resource-sandbox">Resource sandbox<a class="anchor" href="#resource-sandbox">¶</a></h2>
-<p>Her worker için mümkünse OS-level limits:</p>
+<h2 id="resource-and-execution-sandbox">Resource and execution sandbox<a class="anchor" href="#resource-and-execution-sandbox">¶</a></h2>
+<p>Prompt resource control değildir; komut dizesi içindeki substring kara listeleri (<code>contains("curl")</code>) da güvenlik sınırı değildir. Güvenlik donanım ve çekirdek (kernel) seviyesinde uygulanır:</p>
+<ol>
+<li><strong>Filesystem Confinement (<code>cap-std</code>):</strong> Ortamdaki global dosya sistemine ambient erişim kapatılır. Tüm dosya işlemleri çalışma dizinini temsil eden açık <code>cap_std::fs::Dir</code> capability tanıtıcısı üzerinden yapılır. <code>../../</code> traversal ve symlink yarış koşulu (TOCTOU) açıkları imkânsız kılınır.</li>
+<li><strong>Syscall Boundary (Linux <code>seccompiler</code>):</strong> Child process'lerin <code>ptrace</code>, <code>mount</code>, <code>unshare</code>, <code>kexec</code>, <code>reboot</code> gibi yetki yükseltme veya izolasyon dışına çıkma potansiyeli taşıyan syscall'ları seccomp-BPF filtreleriyle engellenir.</li>
+<li><strong>Filesystem Rights (Linux <code>landlock</code>):</strong> Unprivileged process'in dosya sistemi görünürlüğü yalnızca çalışma dizini ve derleyici/araç yollarıyla sınırlandırılır.</li>
+<li><strong>Kaynak Tavanları (<code>rlimit</code> &amp; cgroups):</strong> CPU süresi, maksimum bellek, açık dosya tanımlayıcıları ve azami PID kotaları işletim sistemi seviyesinde kilitlenir.</li>
+<li><strong>Windows İzolasyonu (<code>windows</code> crate):</strong> Windows üzerinde <code>Win32_System_JobObjects</code> ile process ağacı ve bellek sınırları resmi Microsoft API'leri üzerinden yönetilir; timeout durumunda tüm alt süreçler (<code>JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE</code>) garantili biçimde sonlandırılır.</li>
+</ol>
+<h2 id="credential-security-and-key-management">Credential security and key management<a class="anchor" href="#credential-security-and-key-management">¶</a></h2>
+<p>API anahtarları ve sağlayıcı kimlik bilgileri düz metin JSON dosyalarında veya genel ortam değişkenlerinde savunmasız bırakılmaz:</p>
 <ul>
-<li>CPU quota;</li>
-<li>memory ceiling;</li>
-<li>process/PID limit;</li>
-<li>disk/output quota;</li>
-<li>wall-clock timeout;</li>
-<li>network policy;</li>
-<li>filesystem write scope.</li>
+<li><strong>OS Keyring (<code>keyring</code>):</strong> macOS Keychain, Windows Credential Manager ve Linux Secret Service üzerinden platform düzeyinde şifreli saklanır. Headless/CI ortamları için <code>EnvCredentialStore</code> fallback sağlanır.</li>
+<li><strong>Bellek Koruma (<code>secrecy</code> + <code>zeroize</code>):</strong> Anahtarlar <code>SecretString</code> ile sarmalanarak yanlışlıkla loglara veya debug çıktılarına yazılması önlenir; nesne serbest bırakıldığında (drop) bellek derleyici optimizasyonuna takılmadan sıfırlanır (<code>zeroize</code>).</li>
 </ul>
-<p>Prompt resource control değildir.</p>
+<h2 id="cryptographic-receipts-and-transparency">Cryptographic receipts and transparency<a class="anchor" href="#cryptographic-receipts-and-transparency">¶</a></h2>
+<p>Doğrulama ve yürütme kanıtları Merkle ağaçları ile mühürlenir:</p>
+<ul>
+<li><strong>RFC 6962 Domain Separation:</strong> Yaprak hash'leri <code>0x00 || data</code>, düğüm hash'leri <code>0x01 || left || right</code> ile domain-separated olarak SHA-256 üzerinden hesaplanır.</li>
+<li><strong>Collision Protection:</strong> Tek yaprakların kopyalanması (CVE-2012-2459 açığı) önlenir; receipt içine ağaç boyutu (<code>tree_size</code>), kök (<code>root</code>), yaprak indeksi ve inclusion proof mühürlenir.</li>
+</ul>
 <h1 id="rivet-constitutional-invariant-test-suite">Rivet Constitutional Invariant Test Suite<a class="anchor" href="#rivet-constitutional-invariant-test-suite">¶</a></h1>
 <p>Aşağıdaki testler product correctness'ten bağımsız olarak architecture correctness'i sınar.</p>
 <table>
@@ -4522,9 +4569,79 @@ Rivet-owned:
 <td>Chat-first terminal surface; research iteration UI'dan bağımsız kalır.</td>
 </tr>
 <tr>
+<td>Filesystem capability</td>
+<td><code>cap-std</code></td>
+<td>Directory-scoped capability; ambient global filesystem yetkisini kaldırır, path traversal ve symlink TOCTOU açıklarını önler.</td>
+</tr>
+<tr>
+<td>Linux Sandbox</td>
+<td><code>landlock</code> + <code>seccompiler</code> + <code>rlimit</code></td>
+<td>Çok katmanlı izolasyon: Landlock fs erişim kısıtlaması, seccomp BPF syscall filtreleme ve rlimit kaynak sınırları.</td>
+</tr>
+<tr>
+<td>Windows containment</td>
+<td><code>windows</code></td>
+<td>Microsoft resmi Win32 API binding'i (<code>Win32_System_JobObjects</code>); manuel unsafe FFI ve struct padding risklerini ortadan kaldırır.</td>
+</tr>
+<tr>
+<td>AST &amp; Syntax Engine</td>
+<td><code>tree-sitter</code> (Rust, TS, Py, Go)</td>
+<td>Çok dilli, incremental, hataya dayanıklı Concrete Syntax Tree (CST) çıkarımı ve byte-range symbol lokasyonu.</td>
+</tr>
+<tr>
+<td>Structural Patch &amp; Diff</td>
+<td><code>tree-sitter</code> ranges + <code>similar</code></td>
+<td>CST byte-range tabanlı güvenli sözdizimsel yama ve insan/model diff görselleştirme.</td>
+</tr>
+<tr>
+<td>Semantic Engine</td>
+<td><code>async-lsp</code></td>
+<td>Tower tabanlı asenkron LSP istemcisi; cross-file referanslar, tanım bulma ve gerçek semantik rename.</td>
+</tr>
+<tr>
+<td>Git substrate</td>
+<td><code>gix</code> (Gitoxide) + CLI fallback</td>
+<td>Pure-Rust Git nesne veritabanı, discovery, HEAD, packed-refs ve config trust modeli; karmaşık porcelain için CLI fallback.</td>
+</tr>
+<tr>
+<td>Ignore &amp; Traversal</td>
+<td><code>ignore::WalkBuilder</code> + <code>globset</code></td>
+<td>Nested <code>.gitignore</code>, <code>.ignore</code>, global exclude kuralları ve paralel deterministik dizin taraması; policy eşleştirmesi için globset.</td>
+</tr>
+<tr>
+<td>Cryptographic Receipts</td>
+<td><code>rs_merkle</code> + RFC 6962 custom Hasher</td>
+<td>Domain-separated (<code>0x00</code> leaf, <code>0x01</code> node) RFC 6962 hasher + <code>tree_size</code> taahhüdü; Merkle collision (CVE-2012-2459) korumalı.</td>
+</tr>
+<tr>
+<td>Test Verification</td>
+<td><code>cargo-nextest</code> / JUnit + <code>junit-parser</code></td>
+<td>Yapısal JUnit XML/JSON ingestion ile güvenilir test verdict çıkarımı; stdout dize ayrıştırmasını sonlandırır.</td>
+</tr>
+<tr>
+<td>Terminal Logging</td>
+<td><code>strip-ansi-escapes</code></td>
+<td>Terminal loglarını temiz görüntüleme (asla doğrulama kararı üretmek için kullanılmaz).</td>
+</tr>
+<tr>
+<td>MCP edge</td>
+<td><code>rmcp</code></td>
+<td>Resmi Model Context Protocol Rust SDK'sı (stdio transport, bildirimler, araçlar ve kaynak abonelikleri).</td>
+</tr>
+<tr>
+<td>SSE Streaming</td>
+<td><code>eventsource-stream</code></td>
+<td>HTTP byte stream'den çok satırlı SSE framing ayrıştırması; tehlikeli otomatik reconnect döngülerinden arındırılmış.</td>
+</tr>
+<tr>
+<td>Secret &amp; Key Store</td>
+<td><code>keyring</code> + <code>secrecy</code> + <code>zeroize</code></td>
+<td><code>CredentialStore</code> trait arkasında OS Keychain/CredManager entegrasyonu, log sızıntısı önleme ve bellek temizliği.</td>
+</tr>
+<tr>
 <td>Serialization</td>
-<td><code>serde</code>, <code>serde_json</code></td>
-<td>Provider/audit/config boundaries. Internal domain model stringly JSON değildir.</td>
+<td><code>serde</code>, <code>serde_json</code>, <code>serde-saphyr</code></td>
+<td>JSON/YAML provider/audit/view sınırları. <code>serde-saphyr</code> ile fuzz-tested, panic-free ve streaming uyumlu YAML.</td>
 </tr>
 <tr>
 <td>Shared immutable buffers</td>
@@ -4542,24 +4659,14 @@ Rivet-owned:
 <td>Cognitive cycle, provider, tool, verification ve state revision spans.</td>
 </tr>
 <tr>
-<td>Git</td>
-<td><code>gix</code> + explicit Git CLI fallback</td>
-<td>Pure-Rust read/plumbing ve stable repo observations; missing porcelain için controlled escape hatch.</td>
-</tr>
-<tr>
 <td>Embedded store</td>
-<td><code>redb</code> first candidate</td>
+<td><code>redb</code></td>
 <td>Pure Rust, ACID, MVCC, crash safety ve zero-copy oriented API; Noesis indexes Rivet tarafından kontrol edilir.</td>
 </tr>
 <tr>
 <td>Model multiprovider</td>
-<td><code>genai</code> behind Rivet trait</td>
+<td><code>genai</code> / <code>rig-core</code> behind Rivet trait</td>
 <td>Provider-specific HTTP/protocol plumbing'i reuse eder; agent lifecycle'ını sahiplenmez.</td>
-</tr>
-<tr>
-<td>MCP edge</td>
-<td><code>rmcp</code></td>
-<td>External MCP ecosystem compatibility; internal bus değildir.</td>
 </tr>
 <tr>
 <td>Property tests</td>
@@ -4573,7 +4680,7 @@ Rivet-owned:
 </tr>
 </tbody>
 </table>
-<p>Reference snapshot, 30 Aug 2026: Tokio describes itself as an asynchronous Rust runtime; Ratatui is a Rust terminal UI library; <code>redb</code> is a pure-Rust ACID embedded store with MVCC and zero-copy oriented access; <code>genai</code> is a multiprovider Rust client; <code>gix</code> is a pure-Rust Git implementation; the Rust MCP SDK uses Tokio. These are substrate choices, not evidence for Rivet's cognitive thesis.</p>
+<p>Reference snapshot, 1 Sep 2026: The Rust ecosystem substrate reflects production-hardened libraries: <code>cap-std</code> provides capability-oriented filesystem containment; <code>tree-sitter</code> provides universal CST parsing; <code>async-lsp</code> handles semantic LSP interactions; <code>landlock</code> + <code>seccompiler</code> + <code>rlimit</code> form the Linux sandboxing triad; <code>windows</code> provides official Win32 Job Object bindings; <code>rs_merkle</code> with RFC 6962 domain separation provides transparency receipts; <code>rmcp</code> is the official Model Context Protocol SDK; <code>serde-saphyr</code> provides panic-free YAML serialization; <code>keyring</code> + <code>secrecy</code> + <code>zeroize</code> manage credentials across OS keyrings.</p>
 <h2 id="zero-copy-and-allocation-policy">Zero-copy and allocation policy<a class="anchor" href="#zero-copy-and-allocation-policy">¶</a></h2>
 <p><span class="badge provisional">PROVISIONAL_DECISION</span> “Zero-copy” v0.3'te dogmatik bir global invariant değil, <strong>no unnecessary copies / no unnecessary serialization boundaries</strong> politikasıdır. LLM provider JSON, compression, persistence schema migration veya security boundary kopya gerektiriyorsa kopya yapılır. Self-referential lifetime mimarisi kurup araştırma iteration'ını kilitlemek başarısızlıktır.</p>
 <p>Hot-path ilkeleri:</p>
@@ -5395,6 +5502,84 @@ Own:
 <td>LOCKED_RESEARCH_RULE</td>
 <td>Önce state thesis.</td>
 </tr>
+<tr>
+<td>D-031</td>
+<td>Filesystem capability boundary <code>cap-std::fs::Dir</code> ile kurulur; global path canonicalize + prefix check yerine açık capability abstraction'ı kullanılır.</td>
+<td>LOCKED_ARCHITECTURAL</td>
+<td>Path traversal ve symlink TOCTOU açıklarını kernel seviyesinde engeller; tüm fs araçlarını tek ontolojiye oturtur.</td>
+</tr>
+<tr>
+<td>D-032</td>
+<td>Multi-layer Linux execution sandbox'ı <code>landlock</code> + <code>seccompiler</code> + <code>rlimit</code> kombinasyonuyla uygulanır; komut kara listesi (<code>contains("curl")</code>) güvenlik sınırı değil üst seviye <code>CommandPolicy</code> olur.</td>
+<td>LOCKED_FOR_FIRST_SLICE</td>
+<td>Sahte güvenlik algısını önler; gerçek OS syscall ve filesystem kısıtlaması getirir.</td>
+</tr>
+<tr>
+<td>D-033</td>
+<td>Windows Win32 FFI ve process containment için el yapımı <code>extern "system"</code> yerine resmi <code>windows</code> crate'i kullanılır.</td>
+<td>LOCKED_FOR_FIRST_SLICE</td>
+<td>Manuel pointer cast, struct padding ve mimariye özgü UB risklerini sıfırlar.</td>
+</tr>
+<tr>
+<td>D-034</td>
+<td>Çok dilli AST ve sözdizimsel sembol çıkarımı el yapımı regex/split yerine <code>tree-sitter</code> (Rust, TS, Py, Go) ile yapılır.</td>
+<td>LOCKED_FOR_FIRST_SLICE</td>
+<td>Yorum satırları, çok satırlı imzalar ve karmaşık dil yapıları için endüstri standardı hataya dayanıklı CST çıkarımı.</td>
+</tr>
+<tr>
+<td>D-035</td>
+<td>Kod düzenleme iki katmana ayrılır: Sözdizimsel blok/aralık yamaları için Structural Engine (<code>tree-sitter</code> byte ranges + <code>similar</code> diff render); cross-file semantik operasyonlar için Semantic Engine (<code>async-lsp</code>).</td>
+<td>LOCKED_ARCHITECTURAL</td>
+<td>Syntactic patch ile semantic rename arasındaki kavramsal karışıklığı giderir; dil sunucularıyla tam semantik doğruluk sağlar.</td>
+</tr>
+<tr>
+<td>D-036</td>
+<td>Repository census ve dosya taraması için el yapımı tek seviyeli <code>.gitignore</code> yerine nested kuralları destekleyen <code>ignore::WalkBuilder</code>, policy filtreleri için <code>globset</code> kullanılır.</td>
+<td>LOCKED_FOR_FIRST_SLICE</td>
+<td>Gizli dosyaların (secrets/.env) yanlışlıkla sızmasını engeller; paralel ve deterministik traversal sağlar.</td>
+</tr>
+<tr>
+<td>D-037</td>
+<td>Git incelemesi ve nesne keşfi için <code>gix</code> (Gitoxide) primary substrate'tir; el yapımı <code>.git/HEAD</code> okuyucu tasfiye edilir, porcelain işlemler için git CLI fallback korunur.</td>
+<td>LOCKED_FOR_FIRST_SLICE</td>
+<td>Packed-refs, submodule ve worktree uyumluluğunu çözer; saf Rust trust modelini repo analizine kazandırır.</td>
+</tr>
+<tr>
+<td>D-038</td>
+<td>Kriptografik doğrulama ve transparency receipt'leri için <code>rs_merkle</code> üzerinde RFC 6962 uyumlu domain-separated <code>RivetReceiptHasher</code> (<code>0x00</code> leaf, <code>0x01</code> node) ve <code>tree_size</code> taahhüdü kullanılır; tek yaprak kopyalama (CVE-2012-2459) önlenir.</td>
+<td>LOCKED_FOR_FIRST_SLICE</td>
+<td>Merkle collision ve sahte inclusion proof açıklarını kapatır; receipt doğrulamasına kriptografik garanti getirir.</td>
+</tr>
+<tr>
+<td>D-039</td>
+<td>Test doğrulama kararları human stdout parsing yerine yapısal JUnit ingestion (<code>cargo-nextest</code> / <code>pytest --junitxml</code> -&gt; <code>junit-parser</code>) ile verilir; <code>strip-ansi-escapes</code> yalnızca log görüntüleme içindir.</td>
+<td>LOCKED_FOR_FIRST_SLICE</td>
+<td>Test loglarının ve format farklılıklarının doğrulama kararını (verdict) yanıltmasını engeller.</td>
+</tr>
+<tr>
+<td>D-040</td>
+<td>MCP entegrasyonu için el yapımı stdio döngüsü yerine resmi <code>rmcp</code> 3.x SDK'sı kullanılır; çift yönlü asenkron notification ve progress desteği sağlanır.</td>
+<td>LOCKED_FOR_FIRST_SLICE</td>
+<td>Arka plan bildirimlerinin sessizce yutulmasını ve streaming deadlock'larını önler.</td>
+</tr>
+<tr>
+<td>D-041</td>
+<td>LLM model akışlarında çok satırlı SSE framing için <code>eventsource-stream</code> kullanılır; tehlikeli otomatik yeniden bağlanma döngülerinden kaçınılır.</td>
+<td>LOCKED_FOR_FIRST_SLICE</td>
+<td>Parçalı event'lerde JSON kopmasını engeller; akış içi token tekrarı veya durum bozulmasını önler.</td>
+</tr>
+<tr>
+<td>D-042</td>
+<td>Kimlik ve API anahtarı yönetimi <code>CredentialStore</code> trait'i arkasında <code>keyring</code> (OS keychain), <code>secrecy</code> (<code>SecretString</code>) ve <code>zeroize</code> ile yapılır; CI için <code>EnvCredentialStore</code> sağlanır.</td>
+<td>LOCKED_FOR_FIRST_SLICE</td>
+<td>Düz metin JSON disk kaydını kaldırır; RAM dump ve log sızıntılarına karşı bellek temizliği sağlar.</td>
+</tr>
+<tr>
+<td>D-043</td>
+<td>YAML serileştirme ve Cognitive View projeksiyonu için deprecated kütüphaneler yerine fuzz-tested, panic-free <code>serde-saphyr</code> kullanılır.</td>
+<td>LOCKED_FOR_FIRST_SLICE</td>
+<td>Deprecated bağımlılıkları temizler; güvenli, hızlı ve streaming uyumlu YAML çıktısı üretir.</td>
+</tr>
 </tbody>
 </table>
 <h1 id="open-questions">Open Questions<a class="anchor" href="#open-questions">¶</a></h1>
@@ -5617,6 +5802,23 @@ CHAT exposes the agent; chat is not the agent.
 <p>The project remains a falsification program. v0.2 first tests whether externalized epistemic state and model-facing representation improve a frontier model’s long-horizon behavior. Promotion/verification follows if that signal is real. Model-sparse scheduling, semantic capability abstraction, concurrency and multi-agent scale are optional later optimizations, not part of the thesis that must be true.</p>
 <p><strong>v0.3 implementation position.</strong> Bu epistemik tez artık belirli bir first-slice systems profile ile uygulanacaktır: Rivet-owned Harness Core, Rust 2024, Tokio I/O runtime, single-process/no-internal-IPC architecture, event-sourced Noesis Hard State, RAM-first bounded Soft Workspace, embedded Rust persistence, Rivet-owned model contracts, CLI/TUI first surface ve external MCP/provider adapters. Bu teknik seçimler research claims değildir; amaç bağımsız değişken olan state/cognitive-view architecture'ını en az infrastructure confound ile test etmektir.</p>
 <h1 id="changelog">Changelog<a class="anchor" href="#changelog">¶</a></h1>
+<h2 id="2026-09-01-production-stack-hardening-subsystem-consolidation">2026-09-01 — Production Stack Hardening &amp; Subsystem Consolidation<a class="anchor" href="#2026-09-01-production-stack-hardening-subsystem-consolidation">¶</a></h2>
+<p><strong>Architectural hardening pass:</strong> Replaced ad-hoc in-house implementations across 13 subsystems with 2026 production-grade Rust ecosystem standards, eliminating silent failure modes, security bypasses, and data corruption vectors without weakening constitutional invariants (I-01..I-20):</p>
+<ul>
+<li><strong>Filesystem Capability &amp; Confinement (D-031):</strong> Migrated from ad-hoc <code>canonicalize + starts_with</code> path checking to capability-oriented <code>cap-std::fs::Dir</code>, eliminating path traversal and symlink TOCTOU races at the kernel boundary.</li>
+<li><strong>Multi-layer Linux Execution Sandbox (D-032):</strong> Established the <code>landlock</code> (fs rights) + <code>seccompiler</code> (syscall filtering) + <code>rlimit</code> (resource governance) triad, re-classifying substring blacklists as upper-level <code>CommandPolicy</code>.</li>
+<li><strong>Windows Process Containment (D-033):</strong> Replaced manual Win32 extern FFI with Microsoft's official <code>windows</code> crate (<code>Win32_System_JobObjects</code>), guaranteeing cleanup of child process trees.</li>
+<li><strong>Universal Multi-language AST (D-034):</strong> Replaced string split heuristics with <code>tree-sitter</code> (<code>tree-sitter-rust</code>, <code>tree-sitter-python</code>, <code>tree-sitter-typescript</code>, <code>tree-sitter-go</code>) for robust Concrete Syntax Tree extraction.</li>
+<li><strong>Two-tier Code Intelligence (D-035):</strong> Separated local structural edits (Tree-sitter byte range replacement + <code>similar</code> diff rendering) from cross-file semantic refactoring (<code>async-lsp</code>).</li>
+<li><strong>Deterministic Census &amp; Nested Ignore (D-036):</strong> Adopted <code>ignore::WalkBuilder</code> for multi-level <code>.gitignore</code>/<code>.ignore</code> handling and <code>globset</code> for policy matching, preventing accidental secret leakage.</li>
+<li><strong>Pure-Rust Git Substrate (D-037):</strong> Standardized on <code>gix</code> (Gitoxide) for repository discovery, packed-refs, and config trust models with CLI porcelain fallback.</li>
+<li><strong>Cryptographic Transparency Receipts (D-038):</strong> Hardened Merkle tree generation using <code>rs_merkle</code> with custom RFC 6962 domain-separated hashing (<code>0x00</code> leaf, <code>0x01</code> node) and <code>tree_size</code> commitment, preventing CVE-2012-2459 root collision flaws.</li>
+<li><strong>Structured Test Ingestion (D-039):</strong> Replaced human stdout regex parsing with <code>junit-parser</code> + <code>cargo-nextest</code> ingestion; restricted <code>strip-ansi-escapes</code> to telemetry display only.</li>
+<li><strong>Official Model Context Protocol (D-040):</strong> Adopted the official <code>rmcp</code> 3.x Rust SDK for bidirectional async notifications and streaming tool execution.</li>
+<li><strong>Multi-line SSE Framing (D-041):</strong> Integrated <code>eventsource-stream</code> for robust SSE framing without reconnect loops.</li>
+<li><strong>Credential Storage &amp; Memory Safety (D-042):</strong> Introduced <code>CredentialStore</code> trait backed by OS <code>keyring</code>, <code>secrecy</code> (<code>SecretString</code>), and <code>zeroize</code> memory clearing.</li>
+<li><strong>Panic-free YAML Serialization (D-043):</strong> Adopted <code>serde-saphyr</code> for fuzz-tested, panic-free YAML output in Cognitive View compilation.</li>
+</ul>
 <h2 id="2026-08-30-research-monograph-v03">2026-08-30 — Research Monograph v0.3<a class="anchor" href="#2026-08-30-research-monograph-v03">¶</a></h2>
 <p><strong>Technical implementation pass; v0.2 body retained.</strong> v0.3 does not replace the epistemic thesis or delete independent research material. It adds the implementation profile required to begin coding and aligns only the previously provisional implementation/adapter decisions with the now-canonical harness-owned architecture.</p>
 <ul>

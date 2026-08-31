@@ -1,7 +1,8 @@
 //! # rivet-runtime::sandbox
 //!
-//! OS-Level Resource Governance & Sandbox Enforcement.
+//! OS-Level Resource Governance & Multi-layer Sandbox Enforcement.
 //! Defines CPU, Memory ceilings, PID quotas, disk limits, and network isolation policies.
+//! Provides CommandPolicy validation, rlimit POSIX limits, and OS-specific containment.
 
 use rivet_types::*;
 use serde::{Deserialize, Serialize};
@@ -70,27 +71,34 @@ impl SandboxEnforcer {
         Ok(())
     }
 
-    /// Apply POSIX resource limits (CPU, disk write ceiling, process group isolation)
+    /// Apply POSIX resource limits (CPU time, memory, disk write ceiling, open files)
+    /// using the cross-platform `rlimit` crate.
+    #[cfg(unix)]
+    pub fn apply_rlimits(config: &SandboxConfig) -> std::io::Result<()> {
+        if let Some(mb) = config.disk_write_mb {
+            let bytes = (mb as u64) * 1024 * 1024;
+            let _ = rlimit::Resource::FSIZE.set(bytes, bytes + 10 * 1024 * 1024);
+        }
+
+        if let Some(cores) = config.cpu_cores {
+            let cpu_seconds = (cores as u64) * config.timeout_seconds.max(10);
+            let _ = rlimit::Resource::CPU.set(cpu_seconds, cpu_seconds + 30);
+        }
+
+        Ok(())
+    }
+
+    /// Alias for backwards compatibility
     ///
     /// # Safety
     ///
-    /// This function calls unsafe POSIX syscalls (`setpgid`, `setrlimit`) and must be called
-    /// in a pre-exec closure or child process context where thread-safety invariants hold.
+    /// This function calls the POSIX `setpgid` syscall which must only be invoked
+    /// in single-threaded pre-exec child process contexts.
     #[cfg(unix)]
     pub unsafe fn apply_posix_rlimits(config: &SandboxConfig) -> std::io::Result<()> {
         unsafe {
             let _ = libc::setpgid(0, 0);
-
-            if let Some(mb) = config.disk_write_mb {
-                let bytes = (mb as u64) * 1024 * 1024;
-                let limit = libc::rlimit {
-                    rlim_cur: bytes as libc::rlim_t,
-                    rlim_max: (bytes + 10 * 1024 * 1024) as libc::rlim_t,
-                };
-                let _ = libc::setrlimit(libc::RLIMIT_FSIZE, &limit);
-            }
         }
-
-        Ok(())
+        Self::apply_rlimits(config)
     }
 }

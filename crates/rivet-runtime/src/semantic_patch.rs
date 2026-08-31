@@ -1,11 +1,13 @@
 //! # rivet-runtime::semantic_patch
 //!
-//! Semantic AST / Symbol-Based Structural Patch Engine (`symbol://` URIs).
+//! Production AST / Symbol-Based Structural Patch Engine (`symbol://` URIs)
+//! powered by `tree-sitter` concrete syntax trees and `similar` diff rendering.
 //! Enforces CAS revision validation (Invariant I-07) and atomic code mutations.
 
 use rivet_types::*;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
+use tree_sitter::{Node, Parser};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -58,6 +60,7 @@ impl SemanticPatchEngine {
             .map_err(|e| RivetError::Runtime(e.to_string()))?;
 
         let modified_content = Self::apply_structural_operation(
+            &file_path,
             &content,
             &symbol_name,
             intent.operation,
@@ -90,7 +93,7 @@ impl SemanticPatchEngine {
         ))
     }
 
-    fn parse_symbol_uri(uri: &str) -> RivetResult<(String, String)> {
+    pub fn parse_symbol_uri(uri: &str) -> RivetResult<(String, String)> {
         let stripped = uri
             .strip_prefix("symbol://")
             .ok_or_else(|| RivetError::InvalidPath(format!("Invalid symbol URI: {}", uri)))?;
@@ -106,7 +109,122 @@ impl SemanticPatchEngine {
         Ok((file_path.to_string(), symbol_name.to_string()))
     }
 
-    fn apply_structural_operation(
+    pub fn apply_structural_operation(
+        file_path: &str,
+        content: &str,
+        symbol_name: &str,
+        operation: PatchOperation,
+        proposed_content: &str,
+        new_name: Option<&str>,
+    ) -> RivetResult<String> {
+        let ext = Path::new(file_path)
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("");
+
+        let mut parser = Parser::new();
+        let lang = match ext {
+            "rs" => Some(tree_sitter_rust::LANGUAGE.into()),
+            "py" => Some(tree_sitter_python::LANGUAGE.into()),
+            "ts" | "tsx" | "js" | "jsx" => Some(tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()),
+            "go" => Some(tree_sitter_go::LANGUAGE.into()),
+            _ => None,
+        };
+
+        if let Some(lang) = lang
+            && parser.set_language(&lang).is_ok()
+            && let Some(tree) = parser.parse(content, None)
+        {
+            let root = tree.root_node();
+            let bytes = content.as_bytes();
+            if let Some((start_byte, end_byte)) = Self::find_symbol_span(root, bytes, symbol_name) {
+                return Self::execute_byte_mutation(
+                    content,
+                    start_byte,
+                    end_byte,
+                    symbol_name,
+                    operation,
+                    proposed_content,
+                    new_name,
+                );
+            }
+        }
+
+        // Fallback for languages without loaded tree-sitter grammars or non-CST files
+        Self::fallback_string_mutation(content, symbol_name, operation, proposed_content, new_name)
+    }
+
+    fn find_symbol_span(node: Node, bytes: &[u8], target_name: &str) -> Option<(usize, usize)> {
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if let Some(name_node) = child.child_by_field_name("name")
+                && let Ok(name) = name_node.utf8_text(bytes)
+                && name == target_name
+            {
+                return Some((child.start_byte(), child.end_byte()));
+            }
+            if let Some(span) = Self::find_symbol_span(child, bytes, target_name) {
+                return Some(span);
+            }
+        }
+        None
+    }
+
+    fn execute_byte_mutation(
+        content: &str,
+        start_byte: usize,
+        end_byte: usize,
+        symbol_name: &str,
+        operation: PatchOperation,
+        proposed_content: &str,
+        new_name: Option<&str>,
+    ) -> RivetResult<String> {
+        match operation {
+            PatchOperation::InsertBefore => {
+                let mut out = String::with_capacity(content.len() + proposed_content.len() + 2);
+                out.push_str(&content[..start_byte]);
+                out.push_str(proposed_content);
+                out.push('\n');
+                out.push_str(&content[start_byte..]);
+                Ok(out)
+            }
+            PatchOperation::InsertAfter => {
+                let mut out = String::with_capacity(content.len() + proposed_content.len() + 2);
+                out.push_str(&content[..end_byte]);
+                out.push('\n');
+                out.push_str(proposed_content);
+                out.push_str(&content[end_byte..]);
+                Ok(out)
+            }
+            PatchOperation::ReplaceBody => {
+                let mut out = String::with_capacity(content.len() + proposed_content.len());
+                out.push_str(&content[..start_byte]);
+                out.push_str(proposed_content);
+                out.push_str(&content[end_byte..]);
+                Ok(out)
+            }
+            PatchOperation::RenameSymbol => {
+                let new_sym = new_name.ok_or_else(|| {
+                    RivetError::Runtime("RenameSymbol operation requires new_symbol_name".into())
+                })?;
+                let node_slice = &content[start_byte..end_byte];
+                let replaced_slice = node_slice.replacen(symbol_name, new_sym, 1);
+                let mut out = String::with_capacity(content.len() + new_sym.len());
+                out.push_str(&content[..start_byte]);
+                out.push_str(&replaced_slice);
+                out.push_str(&content[end_byte..]);
+                Ok(out)
+            }
+            PatchOperation::DeleteSymbol => {
+                let mut out = String::with_capacity(content.len());
+                out.push_str(&content[..start_byte]);
+                out.push_str(&content[end_byte..]);
+                Ok(out)
+            }
+        }
+    }
+
+    fn fallback_string_mutation(
         content: &str,
         symbol_name: &str,
         operation: PatchOperation,
@@ -126,58 +244,19 @@ impl SemanticPatchEngine {
                 RivetError::Runtime(format!("Symbol '{}' not found in content", symbol_name))
             })?;
 
-        match operation {
-            PatchOperation::InsertBefore => {
-                let mut out = String::with_capacity(content.len() + proposed_content.len() + 2);
-                out.push_str(&content[..symbol_idx]);
-                out.push_str(proposed_content);
-                out.push('\n');
-                out.push_str(&content[symbol_idx..]);
-                Ok(out)
-            }
-            PatchOperation::InsertAfter => {
-                // Find closing brace of symbol
-                let rest = &content[symbol_idx..];
-                let block_end = Self::find_block_end(rest).unwrap_or(rest.len());
-                let insert_idx = symbol_idx + block_end;
+        let rest = &content[symbol_idx..];
+        let block_end = Self::find_block_end(rest).unwrap_or(rest.len());
+        let end_idx = symbol_idx + block_end;
 
-                let mut out = String::with_capacity(content.len() + proposed_content.len() + 2);
-                out.push_str(&content[..insert_idx]);
-                out.push('\n');
-                out.push_str(proposed_content);
-                out.push_str(&content[insert_idx..]);
-                Ok(out)
-            }
-            PatchOperation::ReplaceBody => {
-                let rest = &content[symbol_idx..];
-                let block_end = Self::find_block_end(rest).unwrap_or(rest.len());
-                let replace_end = symbol_idx + block_end;
-
-                let mut out = String::with_capacity(content.len() + proposed_content.len());
-                out.push_str(&content[..symbol_idx]);
-                out.push_str(proposed_content);
-                out.push_str(&content[replace_end..]);
-                Ok(out)
-            }
-            PatchOperation::RenameSymbol => {
-                let new_sym = new_name.ok_or_else(|| {
-                    RivetError::Runtime("RenameSymbol operation requires new_symbol_name".into())
-                })?;
-                let mut out = content.to_string();
-                out.replace_range(symbol_idx..symbol_idx + symbol_name.len(), new_sym);
-                Ok(out)
-            }
-            PatchOperation::DeleteSymbol => {
-                let rest = &content[symbol_idx..];
-                let block_end = Self::find_block_end(rest).unwrap_or(rest.len());
-                let delete_end = symbol_idx + block_end;
-
-                let mut out = String::with_capacity(content.len());
-                out.push_str(&content[..symbol_idx]);
-                out.push_str(&content[delete_end..]);
-                Ok(out)
-            }
-        }
+        Self::execute_byte_mutation(
+            content,
+            symbol_idx,
+            end_idx,
+            symbol_name,
+            operation,
+            proposed_content,
+            new_name,
+        )
     }
 
     fn find_block_end(slice: &str) -> Option<usize> {

@@ -17,6 +17,10 @@ tokio = { workspace = true }
 sha2 = { workspace = true }
 hex = { workspace = true }
 regex = { workspace = true }
+rs_merkle = { workspace = true }
+junit-parser = { workspace = true }
+strip-ansi-escapes = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+

@@ -5,11 +5,13 @@
 pub mod cargo;
 pub mod go;
 pub mod jest;
+pub mod junit;
 pub mod pytest;
 
 pub use cargo::CargoTestParser;
 pub use go::GoTestParser;
 pub use jest::JestParser;
+pub use junit::JunitTestParser;
 pub use pytest::PytestParser;
 
 use serde::{Deserialize, Serialize};

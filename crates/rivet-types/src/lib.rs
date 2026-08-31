@@ -189,39 +189,13 @@ fn normalize_relative_path(path: &str) -> String {
 }
 
 fn glob_matches(pattern: &str, value: &str) -> bool {
-    let pattern = pattern.as_bytes();
-    let value = value.as_bytes();
-    let mut dp = vec![vec![false; value.len() + 1]; pattern.len() + 1];
-    dp[0][0] = true;
-
-    for p in 0..pattern.len() {
-        for v in 0..=value.len() {
-            if !dp[p][v] {
-                continue;
-            }
-            match pattern[p] {
-                b'*' => {
-                    let recursive = pattern.get(p + 1) == Some(&b'*');
-                    if recursive {
-                        dp[p + 2][v] = true;
-                        if pattern.get(p + 2) == Some(&b'/') {
-                            dp[p + 3][v] = true;
-                        }
-                    } else {
-                        dp[p + 1][v] = true;
-                    }
-                    if v < value.len() && (recursive || value[v] != b'/') {
-                        dp[p][v + 1] = true;
-                    }
-                }
-                b'?' if v < value.len() && value[v] != b'/' => dp[p + 1][v + 1] = true,
-                byte if v < value.len() && byte == value[v] => dp[p + 1][v + 1] = true,
-                _ => {}
-            }
-        }
-    }
-
-    dp[pattern.len()][value.len()]
+    let Ok(glob) = globset::GlobBuilder::new(pattern)
+        .literal_separator(true)
+        .build()
+    else {
+        return false;
+    };
+    glob.compile_matcher().is_match(value)
 }
 
 /// Reject absolute paths and parent traversal before a runtime joins a target

@@ -25,3 +25,27 @@ provider_choice:
     - semantic_move: estimated_calls 1
   choose: semantic_move
 ```
+
+## Two-tier code intelligence architecture
+
+Rivet kod üzerinde işlem yaparken **Sözdizimsel (Structural)** ve **Semantik (Semantic)** katmanları kesin olarak ayırır:
+
+```text
+Model Patch / Refactor Request
+        │
+        ▼
+  Task Classification
+   ├── [Local / Syntactic Edit] ───────────────► Structural Engine (tree-sitter + similar)
+   │                                              • AST node locator [start_byte, end_byte]
+   │                                              • In-place range replacement & reparse
+   │                                              • Diff generation via `similar`
+   │
+   └── [Cross-file / Reference Rename] ────────► Semantic Engine (async-lsp)
+                                                  • Tower-based async LSP client
+                                                  • Workspace-wide symbol resolution
+                                                  • Type definition & reference graph
+```
+
+1. **Structural Engine (`tree-sitter` + `similar`):** Tekil dosya veya fonksiyon içi kod güncellemelerinde tree-sitter üzerinden sözdizimsel düğümün tam byte aralığı (`start_byte..end_byte`) bulunur, atomik olarak değiştirilir ve sözdizimi geçerliliği yeniden parse edilerek (`reparse`) doğrulanır. `similar` ile diff üretilerek kullanıcı ve modele görsel doğrulanabilirlik sunulur.
+2. **Semantic Engine (`async-lsp`):** `RenameSymbol`, referans bulma ve cross-file tip güvenliği gerektiren operasyonlar yalnızca AST seviyesinde çözülemez. Rivet, dil sunucuları (LSP) ile konuşarak semantik sembol bağıntılarını deterministik olarak yürütür.
+

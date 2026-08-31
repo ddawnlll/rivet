@@ -1,6 +1,6 @@
 //! # praxis::parsers::pytest
 //!
-//! Python `pytest` output parser.
+//! Python `pytest` output parser with production ANSI sequence stripping.
 
 use super::ParsedTestReport;
 
@@ -14,8 +14,10 @@ impl PytestParser {
 
         let combined = format!("{}\n{}", stdout, stderr);
         for line in combined.lines() {
-            let line_stripped = strip_ansi(line.trim());
+            let clean_bytes = strip_ansi_escapes::strip(line.as_bytes());
+            let line_stripped = String::from_utf8_lossy(&clean_bytes);
             let line_trimmed = line_stripped.trim();
+
             // Example summary: "==== 12 passed, 2 failed, 1 skipped in 0.45s ===="
             if (line_trimmed.contains(" passed")
                 || line_trimmed.contains(" failed")
@@ -45,6 +47,11 @@ impl PytestParser {
 
         let total = passed + failed + skipped;
 
+        let clean_stdout =
+            String::from_utf8_lossy(&strip_ansi_escapes::strip(stdout.as_bytes())).into_owned();
+        let clean_stderr =
+            String::from_utf8_lossy(&strip_ansi_escapes::strip(stderr.as_bytes())).into_owned();
+
         ParsedTestReport {
             framework: "pytest".into(),
             passed_count: passed,
@@ -52,27 +59,10 @@ impl PytestParser {
             skipped_count: skipped,
             total_count: total,
             duration_ms: None,
-            raw_stdout: stdout.to_string(),
-            raw_stderr: stderr.to_string(),
+            raw_stdout: clean_stdout,
+            raw_stderr: clean_stderr,
         }
     }
-}
-
-fn strip_ansi(s: &str) -> String {
-    let mut out = String::new();
-    let mut in_escape = false;
-    for c in s.chars() {
-        if c == '\x1b' {
-            in_escape = true;
-        } else if in_escape {
-            if c == 'm' || c.is_ascii_alphabetic() {
-                in_escape = false;
-            }
-        } else {
-            out.push(c);
-        }
-    }
-    out
 }
 
 fn extract_first_num(s: &str) -> Option<usize> {

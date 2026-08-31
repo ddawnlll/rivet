@@ -1,7 +1,7 @@
 //! # rivet-repository::git
 //!
-//! Pure repository Git inspection: branch, HEAD hash, dirty status,
-//! tracked/untracked ratio, and commit history.
+//! Production Git repository inspection: branch, HEAD hash, packed-refs resolution,
+//! dirty status, and tracked/untracked ratio with porcelain CLI fallback.
 
 use rivet_types::*;
 use serde::{Deserialize, Serialize};
@@ -21,7 +21,7 @@ pub struct GitRepositoryStatus {
 pub struct GitInspector;
 
 impl GitInspector {
-    /// Inspect repository Git metadata with fallback mechanisms
+    /// Inspect repository Git metadata with packed-refs and porcelain fallback
     pub async fn inspect(root: impl AsRef<Path>) -> RivetResult<GitRepositoryStatus> {
         let root = root.as_ref();
         let git_dir = root.join(".git");
@@ -38,7 +38,7 @@ impl GitInspector {
             });
         }
 
-        // Try reading .git/HEAD
+        // 1. Resolve HEAD and branch
         let mut head_commit = None;
         let mut branch = None;
 
@@ -52,13 +52,29 @@ impl GitInspector {
                 let ref_file = git_dir.join(ref_path);
                 if let Ok(commit_hash) = tokio::fs::read_to_string(&ref_file).await {
                     head_commit = Some(commit_hash.trim().to_string());
+                } else {
+                    // Fallback to packed-refs
+                    let packed_refs_file = git_dir.join("packed-refs");
+                    if let Ok(packed_content) = tokio::fs::read_to_string(&packed_refs_file).await {
+                        for line in packed_content.lines() {
+                            let line = line.trim();
+                            if line.starts_with('#') || line.starts_with('^') {
+                                continue;
+                            }
+                            let parts: Vec<&str> = line.split_whitespace().collect();
+                            if parts.len() == 2 && parts[1] == ref_path {
+                                head_commit = Some(parts[0].to_string());
+                                break;
+                            }
+                        }
+                    }
                 }
             } else if trimmed.len() >= 40 {
                 head_commit = Some(trimmed.to_string());
             }
         }
 
-        // Run git status via process if available for dirty/untracked ratio
+        // 2. Tracked and untracked counts via git CLI if available
         let mut is_dirty = false;
         let mut tracked_count = 0;
         let mut untracked_count = 0;
@@ -80,12 +96,10 @@ impl GitInspector {
                     untracked_count += 1;
                 } else if !line.is_empty() {
                     is_dirty = true;
-                    tracked_count += 1;
                 }
             }
         }
 
-        // Get total tracked files
         let ls_output = tokio::process::Command::new("git")
             .arg("ls-files")
             .current_dir(root)

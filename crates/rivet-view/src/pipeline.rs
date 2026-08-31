@@ -470,156 +470,23 @@ impl CompiledViewPayload {
     }
 
     fn render_hybrid(&self) -> String {
+        #[derive(Serialize)]
+        struct Wrapper<'a> {
+            cognitive_view: &'a CompiledViewPayload,
+        }
+
         let mut out = String::new();
         out.push_str("```yaml\n");
-        out.push_str("cognitive_view:\n");
-        out.push_str(&format!("  hard_revision: {}\n", self.hard_revision.0));
-        out.push_str(&format!(
-            "  workspace_revision: {}\n",
-            self.workspace_revision.0
-        ));
-        out.push_str(&format!("  repository_id: \"{}\"\n", self.repository_id));
-        out.push_str(&format!(
-            "  goal: \"{}\"\n",
-            escape_yaml_string(&self.goal_description)
-        ));
-
-        if !self.active_focus.is_empty() {
-            out.push_str("  active_focus:\n");
-            for f in &self.active_focus {
-                out.push_str(&format!("    - \"{}\"\n", escape_yaml_string(f)));
-            }
+        if let Ok(yaml) = serde_saphyr::to_string(&Wrapper {
+            cognitive_view: self,
+        }) {
+            out.push_str(&yaml);
+        } else {
+            out.push_str(&self.render_raw_text());
         }
-
-        if !self.hypotheses.is_empty() {
-            out.push_str("  active_hypotheses:\n");
-            for h in &self.hypotheses {
-                out.push_str(&format!("    - \"{}\"\n", escape_yaml_string(h)));
-            }
+        if !out.ends_with('\n') {
+            out.push('\n');
         }
-
-        if !self.unknowns.is_empty() {
-            out.push_str("  unknowns:\n");
-            for u in &self.unknowns {
-                out.push_str(&format!("    - \"{}\"\n", escape_yaml_string(u)));
-            }
-        }
-
-        if !self.candidate_actions.is_empty() {
-            out.push_str("  candidate_actions:\n");
-            for a in &self.candidate_actions {
-                out.push_str(&format!("    - \"{}\"\n", escape_yaml_string(a)));
-            }
-        }
-
-        if !self.active_claims.is_empty() {
-            out.push_str("  durable_claims:\n");
-            for c in &self.active_claims {
-                out.push_str(&format!("    - id: \"{}\"\n", c.id));
-                out.push_str(&format!("      status: \"{}\"\n", c.status));
-                out.push_str(&format!(
-                    "      proposition: \"{}\"\n",
-                    escape_yaml_string(&c.proposition)
-                ));
-                out.push_str(&format!(
-                    "      evidence_refs: {:?}\n",
-                    c.supporting_evidence
-                        .iter()
-                        .map(|e| e.to_string())
-                        .collect::<Vec<_>>()
-                ));
-            }
-        }
-
-        if !self.contradictions.is_empty() {
-            out.push_str("  contradictions:\n");
-            for c in &self.contradictions {
-                out.push_str(&format!("    - claim_id: \"{}\"\n", c.claim_id));
-                out.push_str(&format!(
-                    "      reason: \"{}\"\n",
-                    escape_yaml_string(&c.reason)
-                ));
-                out.push_str(&format!(
-                    "      contradicted_by: {:?}\n",
-                    c.contradicted_by
-                        .iter()
-                        .map(|e| e.to_string())
-                        .collect::<Vec<_>>()
-                ));
-            }
-        }
-
-        if !self.rejected_claims.is_empty() {
-            out.push_str("  rejected_paths:\n");
-            for r in &self.rejected_claims {
-                out.push_str(&format!("    - claim_id: \"{}\"\n", r.claim_id));
-                out.push_str(&format!(
-                    "      reason: \"{}\"\n",
-                    escape_yaml_string(&r.reason)
-                ));
-                out.push_str(&format!(
-                    "      evidence: {:?}\n",
-                    r.evidence.iter().map(|e| e.to_string()).collect::<Vec<_>>()
-                ));
-            }
-        }
-
-        if !self.open_obligations.is_empty() {
-            out.push_str("  open_obligations:\n");
-            for (id, desc, scope) in &self.open_obligations {
-                out.push_str(&format!("    - id: \"{}\"\n", id));
-                out.push_str(&format!(
-                    "      description: \"{}\"\n",
-                    escape_yaml_string(desc)
-                ));
-                out.push_str(&format!(
-                    "      scope: \"{}@{}\"\n",
-                    scope.repository, scope.revision
-                ));
-            }
-        }
-
-        if !self.recent_evidence.is_empty() {
-            out.push_str("  recent_evidence:\n");
-            for (id, src, sum) in &self.recent_evidence {
-                out.push_str(&format!("    - id: \"{}\"\n", id));
-                out.push_str(&format!("      source: \"{}\"\n", escape_yaml_string(src)));
-                out.push_str(&format!("      summary: \"{}\"\n", escape_yaml_string(sum)));
-            }
-        }
-
-        if !self.relevant_files.is_empty() {
-            out.push_str("  repo_frontier:\n");
-            for f in &self.relevant_files {
-                out.push_str(&format!("    - \"{}\"\n", escape_yaml_string(f)));
-            }
-        }
-
-        if !self.repository_signals.is_empty() {
-            out.push_str("  repository_signals:\n");
-            for s in &self.repository_signals {
-                out.push_str(&format!("    - \"{}\"\n", escape_yaml_string(s)));
-            }
-        }
-
-        out.push_str("  omitted_summary:\n");
-        out.push_str(&format!(
-            "    deferred_trees: {}\n",
-            self.omitted_summary.deferred_trees
-        ));
-        out.push_str(&format!(
-            "    token_budget: {}\n",
-            self.omitted_summary.token_budget
-        ));
-        out.push_str(&format!(
-            "    omitted_claims: {}\n",
-            self.omitted_summary.omitted_claims_count
-        ));
-        out.push_str(&format!(
-            "    omitted_evidence: {}\n",
-            self.omitted_summary.omitted_evidence_count
-        ));
-
         out.push_str("```\n");
         out
     }
@@ -636,10 +503,4 @@ impl TokenCounter {
             text.len().div_ceil(4)
         }
     }
-}
-
-fn escape_yaml_string(s: &str) -> String {
-    s.replace('\\', "\\\\")
-        .replace('"', "\\\"")
-        .replace('\n', " ")
 }

@@ -81,4 +81,31 @@ libc = "0.2"
 tiktoken-rs = "0.6"
 lsp-types = "0.97"
 
+# Production-grade hardened dependencies
+cap-std = "4.0"
+globset = "0.4"
+ignore = "0.4"
+rs_merkle = "1.5"
+junit-parser = "1.6"
+strip-ansi-escapes = "0.2"
+eventsource-stream = "0.2"
+keyring = "4.2"
+secrecy = "0.10"
+zeroize = { version = "1.9", features = ["derive"] }
+serde-saphyr = "1.2"
+similar = "3.2"
+tree-sitter = "0.25"
+tree-sitter-rust = "0.24"
+tree-sitter-python = "0.25"
+tree-sitter-typescript = "0.23"
+tree-sitter-go = "0.25"
+
+gix = { version = "0.87", default-features = false, features = ["blob-diff", "parallel", "revision"] }
+rlimit = "0.11"
+windows = { version = "0.62", features = ["Win32_System_JobObjects", "Win32_System_Threading", "Win32_Security", "Win32_Foundation"] }
+landlock = "0.4"
+seccompiler = "0.5"
+
+
+
 

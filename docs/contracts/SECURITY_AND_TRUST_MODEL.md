@@ -38,16 +38,27 @@ deny:
   - network.unrestricted
 ```
 
-## Resource sandbox
+## Resource and execution sandbox
 
-Her worker için mümkünse OS-level limits:
+Prompt resource control değildir; komut dizesi içindeki substring kara listeleri (`contains("curl")`) da güvenlik sınırı değildir. Güvenlik donanım ve çekirdek (kernel) seviyesinde uygulanır:
 
-- CPU quota;
-- memory ceiling;
-- process/PID limit;
-- disk/output quota;
-- wall-clock timeout;
-- network policy;
-- filesystem write scope.
+1. **Filesystem Confinement (`cap-std`):** Ortamdaki global dosya sistemine ambient erişim kapatılır. Tüm dosya işlemleri çalışma dizinini temsil eden açık `cap_std::fs::Dir` capability tanıtıcısı üzerinden yapılır. `../../` traversal ve symlink yarış koşulu (TOCTOU) açıkları imkânsız kılınır.
+2. **Syscall Boundary (Linux `seccompiler`):** Child process'lerin `ptrace`, `mount`, `unshare`, `kexec`, `reboot` gibi yetki yükseltme veya izolasyon dışına çıkma potansiyeli taşıyan syscall'ları seccomp-BPF filtreleriyle engellenir.
+3. **Filesystem Rights (Linux `landlock`):** Unprivileged process'in dosya sistemi görünürlüğü yalnızca çalışma dizini ve derleyici/araç yollarıyla sınırlandırılır.
+4. **Kaynak Tavanları (`rlimit` & cgroups):** CPU süresi, maksimum bellek, açık dosya tanımlayıcıları ve azami PID kotaları işletim sistemi seviyesinde kilitlenir.
+5. **Windows İzolasyonu (`windows` crate):** Windows üzerinde `Win32_System_JobObjects` ile process ağacı ve bellek sınırları resmi Microsoft API'leri üzerinden yönetilir; timeout durumunda tüm alt süreçler (`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`) garantili biçimde sonlandırılır.
 
-Prompt resource control değildir.
+## Credential security and key management
+
+API anahtarları ve sağlayıcı kimlik bilgileri düz metin JSON dosyalarında veya genel ortam değişkenlerinde savunmasız bırakılmaz:
+
+- **OS Keyring (`keyring`):** macOS Keychain, Windows Credential Manager ve Linux Secret Service üzerinden platform düzeyinde şifreli saklanır. Headless/CI ortamları için `EnvCredentialStore` fallback sağlanır.
+- **Bellek Koruma (`secrecy` + `zeroize`):** Anahtarlar `SecretString` ile sarmalanarak yanlışlıkla loglara veya debug çıktılarına yazılması önlenir; nesne serbest bırakıldığında (drop) bellek derleyici optimizasyonuna takılmadan sıfırlanır (`zeroize`).
+
+## Cryptographic receipts and transparency
+
+Doğrulama ve yürütme kanıtları Merkle ağaçları ile mühürlenir:
+
+- **RFC 6962 Domain Separation:** Yaprak hash'leri `0x00 || data`, düğüm hash'leri `0x01 || left || right` ile domain-separated olarak SHA-256 üzerinden hesaplanır.
+- **Collision Protection:** Tek yaprakların kopyalanması (CVE-2012-2459 açığı) önlenir; receipt içine ağaç boyutu (`tree_size`), kök (`root`), yaprak indeksi ve inclusion proof mühürlenir.
+
