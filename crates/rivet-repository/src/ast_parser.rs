@@ -225,69 +225,66 @@ impl AstParser {
 
             if trimmed.starts_with("import ") {
                 imports.push(trimmed.to_string());
-            } else if trimmed.starts_with("function ")
+            } else if (trimmed.starts_with("function ")
                 || trimmed.starts_with("export function ")
-                || trimmed.starts_with("export async function ")
+                || trimmed.starts_with("export async function "))
+                && let Some(name) = Self::extract_identifier(trimmed, "function")
             {
-                if let Some(name) = Self::extract_identifier(trimmed, "function") {
-                    symbols.push(ExtractedSymbol {
-                        symbol_uri: format!("symbol://{}/{}", file_path, name),
-                        name,
-                        kind: SymbolKind::Function,
-                        line_number: idx + 1,
-                        byte_start: current_byte,
-                        byte_end: current_byte + line.len(),
-                        signature: trimmed.to_string(),
-                        docstring: None,
-                    });
-                }
-            } else if trimmed.starts_with("class ") || trimmed.starts_with("export class ") {
-                if let Some(name) = Self::extract_identifier(trimmed, "class") {
-                    symbols.push(ExtractedSymbol {
-                        symbol_uri: format!("symbol://{}/{}", file_path, name),
-                        name,
-                        kind: SymbolKind::Class,
-                        line_number: idx + 1,
-                        byte_start: current_byte,
-                        byte_end: current_byte + line.len(),
-                        signature: trimmed.to_string(),
-                        docstring: None,
-                    });
-                }
-            } else if trimmed.starts_with("interface ") || trimmed.starts_with("export interface ")
+                symbols.push(ExtractedSymbol {
+                    symbol_uri: format!("symbol://{}/{}", file_path, name),
+                    name,
+                    kind: SymbolKind::Function,
+                    line_number: idx + 1,
+                    byte_start: current_byte,
+                    byte_end: current_byte + line.len(),
+                    signature: trimmed.to_string(),
+                    docstring: None,
+                });
+            } else if (trimmed.starts_with("class ") || trimmed.starts_with("export class "))
+                && let Some(name) = Self::extract_identifier(trimmed, "class")
             {
-                if let Some(name) = Self::extract_identifier(trimmed, "interface") {
-                    symbols.push(ExtractedSymbol {
-                        symbol_uri: format!("symbol://{}/{}", file_path, name),
-                        name,
-                        kind: SymbolKind::Interface,
-                        line_number: idx + 1,
-                        byte_start: current_byte,
-                        byte_end: current_byte + line.len(),
-                        signature: trimmed.to_string(),
-                        docstring: None,
-                    });
-                }
-            } else if trimmed.starts_with("it(") || trimmed.starts_with("test(") {
-                if let Some(start) = trimmed.find('"').or_else(|| trimmed.find('\'')) {
-                    if let Some(end) = trimmed[start + 1..]
-                        .find('"')
-                        .or_else(|| trimmed[start + 1..].find('\''))
-                    {
-                        let test_name = &trimmed[start + 1..start + 1 + end];
-                        test_targets.push(test_name.to_string());
-                        symbols.push(ExtractedSymbol {
-                            symbol_uri: format!("symbol://{}/{}", file_path, test_name),
-                            name: test_name.to_string(),
-                            kind: SymbolKind::TestFunction,
-                            line_number: idx + 1,
-                            byte_start: current_byte,
-                            byte_end: current_byte + line.len(),
-                            signature: trimmed.to_string(),
-                            docstring: None,
-                        });
-                    }
-                }
+                symbols.push(ExtractedSymbol {
+                    symbol_uri: format!("symbol://{}/{}", file_path, name),
+                    name,
+                    kind: SymbolKind::Class,
+                    line_number: idx + 1,
+                    byte_start: current_byte,
+                    byte_end: current_byte + line.len(),
+                    signature: trimmed.to_string(),
+                    docstring: None,
+                });
+            } else if (trimmed.starts_with("interface ")
+                || trimmed.starts_with("export interface "))
+                && let Some(name) = Self::extract_identifier(trimmed, "interface")
+            {
+                symbols.push(ExtractedSymbol {
+                    symbol_uri: format!("symbol://{}/{}", file_path, name),
+                    name,
+                    kind: SymbolKind::Interface,
+                    line_number: idx + 1,
+                    byte_start: current_byte,
+                    byte_end: current_byte + line.len(),
+                    signature: trimmed.to_string(),
+                    docstring: None,
+                });
+            } else if (trimmed.starts_with("it(") || trimmed.starts_with("test("))
+                && let Some(start) = trimmed.find('"').or_else(|| trimmed.find('\''))
+                && let Some(end) = trimmed[start + 1..]
+                    .find('"')
+                    .or_else(|| trimmed[start + 1..].find('\''))
+            {
+                let test_name = &trimmed[start + 1..start + 1 + end];
+                test_targets.push(test_name.to_string());
+                symbols.push(ExtractedSymbol {
+                    symbol_uri: format!("symbol://{}/{}", file_path, test_name),
+                    name: test_name.to_string(),
+                    kind: SymbolKind::TestFunction,
+                    line_number: idx + 1,
+                    byte_start: current_byte,
+                    byte_end: current_byte + line.len(),
+                    signature: trimmed.to_string(),
+                    docstring: None,
+                });
             }
 
             current_byte += line_len;
@@ -310,38 +307,38 @@ impl AstParser {
 
             if trimmed.starts_with("import ") || trimmed.starts_with("from ") {
                 imports.push(trimmed.to_string());
-            } else if trimmed.starts_with("def ") || trimmed.starts_with("async def ") {
-                if let Some(name) = Self::extract_identifier(trimmed, "def") {
-                    let kind = if name.starts_with("test_") {
-                        test_targets.push(name.clone());
-                        SymbolKind::TestFunction
-                    } else {
-                        SymbolKind::Function
-                    };
-                    symbols.push(ExtractedSymbol {
-                        symbol_uri: format!("symbol://{}/{}", file_path, name),
-                        name,
-                        kind,
-                        line_number: idx + 1,
-                        byte_start: current_byte,
-                        byte_end: current_byte + line.len(),
-                        signature: trimmed.to_string(),
-                        docstring: None,
-                    });
-                }
-            } else if trimmed.starts_with("class ") {
-                if let Some(name) = Self::extract_identifier(trimmed, "class") {
-                    symbols.push(ExtractedSymbol {
-                        symbol_uri: format!("symbol://{}/{}", file_path, name),
-                        name,
-                        kind: SymbolKind::Class,
-                        line_number: idx + 1,
-                        byte_start: current_byte,
-                        byte_end: current_byte + line.len(),
-                        signature: trimmed.to_string(),
-                        docstring: None,
-                    });
-                }
+            } else if (trimmed.starts_with("def ") || trimmed.starts_with("async def "))
+                && let Some(name) = Self::extract_identifier(trimmed, "def")
+            {
+                let kind = if name.starts_with("test_") {
+                    test_targets.push(name.clone());
+                    SymbolKind::TestFunction
+                } else {
+                    SymbolKind::Function
+                };
+                symbols.push(ExtractedSymbol {
+                    symbol_uri: format!("symbol://{}/{}", file_path, name),
+                    name,
+                    kind,
+                    line_number: idx + 1,
+                    byte_start: current_byte,
+                    byte_end: current_byte + line.len(),
+                    signature: trimmed.to_string(),
+                    docstring: None,
+                });
+            } else if trimmed.starts_with("class ")
+                && let Some(name) = Self::extract_identifier(trimmed, "class")
+            {
+                symbols.push(ExtractedSymbol {
+                    symbol_uri: format!("symbol://{}/{}", file_path, name),
+                    name,
+                    kind: SymbolKind::Class,
+                    line_number: idx + 1,
+                    byte_start: current_byte,
+                    byte_end: current_byte + line.len(),
+                    signature: trimmed.to_string(),
+                    docstring: None,
+                });
             }
 
             current_byte += line_len;
@@ -364,51 +361,53 @@ impl AstParser {
 
             if trimmed.starts_with("import ") {
                 imports.push(trimmed.to_string());
-            } else if trimmed.starts_with("func ") {
-                if let Some(name) = Self::extract_identifier(trimmed, "func") {
-                    let kind = if name.starts_with("Test") {
-                        test_targets.push(name.clone());
-                        SymbolKind::TestFunction
-                    } else {
-                        SymbolKind::Function
-                    };
-                    symbols.push(ExtractedSymbol {
-                        symbol_uri: format!("symbol://{}/{}", file_path, name),
-                        name,
-                        kind,
-                        line_number: idx + 1,
-                        byte_start: current_byte,
-                        byte_end: current_byte + line.len(),
-                        signature: trimmed.to_string(),
-                        docstring: None,
-                    });
-                }
-            } else if trimmed.starts_with("type ") && trimmed.contains("struct") {
-                if let Some(name) = Self::extract_identifier(trimmed, "type") {
-                    symbols.push(ExtractedSymbol {
-                        symbol_uri: format!("symbol://{}/{}", file_path, name),
-                        name,
-                        kind: SymbolKind::Struct,
-                        line_number: idx + 1,
-                        byte_start: current_byte,
-                        byte_end: current_byte + line.len(),
-                        signature: trimmed.to_string(),
-                        docstring: None,
-                    });
-                }
-            } else if trimmed.starts_with("type ") && trimmed.contains("interface") {
-                if let Some(name) = Self::extract_identifier(trimmed, "type") {
-                    symbols.push(ExtractedSymbol {
-                        symbol_uri: format!("symbol://{}/{}", file_path, name),
-                        name,
-                        kind: SymbolKind::Interface,
-                        line_number: idx + 1,
-                        byte_start: current_byte,
-                        byte_end: current_byte + line.len(),
-                        signature: trimmed.to_string(),
-                        docstring: None,
-                    });
-                }
+            } else if trimmed.starts_with("func ")
+                && let Some(name) = Self::extract_identifier(trimmed, "func")
+            {
+                let kind = if name.starts_with("Test") {
+                    test_targets.push(name.clone());
+                    SymbolKind::TestFunction
+                } else {
+                    SymbolKind::Function
+                };
+                symbols.push(ExtractedSymbol {
+                    symbol_uri: format!("symbol://{}/{}", file_path, name),
+                    name,
+                    kind,
+                    line_number: idx + 1,
+                    byte_start: current_byte,
+                    byte_end: current_byte + line.len(),
+                    signature: trimmed.to_string(),
+                    docstring: None,
+                });
+            } else if trimmed.starts_with("type ")
+                && trimmed.contains("struct")
+                && let Some(name) = Self::extract_identifier(trimmed, "type")
+            {
+                symbols.push(ExtractedSymbol {
+                    symbol_uri: format!("symbol://{}/{}", file_path, name),
+                    name,
+                    kind: SymbolKind::Struct,
+                    line_number: idx + 1,
+                    byte_start: current_byte,
+                    byte_end: current_byte + line.len(),
+                    signature: trimmed.to_string(),
+                    docstring: None,
+                });
+            } else if trimmed.starts_with("type ")
+                && trimmed.contains("interface")
+                && let Some(name) = Self::extract_identifier(trimmed, "type")
+            {
+                symbols.push(ExtractedSymbol {
+                    symbol_uri: format!("symbol://{}/{}", file_path, name),
+                    name,
+                    kind: SymbolKind::Interface,
+                    line_number: idx + 1,
+                    byte_start: current_byte,
+                    byte_end: current_byte + line.len(),
+                    signature: trimmed.to_string(),
+                    docstring: None,
+                });
             }
 
             current_byte += line_len;
