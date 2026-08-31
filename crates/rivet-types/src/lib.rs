@@ -150,7 +150,15 @@ impl Scope {
         let normalized = normalize_relative_path(path);
         match &self.path_pattern {
             None => true,
-            Some(pattern) => glob_matches(&normalize_relative_path(pattern), &normalized),
+            Some(pattern) => {
+                let norm_pattern = normalize_relative_path(pattern);
+                if let Some(prefix) = norm_pattern.strip_suffix("/**")
+                    && normalized == prefix
+                {
+                    return true;
+                }
+                glob_matches(&norm_pattern, &normalized)
+            }
         }
     }
 
@@ -196,6 +204,9 @@ fn glob_matches(pattern: &str, value: &str) -> bool {
                     let recursive = pattern.get(p + 1) == Some(&b'*');
                     if recursive {
                         dp[p + 2][v] = true;
+                        if pattern.get(p + 2) == Some(&b'/') {
+                            dp[p + 3][v] = true;
+                        }
                     } else {
                         dp[p + 1][v] = true;
                     }
@@ -216,11 +227,11 @@ fn glob_matches(pattern: &str, value: &str) -> bool {
 /// Reject absolute paths and parent traversal before a runtime joins a target
 /// with its working directory.
 pub fn is_safe_relative_path(path: impl AsRef<Path>) -> bool {
-    let path = path.as_ref();
-    if path.is_absolute() || path.has_root() {
+    let path_ref = path.as_ref();
+    if path_ref.is_absolute() || path_ref.has_root() {
         return false;
     }
-    let s = path.to_string_lossy();
+    let s = path_ref.to_string_lossy();
     if s.starts_with('/') || s.starts_with('\\') {
         return false;
     }
@@ -231,7 +242,13 @@ pub fn is_safe_relative_path(path: impl AsRef<Path>) -> bool {
     {
         return false;
     }
-    !path
+    // Normalize separators so Unix checks catch backslash parent traversals
+    let normalized = s.replace('\\', "/");
+    let norm_path = Path::new(&normalized);
+    if norm_path.is_absolute() || norm_path.has_root() {
+        return false;
+    }
+    !norm_path
         .components()
         .any(|component| matches!(component, std::path::Component::ParentDir))
 }
@@ -276,6 +293,7 @@ mod tests {
     #[test]
     fn scope_matching_is_revision_and_path_bound() {
         let scope = Scope::path("repo", "src/**", Revision(3));
+        assert!(scope.allows_path("repo", "src", Revision(3)));
         assert!(scope.allows_path("repo", "src/lib.rs", Revision(3)));
         assert!(scope.allows_path("repo", "src/nested/mod.rs", Revision(3)));
         assert!(!scope.allows_path("repo", "tests/lib.rs", Revision(3)));
@@ -284,12 +302,20 @@ mod tests {
         let shallow = Scope::path("repo", "src/*", Revision(3));
         assert!(shallow.allows_path("repo", "src/lib.rs", Revision(3)));
         assert!(!shallow.allows_path("repo", "src/private/lib.rs", Revision(3)));
+
+        let mid_glob = Scope::path("repo", "src/**/test.rs", Revision(3));
+        assert!(mid_glob.allows_path("repo", "src/test.rs", Revision(3)));
+        assert!(mid_glob.allows_path("repo", "src/nested/test.rs", Revision(3)));
     }
 
     #[test]
     fn unsafe_relative_paths_are_rejected() {
         assert!(is_safe_relative_path("src/lib.rs"));
         assert!(!is_safe_relative_path("../secrets.env"));
+        assert!(!is_safe_relative_path("..\\secrets.env"));
+        assert!(!is_safe_relative_path("foo\\..\\..\\secrets.env"));
         assert!(!is_safe_relative_path("C:\\secrets.env"));
+        assert!(!is_safe_relative_path("/etc/passwd"));
+        assert!(!is_safe_relative_path("\\windows\\system32"));
     }
 }
