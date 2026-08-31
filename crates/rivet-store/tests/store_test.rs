@@ -139,3 +139,13 @@ async fn process_crash_before_checkpoint_is_recoverable() {
         other => panic!("unexpected recovered event: {other:?}"),
     }
 }
+
+#[tokio::test]
+async fn test_read_events_at_max_revision() {
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let db_path = tmp_dir.path().join("overflow.redb");
+    let store = RedbStore::open(&db_path).unwrap();
+
+    let events = store.read_events(Revision(u64::MAX)).await.unwrap();
+    assert!(events.is_empty());
+}

@@ -44,13 +44,19 @@ impl Default for MemoryStore {
 #[async_trait]
 impl HardStateStore for MemoryStore {
     async fn append_event(&self, event: &NoesisEvent) -> RivetResult<Revision> {
-        let mut events = self.events.lock().unwrap();
+        let mut events = self
+            .events
+            .lock()
+            .map_err(|_| RivetError::Storage("memory store mutex poisoned".into()))?;
         events.push(event.clone());
         Ok(Revision(events.len() as u64))
     }
 
     async fn read_events(&self, from_revision: Revision) -> RivetResult<Vec<NoesisEvent>> {
-        let events = self.events.lock().unwrap();
+        let events = self
+            .events
+            .lock()
+            .map_err(|_| RivetError::Storage("memory store mutex poisoned".into()))?;
         let start = from_revision.0 as usize;
         if start < events.len() {
             Ok(events[start..].to_vec())
@@ -60,13 +66,19 @@ impl HardStateStore for MemoryStore {
     }
 
     async fn save_checkpoint(&self, state: &HardState) -> RivetResult<()> {
-        let mut cp = self.checkpoint.lock().unwrap();
+        let mut cp = self
+            .checkpoint
+            .lock()
+            .map_err(|_| RivetError::Storage("memory store mutex poisoned".into()))?;
         *cp = Some(state.clone());
         Ok(())
     }
 
     async fn load_checkpoint(&self) -> RivetResult<Option<HardState>> {
-        let cp = self.checkpoint.lock().unwrap();
+        let cp = self
+            .checkpoint
+            .lock()
+            .map_err(|_| RivetError::Storage("memory store mutex poisoned".into()))?;
         Ok(cp.clone())
     }
 }
@@ -145,6 +157,10 @@ impl HardStateStore for RedbStore {
     }
 
     async fn read_events(&self, from_revision: Revision) -> RivetResult<Vec<NoesisEvent>> {
+        let Some(start_key) = from_revision.0.checked_add(1) else {
+            return Ok(Vec::new());
+        };
+
         let read_txn = self
             .db
             .begin_read()
@@ -155,7 +171,7 @@ impl HardStateStore for RedbStore {
 
         let mut events = Vec::new();
         let range = table
-            .range((from_revision.0 + 1)..)
+            .range(start_key..)
             .map_err(|e| RivetError::Storage(e.to_string()))?;
 
         for item in range {
