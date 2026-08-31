@@ -103,11 +103,18 @@ impl FinalGate {
                     if is_deterministic {
                         deterministic_failed += 1;
                     }
-                    failed_criteria_ids.push(crit.id.clone());
                 }
             } else if is_deterministic {
-                // Non-command deterministic verification (e.g. file match)
-                deterministic_passed += 1;
+                // Non-command deterministic verification without command_ref cannot auto-pass
+                deterministic_failed += 1;
+                failed_criteria_ids.push(crit.id.clone());
+                diagnostics.push(Diagnostic::warning(
+                    "UNLINKED_CRITERION",
+                    format!(
+                        "Deterministic criterion '{}' has no command_ref to verify its result",
+                        crit.id
+                    ),
+                ));
             }
         }
 

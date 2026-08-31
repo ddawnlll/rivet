@@ -123,7 +123,8 @@ impl Ledger {
     /// Recover from trailing corruption / partial crashes
     pub fn recover(&mut self) -> Result<&LedgerState, String> {
         let raw = fs::read_to_string(&self.path).map_err(|e| e.to_string())?;
-        let state = Self::parse_or_throw(&raw, &self.state.header.candidate_id)?;
+        let mut state = Self::parse_or_throw(&raw, &self.state.header.candidate_id)?;
+        state.header.merkle_root = state.merkle_root.clone();
         self.state = state;
         self.persist_all()?;
         Ok(&self.state)
@@ -159,6 +160,7 @@ impl Ledger {
     }
 
     fn persist_all(&self) -> Result<(), String> {
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
         if let Some(parent) = self.path.parent() {
             fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
@@ -173,9 +175,10 @@ impl Ledger {
         }
 
         let data = lines.join("\n") + "\n";
+        let count = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let staging_path = self
             .path
-            .with_extension(format!("staging.{}", std::process::id()));
+            .with_extension(format!("staging.{}.{}", std::process::id(), count));
         fs::write(&staging_path, data).map_err(|e| e.to_string())?;
         fs::rename(&staging_path, &self.path).map_err(|e| e.to_string())?;
         Ok(())

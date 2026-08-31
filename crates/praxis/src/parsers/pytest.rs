@@ -12,30 +12,32 @@ impl PytestParser {
         let mut failed = 0;
         let mut skipped = 0;
 
-        for line in stdout.lines() {
-            let line_trimmed = line.trim();
+        let combined = format!("{}\n{}", stdout, stderr);
+        for line in combined.lines() {
+            let line_stripped = strip_ansi(line.trim());
+            let line_trimmed = line_stripped.trim();
             // Example summary: "==== 12 passed, 2 failed, 1 skipped in 0.45s ===="
             if (line_trimmed.contains(" passed")
                 || line_trimmed.contains(" failed")
-                || line_trimmed.contains(" error"))
-                && line_trimmed.starts_with("===")
-                && line_trimmed.ends_with("===")
+                || line_trimmed.contains(" error")
+                || line_trimmed.contains(" skipped"))
+                && line_trimmed.contains("===")
             {
                 let parts: Vec<&str> = line_trimmed.split(',').collect();
                 for part in parts {
                     let part = part.trim_matches(|c: char| c == '=' || c.is_whitespace());
-                    if part.contains("passed") {
-                        if let Some(n) = extract_first_num(part) {
-                            passed = n;
-                        }
-                    } else if part.contains("failed") || part.contains("error") {
-                        if let Some(n) = extract_first_num(part) {
-                            failed += n;
-                        }
+                    if part.contains("passed")
+                        && let Some(n) = extract_first_num(part)
+                    {
+                        passed += n;
+                    } else if (part.contains("failed") || part.contains("error"))
+                        && let Some(n) = extract_first_num(part)
+                    {
+                        failed += n;
                     } else if part.contains("skipped")
                         && let Some(n) = extract_first_num(part)
                     {
-                        skipped = n;
+                        skipped += n;
                     }
                 }
             }
@@ -54,6 +56,23 @@ impl PytestParser {
             raw_stderr: stderr.to_string(),
         }
     }
+}
+
+fn strip_ansi(s: &str) -> String {
+    let mut out = String::new();
+    let mut in_escape = false;
+    for c in s.chars() {
+        if c == '\x1b' {
+            in_escape = true;
+        } else if in_escape {
+            if c == 'm' || c.is_ascii_alphabetic() {
+                in_escape = false;
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
 }
 
 fn extract_first_num(s: &str) -> Option<usize> {
@@ -80,5 +99,14 @@ test_api.py ..F.
         assert_eq!(report.failed_count, 1);
         assert_eq!(report.skipped_count, 2);
         assert!(!report.is_success());
+    }
+
+    #[test]
+    fn test_parse_pytest_all_skipped_and_ansi() {
+        let stdout = "\x1b[33m================ 5 skipped in 0.12s ================\x1b[0m";
+        let report = PytestParser::parse(stdout, "");
+        assert_eq!(report.passed_count, 0);
+        assert_eq!(report.failed_count, 0);
+        assert_eq!(report.skipped_count, 5);
     }
 }

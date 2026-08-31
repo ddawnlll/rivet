@@ -70,7 +70,8 @@ impl ExecGate {
             }
 
             // Check watch mode flags
-            if cmd.command.contains("--watch") || cmd.command.contains("-w") {
+            let parts_vec = shlex_split(&cmd.command);
+            if parts_vec.iter().any(|arg| arg == "--watch" || arg == "-w") {
                 reason_codes.push(reason_codes::WATCH_MODE_DETECTED.to_string());
                 diagnostics.push(Diagnostic::error(
                     "WATCH_MODE_DETECTED",
@@ -109,9 +110,12 @@ impl ExecGate {
             let timeout_secs = cmd.timeout_seconds.unwrap_or(300);
 
             let start = Instant::now();
-            let mut parts = cmd.command.split_whitespace();
-            let program = parts.next().unwrap_or("");
-            let args: Vec<&str> = parts.collect();
+            let program = parts_vec.first().map(|s| s.as_str()).unwrap_or("");
+            let args: Vec<&str> = if parts_vec.len() > 1 {
+                parts_vec[1..].iter().map(|s| s.as_str()).collect()
+            } else {
+                Vec::new()
+            };
 
             let res = tokio::time::timeout(
                 std::time::Duration::from_secs(timeout_secs),
@@ -164,6 +168,14 @@ impl ExecGate {
                         ),
                     ));
                 }
+            } else {
+                passed = false;
+                cmd_reasons.push(reason_codes::COMMAND_CRASHED.to_string());
+                reason_codes.push(reason_codes::COMMAND_CRASHED.to_string());
+                diagnostics.push(Diagnostic::error(
+                    "COMMAND_CRASHED",
+                    format!("Command '{}' terminated abnormally without exit code", cmd.command),
+                ));
             }
 
             // Expected patterns check
@@ -225,17 +237,44 @@ impl ExecGate {
     }
 }
 
+fn shlex_split(cmd: &str) -> Vec<String> {
+    let mut args = Vec::new();
+    let mut current = String::new();
+    let mut in_single_quote = false;
+    let mut in_double_quote = false;
+    let mut escaped = false;
+
+    for c in cmd.chars() {
+        if escaped {
+            current.push(c);
+            escaped = false;
+        } else if c == '\\' && !in_single_quote {
+            escaped = true;
+        } else if c == '\'' && !in_double_quote {
+            in_single_quote = !in_single_quote;
+        } else if c == '"' && !in_single_quote {
+            in_double_quote = !in_double_quote;
+        } else if c.is_whitespace() && !in_single_quote && !in_double_quote {
+            if !current.is_empty() {
+                args.push(current);
+                current = String::new();
+            }
+        } else {
+            current.push(c);
+        }
+    }
+    if !current.is_empty() {
+        args.push(current);
+    }
+    args
+}
+
 fn safe_cwd(repo_root: &Path, subdirectory: &str) -> Result<std::path::PathBuf, String> {
-    let relative = Path::new(subdirectory);
-    if relative.is_absolute()
-        || relative.has_root()
-        || relative
-            .components()
-            .any(|component| matches!(component, std::path::Component::ParentDir))
-    {
+    if !rivet_types::is_safe_relative_path(subdirectory) {
         return Err("cwd must be a relative path within the repository".into());
     }
-    Ok(repo_root.join(relative))
+    let norm = subdirectory.replace('\\', "/");
+    Ok(repo_root.join(norm))
 }
 
 #[cfg(test)]
@@ -248,6 +287,16 @@ mod tests {
         let root = PathBuf::from("repo");
         assert!(safe_cwd(&root, "crates/praxis").is_ok());
         assert!(safe_cwd(&root, "../outside").is_err());
+        assert!(safe_cwd(&root, "..\\outside").is_err());
         assert!(safe_cwd(&root, "/outside").is_err());
+    }
+
+    #[test]
+    fn test_shlex_split_handles_quotes() {
+        let args = shlex_split("cargo test -- \"my complex test name\" -k 'single'");
+        assert_eq!(
+            args,
+            vec!["cargo", "test", "--", "my complex test name", "-k", "single"]
+        );
     }
 }

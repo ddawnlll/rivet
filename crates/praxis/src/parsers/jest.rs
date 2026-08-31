@@ -22,11 +22,11 @@ impl JestParser {
                     let part = part.trim();
                     if part.contains("passed") {
                         if let Some(n) = extract_num(part) {
-                            passed = n;
+                            passed += n;
                         }
                     } else if part.contains("failed") {
                         if let Some(n) = extract_num(part) {
-                            failed = n;
+                            failed += n;
                         }
                     } else if (part.contains("skipped") || part.contains("todo"))
                         && let Some(n) = extract_num(part)
@@ -81,5 +81,21 @@ Time:        1.25s
         assert_eq!(report.passed_count, 15);
         assert_eq!(report.failed_count, 0);
         assert!(report.is_success());
+    }
+
+    #[test]
+    fn test_parse_jest_multi_suite() {
+        let stdout = "\
+PASS packages/core/test.spec.ts
+Tests:       5 passed, 1 failed, 6 total
+PASS packages/cli/test.spec.ts
+Tests:       10 passed, 2 skipped, 12 total
+";
+        let report = JestParser::parse(stdout, "");
+        assert_eq!(report.passed_count, 15);
+        assert_eq!(report.failed_count, 1);
+        assert_eq!(report.skipped_count, 2);
+        assert_eq!(report.total_count, 18);
+        assert!(!report.is_success());
     }
 }

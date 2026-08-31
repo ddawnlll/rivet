@@ -69,10 +69,16 @@ impl VerityPipeline {
         gate_results.push(g1);
 
         // 2. LockGate
+        let sanitized_id: String = plan
+            .metadata
+            .plan_id
+            .chars()
+            .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+            .collect();
         let lock_path = self
             .repo_root
             .join(".praxis")
-            .join(format!("{}.lock.json", plan.metadata.plan_id));
+            .join(format!("{}.lock.json", sanitized_id));
         let (g2, _) = LockGate::evaluate(plan, &lock_path, self.lock_mode, attempt_id);
         gate_results.push(g2);
 
