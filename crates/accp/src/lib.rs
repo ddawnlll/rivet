@@ -571,7 +571,11 @@ impl AccpSemanticGate {
             completed,
             required_obligations_satisfied: obligations_satisfied && revision_matches,
             unclosed_obligations,
-            final_receipt: passing_receipts.last().cloned(),
+            final_receipt: if completed {
+                passing_receipts.last().cloned()
+            } else {
+                None
+            },
             timestamp: Utc::now(),
         }
     }
@@ -586,6 +590,38 @@ mod tests {
         let unclosed = vec![ObligationId::new()];
         assert!(AccpSemanticGate::check_completion_authority(&unclosed).is_err());
         assert!(AccpSemanticGate::check_completion_authority(&[]).is_ok());
+    }
+
+    #[test]
+    fn test_completion_decision_final_receipt_only_when_completed() {
+        let proposal = CompletionProposal {
+            task_id: TaskId::new(),
+            summary: "Done".into(),
+            claims_addressed: vec![],
+            base_revision: Revision(1),
+            timestamp: Utc::now(),
+        };
+        let receipt = ReceiptId::new();
+
+        // Incomplete because of unclosed obligations:
+        let incomplete = AccpSemanticGate::evaluate_completion(
+            &proposal,
+            Revision(1),
+            vec![ObligationId::new()],
+            std::slice::from_ref(&receipt),
+        );
+        assert!(!incomplete.completed);
+        assert!(incomplete.final_receipt.is_none());
+
+        // Complete:
+        let complete = AccpSemanticGate::evaluate_completion(
+            &proposal,
+            Revision(1),
+            vec![],
+            std::slice::from_ref(&receipt),
+        );
+        assert!(complete.completed);
+        assert_eq!(complete.final_receipt, Some(receipt));
     }
 
     #[test]
