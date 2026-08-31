@@ -269,8 +269,7 @@ impl HarnessCore {
         )?
         .validate_direction()?;
         self.set_phase(RunPhase::InvokingModel).await;
-        let model_id = std::env::var("RIVET_MODEL_ID")
-            .unwrap_or_else(|_| "muse-spark-1.2-contributor-free".into());
+        let model_id = std::env::var("RIVET_MODEL_ID").unwrap_or_default();
         let view_revision = view.hard_revision;
         let model_req = ModelRequest {
             model_id: model_id.clone(),
@@ -285,10 +284,15 @@ impl HarnessCore {
 
         let invocation_start = Instant::now();
         let response = self.model.invoke(model_req).await?;
+        let recorded_model_id = if model_id.is_empty() {
+            "active_model".to_string()
+        } else {
+            model_id
+        };
         self.record_event(NoesisEvent::ModelInvocationRecorded {
             record: ModelInvocationRecord {
                 invocation_id: ReceiptId::new(),
-                model_id,
+                model_id: recorded_model_id,
                 reason: InvocationReason::SemanticDiagnosis,
                 input_tokens: response.usage.input_tokens,
                 output_tokens: response.usage.output_tokens,
