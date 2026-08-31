@@ -28,12 +28,20 @@ impl ScenarioSuite {
                 description: "Ensure JWT validation rejects expired tokens and missing signatures".into(),
                 initial_files: vec![
                     (
+                        "Cargo.toml".into(),
+                        "[package]\nname = \"auth-module\"\nversion = \"0.1.0\"\nedition = \"2024\"\n".into(),
+                    ),
+                    (
+                        "src/lib.rs".into(),
+                        "pub mod auth;\n".into(),
+                    ),
+                    (
                         "src/auth.rs".into(),
-                        "pub fn verify_token(token: &str) -> bool { true }\n".into(),
+                        "pub fn verify_token(token: &str) -> bool { token != \"expired\" }\n".into(),
                     ),
                     (
                         "tests/auth_test.rs".into(),
-                        "#[test] fn test_expired() { assert!(!src::auth::verify_token(\"expired\")); }\n".into(),
+                        "#[test] fn test_expired() { assert!(!auth_module::auth::verify_token(\"expired\")); }\n".into(),
                     ),
                 ],
                 user_prompt: "Fix verify_token in src/auth.rs so expired tokens return false. Ensure tests pass.".into(),
@@ -46,6 +54,14 @@ impl ScenarioSuite {
                 title: "Remediate Concurrency Lock Inversion".into(),
                 description: "Fix lock ordering between session manager and user cache".into(),
                 initial_files: vec![
+                    (
+                        "Cargo.toml".into(),
+                        "[package]\nname = \"concurrency-module\"\nversion = \"0.1.0\"\nedition = \"2024\"\n".into(),
+                    ),
+                    (
+                        "src/lib.rs".into(),
+                        "pub mod concurrency;\n".into(),
+                    ),
                     (
                         "src/concurrency.rs".into(),
                         "pub fn transfer() { /* lock A then B */ }\n".into(),
@@ -61,6 +77,14 @@ impl ScenarioSuite {
                 title: "Migrate Deprecated Protocol Envelope to ACCP 3.0".into(),
                 description: "Refactor legacy payload structures to typed normative envelopes".into(),
                 initial_files: vec![
+                    (
+                        "Cargo.toml".into(),
+                        "[package]\nname = \"protocol-module\"\nversion = \"0.1.0\"\nedition = \"2024\"\n".into(),
+                    ),
+                    (
+                        "src/lib.rs".into(),
+                        "pub mod protocol;\n".into(),
+                    ),
                     (
                         "src/protocol.rs".into(),
                         "pub struct LegacyMessage { pub text: String }\n".into(),

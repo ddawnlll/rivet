@@ -52,7 +52,10 @@ impl AblationScorecard {
 
         let passed = matching.iter().filter(|r| r.passed).count();
         let total_turns: usize = matching.iter().map(|r| r.turns_taken).sum();
-        let total_tokens: u32 = matching.iter().map(|r| r.total_input_tokens + r.total_output_tokens).sum();
+        let total_tokens: u64 = matching
+            .iter()
+            .map(|r| (r.total_input_tokens as u64) + (r.total_output_tokens as u64))
+            .sum();
         let blocked: usize = matching.iter().map(|r| r.unauthorized_attempts).sum();
 
         Self {
@@ -61,7 +64,7 @@ impl AblationScorecard {
             scenarios_passed: passed,
             pass_rate_pct: (passed as f64 / total as f64) * 100.0,
             avg_turns: total_turns as f64 / total as f64,
-            avg_tokens: total_tokens / total as u32,
+            avg_tokens: (total_tokens / total as u64) as u32,
             total_unauthorized_actions_blocked: blocked,
             timestamp: Utc::now(),
         }
