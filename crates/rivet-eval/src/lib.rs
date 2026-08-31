@@ -58,4 +58,34 @@ mod tests {
         assert!(markdown.contains("Rivet Empirical Evaluation Scorecard"));
         assert!(markdown.contains("Full Rivet (Canonical)"));
     }
+
+    #[tokio::test]
+    async fn test_alien_suite_and_ablation_matrix() {
+        let alien_scenarios = ScenarioSuite::alien_suite();
+        assert_eq!(alien_scenarios.len(), 3);
+
+        let model = Arc::new(MockEvalModel);
+        let mut scorecards = Vec::new();
+
+        for mode in [
+            AblationMode::FullRivet,
+            AblationMode::NoHardState,
+            AblationMode::NoPraxisVerity,
+            AblationMode::NoHephaestus,
+        ] {
+            let mut results = Vec::new();
+            for scenario in &alien_scenarios {
+                let res = EvalRunner::run_scenario(scenario, mode, model.clone()).await;
+                results.push(res);
+            }
+            let scorecard = AblationScorecard::from_results(mode, &results);
+            scorecards.push(scorecard);
+        }
+
+        assert_eq!(scorecards.len(), 4);
+        let table = AblationScorecard::render_markdown_comparison(&scorecards);
+        assert!(table.contains("Noesis Hard State"));
+        assert!(table.contains("Praxis Verification"));
+        assert!(table.contains("Hephaestus"));
+    }
 }

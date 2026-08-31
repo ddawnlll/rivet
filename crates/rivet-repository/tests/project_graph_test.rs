@@ -98,3 +98,113 @@ async fn test_git_inspector_on_non_git_and_temp_repo() {
     assert!(!status.is_git_repository);
     assert_eq!(status.tracked_files_count, 0);
 }
+
+#[test]
+fn test_ast_parser_multi_language() {
+    use rivet_repository::{AstParser, SymbolKind};
+
+    // 1. Rust
+    let rs_src = r#"
+        use std::sync::Arc;
+        pub struct SessionStore { id: String }
+        impl SessionStore {
+            pub fn fetch_session(&self) -> bool { true }
+        }
+        #[test]
+        fn test_store_init() { assert!(true); }
+    "#;
+    let rs_ast = AstParser::parse_source("src/session.rs", rs_src);
+    assert_eq!(rs_ast.language, "rust");
+    assert_eq!(rs_ast.imports, vec!["std::sync::Arc"]);
+    assert_eq!(rs_ast.test_targets, vec!["test_store_init"]);
+    assert!(
+        rs_ast
+            .symbols
+            .iter()
+            .any(|s| s.name == "SessionStore" && s.kind == SymbolKind::Struct)
+    );
+
+    // 2. TypeScript
+    let ts_src = r#"
+        import { Config } from './config';
+        export interface UserConfig { name: string; }
+        export class AuthService {
+            login() { return true; }
+        }
+        test("verifies user auth", () => {});
+    "#;
+    let ts_ast = AstParser::parse_source("src/auth.ts", ts_src);
+    assert_eq!(ts_ast.language, "typescript");
+    assert_eq!(ts_ast.test_targets, vec!["verifies user auth"]);
+    assert!(
+        ts_ast
+            .symbols
+            .iter()
+            .any(|s| s.name == "UserConfig" && s.kind == SymbolKind::Interface)
+    );
+    assert!(
+        ts_ast
+            .symbols
+            .iter()
+            .any(|s| s.name == "AuthService" && s.kind == SymbolKind::Class)
+    );
+
+    // 3. Python
+    let py_src = r#"
+        import os
+        class DatabaseManager:
+            def connect(self): pass
+        def test_db_connection():
+            assert True
+    "#;
+    let py_ast = AstParser::parse_source("app/db.py", py_src);
+    assert_eq!(py_ast.language, "python");
+    assert_eq!(py_ast.test_targets, vec!["test_db_connection"]);
+    assert!(
+        py_ast
+            .symbols
+            .iter()
+            .any(|s| s.name == "DatabaseManager" && s.kind == SymbolKind::Class)
+    );
+
+    // 4. Go
+    let go_src = r#"
+        import "fmt"
+        type ServerConfig struct { Port int }
+        func TestServerInit(t *testing.T) {}
+    "#;
+    let go_ast = AstParser::parse_source("cmd/server.go", go_src);
+    assert_eq!(go_ast.language, "go");
+    assert_eq!(go_ast.test_targets, vec!["TestServerInit"]);
+    assert!(
+        go_ast
+            .symbols
+            .iter()
+            .any(|s| s.name == "ServerConfig" && s.kind == SymbolKind::Struct)
+    );
+
+    // 5. Build full ProjectGraph
+    let files = vec![
+        ("src/session.rs".to_string(), rs_src.to_string()),
+        ("src/auth.ts".to_string(), ts_src.to_string()),
+        ("app/db.py".to_string(), py_src.to_string()),
+        ("cmd/server.go".to_string(), go_src.to_string()),
+    ];
+    let project_graph = AstParser::build_project_graph(&files, "multi_polyglot_repo");
+    assert!(
+        project_graph
+            .nodes
+            .contains_key("repo://multi_polyglot_repo")
+    );
+    assert!(project_graph.nodes.contains_key("file://src/session.rs"));
+    assert!(
+        project_graph
+            .nodes
+            .contains_key("symbol://src/session.rs/SessionStore")
+    );
+    assert!(
+        project_graph
+            .nodes
+            .contains_key("test://src/session.rs/test_store_init")
+    );
+}
