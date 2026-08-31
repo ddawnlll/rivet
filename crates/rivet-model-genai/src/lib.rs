@@ -163,6 +163,14 @@ fn response_content(body: &Value) -> Option<String> {
             body.pointer("/choices/0/delta/content")
                 .and_then(content_value)
         })
+        .or_else(|| {
+            body.pointer("/choices/0/delta/tool_calls")
+                .map(|v| v.to_string())
+        })
+        .or_else(|| {
+            body.pointer("/choices/0/message/tool_calls")
+                .map(|v| v.to_string())
+        })
 }
 
 fn content_value(value: &Value) -> Option<String> {

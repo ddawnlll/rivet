@@ -43,12 +43,25 @@ impl CognitiveAction {
     /// JSON remains prose and therefore cannot silently gain authority.
     pub fn parse_text(text: &str) -> Vec<Self> {
         let trimmed = text.trim();
-        let candidate = trimmed
-            .strip_prefix("```json")
-            .or_else(|| trimmed.strip_prefix("```"))
-            .map(|value| value.trim_end_matches('`').trim())
-            .unwrap_or(trimmed);
-        let Ok(value) = serde_json::from_str::<serde_json::Value>(candidate) else {
+        let json_str = if let Some(start) = trimmed.find("```json") {
+            let after = &trimmed[start + 7..];
+            if let Some(end) = after.find("```") {
+                after[..end].trim()
+            } else {
+                after.trim()
+            }
+        } else if let Some(start) = trimmed.find("```") {
+            let after = &trimmed[start + 3..];
+            if let Some(end) = after.find("```") {
+                after[..end].trim()
+            } else {
+                after.trim()
+            }
+        } else {
+            trimmed
+        };
+
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(json_str) else {
             return Vec::new();
         };
 
@@ -73,6 +86,17 @@ impl CognitiveAction {
             .cloned()
             .ok_or_else(|| RivetError::Serialization("missing action payload".into()))?;
         match action_type {
+            "thought" => {
+                if let Some(s) = payload.as_str() {
+                    Ok(Self::Thought(s.to_string()))
+                } else if let Some(s) = payload.get("thought").and_then(|v| v.as_str()) {
+                    Ok(Self::Thought(s.to_string()))
+                } else {
+                    serde_json::from_value(payload)
+                        .map(Self::Thought)
+                        .map_err(|error| RivetError::Serialization(error.to_string()))
+                }
+            }
             "tool_call" => serde_json::from_value(payload)
                 .map(Self::ToolCall)
                 .map_err(|error| RivetError::Serialization(error.to_string())),

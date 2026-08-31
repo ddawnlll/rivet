@@ -112,7 +112,17 @@ impl AuthStore {
             return PathBuf::from(override_path);
         }
 
-        if let Ok(home) = std::env::var("HOME") {
+        #[cfg(windows)]
+        {
+            if let Ok(appdata) = std::env::var("LOCALAPPDATA").or_else(|_| std::env::var("APPDATA")) {
+                return Path::new(&appdata).join("rivet").join("auth.json");
+            }
+            if let Ok(userprofile) = std::env::var("USERPROFILE") {
+                return Path::new(&userprofile).join(".config").join("rivet").join("auth.json");
+            }
+        }
+
+        if let Ok(home) = std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE")) {
             let local_share = Path::new(&home).join(".local").join("share").join("rivet");
             if local_share.exists() {
                 return local_share.join("auth.json");
@@ -328,13 +338,16 @@ impl AuthStore {
 
     /// Mask an API key for safe display (e.g. `sk-proj-1234567890` -> `sk-proj-...7890`)
     pub fn mask_key(key: &str) -> String {
-        let len = key.len();
+        let chars: Vec<char> = key.chars().collect();
+        let len = chars.len();
         if len <= 8 {
             return "***".to_string();
         }
         let prefix_len = if len > 16 { 7 } else { 4 };
         let suffix_len = if len > 16 { 4 } else { 3 };
-        format!("{}...{}", &key[..prefix_len], &key[len - suffix_len..])
+        let prefix: String = chars[..prefix_len].iter().collect();
+        let suffix: String = chars[len - suffix_len..].iter().collect();
+        format!("{prefix}...{suffix}")
     }
 }
 

@@ -7,7 +7,7 @@
 use async_trait::async_trait;
 use rig::completion::AssistantContent;
 use rig::prelude::*;
-use rig::providers::openai;
+use rig::providers::{anthropic, openai};
 use rivet_model::provider_hub::ResolvedProviderConfig;
 use rivet_model::{CognitiveAction, ModelBackend, ModelRequest, ModelResponse, TokenUsage};
 use rivet_types::*;
@@ -270,10 +270,12 @@ impl ModelBackend for RigBackend {
                     .map_err(|e| RivetError::Model(e.to_string()))?;
                 extract_text(resp.choice)
             }
-            // For other providers (Anthropic, etc.), route through standard OpenAI wire format
-            _ => {
-                let client = openai::Client::from_env()
-                    .map_err(|e| RivetError::Model(e.to_string()))?;
+            RigProvider::Anthropic { api_key } => {
+                let client = if let Some(key) = api_key {
+                    anthropic::Client::new(key).map_err(|e| RivetError::Model(e.to_string()))?
+                } else {
+                    anthropic::Client::from_env().map_err(|e| RivetError::Model(e.to_string()))?
+                };
                 let model = client.completion_model(model_name);
                 let req = model
                     .completion_request(&prompt_payload)
@@ -343,5 +345,21 @@ mod tests {
         };
         let backend = RigBackend::from_resolved(&cfg);
         assert_eq!(backend.default_model, "deepseek-chat");
+    }
+
+    #[test]
+    fn test_rig_from_resolved_anthropic() {
+        let cfg = ResolvedProviderConfig {
+            provider: "anthropic".into(),
+            model_id: "claude-3-7-sonnet-latest".into(),
+            api_key: Some("sk-ant-test".into()),
+            base_url: None,
+        };
+        let backend = RigBackend::from_resolved(&cfg);
+        assert_eq!(backend.default_model, "claude-3-7-sonnet-latest");
+        assert!(matches!(
+            backend.provider,
+            RigProvider::Anthropic { api_key } if api_key.as_deref() == Some("sk-ant-test")
+        ));
     }
 }

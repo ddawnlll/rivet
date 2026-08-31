@@ -448,7 +448,8 @@ pub async fn fetch_remote_models(base_url: &str, api_key: Option<&str>) -> Rivet
 
     if !resp.status().is_success() {
         // Fallback for native Ollama /api/tags if /v1/models is not supported
-        let ollama_tags_url = format!("{}/api/tags", clean_base);
+        let ollama_base = clean_base.strip_suffix("/v1").unwrap_or(clean_base);
+        let ollama_tags_url = format!("{}/api/tags", ollama_base);
         if let Ok(tags_resp) = client.get(&ollama_tags_url).send().await
             && tags_resp.status().is_success()
             && let Ok(json) = tags_resp.json::<serde_json::Value>().await
@@ -464,7 +465,7 @@ pub async fn fetch_remote_models(base_url: &str, api_key: Option<&str>) -> Rivet
         }
 
         return Err(RivetError::Model(format!(
-            "Model discovery endpoint returned status {}",
+            "Model discovery failed at {url} (HTTP {})",
             resp.status()
         )));
     }
@@ -472,24 +473,17 @@ pub async fn fetch_remote_models(base_url: &str, api_key: Option<&str>) -> Rivet
     let json: serde_json::Value = resp
         .json()
         .await
-        .map_err(|e| RivetError::Model(format!("Failed to parse model list JSON: {e}")))?;
+        .map_err(|e| RivetError::Model(format!("Invalid JSON from model endpoint {url}: {e}")))?;
 
     let mut model_ids = Vec::new();
     if let Some(data) = json.get("data").and_then(|d| d.as_array()) {
-        for item in data {
-            if let Some(id) = item.get("id").and_then(|s| s.as_str()) {
+        for entry in data {
+            if let Some(id) = entry.get("id").and_then(|id| id.as_str()) {
                 model_ids.push(id.to_string());
-            }
-        }
-    } else if let Some(models) = json.get("models").and_then(|m| m.as_array()) {
-        for item in models {
-            if let Some(name) = item.get("name").and_then(|s| s.as_str()) {
-                model_ids.push(name.to_string());
             }
         }
     }
 
-    model_ids.sort();
     Ok(model_ids)
 }
 
@@ -504,11 +498,7 @@ pub struct ResolvedProviderConfig {
 pub struct ProviderRegistry;
 
 impl ProviderRegistry {
-    /// Resolve provider and model based on hierarchy:
-    /// 1. Explicit arguments
-    /// 2. Active selection / stored credentials in AuthStore
-    /// 3. Ambient environment variables
-    /// 4. Sensible local defaults
+    /// Ported directly from OpenCode's resolveProviderConfig()
     pub fn resolve(
         requested_provider: Option<&str>,
         requested_model: Option<&str>,
@@ -524,7 +514,11 @@ impl ProviderRegistry {
             normalize_provider_id(&env_p)
         } else if let Some(ref active) = auth_data.active_provider {
             active.clone()
-        } else if let Some(first_saved) = auth_data.providers.keys().next() {
+        } else if let Some(first_saved) = {
+            let mut keys: Vec<&String> = auth_data.providers.keys().collect();
+            keys.sort();
+            keys.first().copied()
+        } {
             first_saved.clone()
         } else if std::env::var("OPENAI_API_KEY").is_ok() {
             "openai".into()
