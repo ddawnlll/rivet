@@ -15,5 +15,5 @@ pub mod pipeline;
 
 pub use modes::{KnowledgeTriple, ProvenancePath, RepresentationMode};
 pub use pipeline::{
-    CognitiveViewCompiler, CompilationContext, CompiledViewPayload, OmittedSummary,
+    CognitiveViewCompiler, CompilationContext, CompiledViewPayload, OmittedSummary, TokenCounter,
 };

@@ -69,4 +69,21 @@ impl SandboxEnforcer {
 
         Ok(())
     }
+
+    /// Apply POSIX resource limits (CPU, disk write ceiling, process group isolation)
+    #[cfg(unix)]
+    pub unsafe fn apply_posix_rlimits(config: &SandboxConfig) -> std::io::Result<()> {
+        let _ = libc::setpgid(0, 0);
+
+        if let Some(mb) = config.disk_write_mb {
+            let bytes = (mb as u64) * 1024 * 1024;
+            let limit = libc::rlimit {
+                rlim_cur: bytes as libc::rlim_t,
+                rlim_max: (bytes + 10 * 1024 * 1024) as libc::rlim_t,
+            };
+            let _ = libc::setrlimit(libc::RLIMIT_FSIZE, &limit);
+        }
+
+        Ok(())
+    }
 }

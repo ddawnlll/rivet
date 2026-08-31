@@ -113,3 +113,16 @@ fn test_view_compiler_all_4_modes() {
     assert!(rendered_paths.contains("# COGNITIVE VIEW (PATHS MODE - PROVENANCE GRAPH)"));
     assert!(rendered_paths.contains("Goal(Fix authentication regression) -> Obligation("));
 }
+
+#[test]
+fn test_tiktoken_bpe_token_counter() {
+    use rivet_view::TokenCounter;
+
+    let sample_prompt = "Fix database concurrency bug in src/db.rs and ensure cargo test passes";
+    let token_count = TokenCounter::count_tokens(sample_prompt);
+    assert!(token_count > 5);
+    assert!(token_count < 30);
+
+    let empty_count = TokenCounter::count_tokens("");
+    assert_eq!(empty_count, 0);
+}

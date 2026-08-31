@@ -78,4 +78,7 @@ sha2 = "0.10"
 hex = "0.4"
 regex = "1.11"
 libc = "0.2"
+tiktoken-rs = "0.6"
+lsp-types = "0.97"
+
 

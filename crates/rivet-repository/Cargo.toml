@@ -17,6 +17,7 @@ chrono = { workspace = true }
 sha2 = { workspace = true }
 hex = { workspace = true }
 regex = { workspace = true }
+lsp-types = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

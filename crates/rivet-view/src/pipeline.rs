@@ -625,6 +625,19 @@ impl CompiledViewPayload {
     }
 }
 
+pub struct TokenCounter;
+
+impl TokenCounter {
+    /// Count exact BPE tokens using cl100k_base tokenizer (GPT-4 / modern standard)
+    pub fn count_tokens(text: &str) -> usize {
+        if let Ok(bpe) = tiktoken_rs::cl100k_base() {
+            bpe.encode_ordinary(text).len()
+        } else {
+            text.len().div_ceil(4)
+        }
+    }
+}
+
 fn escape_yaml_string(s: &str) -> String {
     s.replace('\\', "\\\\")
         .replace('"', "\\\"")

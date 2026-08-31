@@ -45,6 +45,8 @@ pub struct ExtractedFileAst {
     pub test_targets: Vec<String>,
 }
 
+pub type FileAst = ExtractedFileAst;
+
 pub struct AstParser;
 
 impl AstParser {
