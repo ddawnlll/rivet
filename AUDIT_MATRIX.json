@@ -1,0 +1,27 @@
+{
+  "snapshot": {
+    "captured_at": "2026-08-31T20:24:21.6949663+03:00",
+    "head": "d20ccd054d0bdf5b58cfc387bf0daf6fe3656020",
+    "branch": "main",
+    "working_tree_stable": false,
+    "changes_made_by_audit": false
+  },
+  "rows": [
+    {"name":"rivet-core","subsystem":"Harness Core","before":"PARTIAL","after":"PARTIAL","evidence":["crates/rivet-core/src/lib.rs:27","crates/rivet-core/src/lib.rs:274","crates/rivet-core/src/lib.rs:396-407"],"tests":"3 integration files; no stable receipt"},
+    {"name":"noesis","subsystem":"Noesis","before":"PARTIAL","after":"PARTIAL","evidence":["crates/noesis/src/lib.rs:49","crates/noesis/src/lib.rs:107","crates/noesis/src/lib.rs:274","crates/noesis/src/lib.rs:342"],"tests":"7 unit tests; no stable receipt"},
+    {"name":"rivet-view","subsystem":"Cognitive View Compiler","before":"ABSENT","after":"ABSENT","evidence":["Cargo.toml:1-15","crates/noesis/src/lib.rs:344"],"tests":"none"},
+    {"name":"accp","subsystem":"ACCP","before":"PARTIAL","after":"PARTIAL","evidence":["crates/accp/src/lib.rs:23","crates/accp/src/lib.rs:271","crates/accp/src/lib.rs:465"],"tests":"11 unit attributes + 8 integration tests; moving snapshot failed"},
+    {"name":"praxis","subsystem":"Praxis","before":"PARTIAL","after":"PARTIAL","evidence":["crates/praxis/src/lib.rs:7","crates/praxis/src/pipeline.rs:22-111","crates/praxis/src/gates/exec_gate.rs:120-137"],"tests":"19 unit/async attributes + 1 integration file; no stable receipt"},
+    {"name":"hephaestus","subsystem":"Hephaestus","before":"CONTRADICTS-SPEC","after":"CONTRADICTS-SPEC","evidence":["crates/hephaestus/src/lib.rs:46-140","crates/rivet-core/src/lib.rs:125-126"],"tests":"1 unit test; no stable receipt"},
+    {"name":"rivet-repository","subsystem":"Repository","before":"PARTIAL","after":"PARTIAL","evidence":["crates/rivet-repository/src/lib.rs:45-250","crates/rivet-repository/src/induction.rs:38-175"],"tests":"1 unit + 2 async tests; no stable receipt"},
+    {"name":"rivet-runtime","subsystem":"Runtime","before":"CONTRADICTS-SPEC","after":"CONTRADICTS-SPEC","evidence":["crates/rivet-runtime/src/lib.rs:45-303","crates/rivet-runtime/src/lib.rs:53-73"],"tests":"4 async tests; no stable receipt"},
+    {"name":"rivet-store","subsystem":"Store","before":"CONTRADICTS-SPEC","after":"CONTRADICTS-SPEC","evidence":["crates/rivet-store/src/lib.rs:16-22","crates/rivet-store/src/lib.rs:116-227"],"tests":"5 async tests; no stable receipt"},
+    {"name":"rivet-model","subsystem":"ModelBackend","before":"PARTIAL","after":"PARTIAL","evidence":["crates/rivet-model/src/lib.rs:20-205"],"tests":"5 test attributes; no stable receipt"},
+    {"name":"rivet-model-genai","subsystem":"ModelBackend adapter","before":"COMPLETE-UNVERIFIED","after":"COMPLETE-UNVERIFIED","evidence":["crates/rivet-model-genai/src/lib.rs:109-219"],"tests":"3 unit + 1 live test inventory; no stable receipt"},
+    {"name":"rivet-model-rig","subsystem":"Extra model adapter","before":"COMPLETE-UNVERIFIED","after":"COMPLETE-UNVERIFIED","evidence":["crates/rivet-model-rig/src/lib.rs:17-312","crates/rivet/src/main.rs:196-201"],"tests":"2 unit tests; cargo check warning"},
+    {"name":"rivet-types","subsystem":"Typed IDs","before":"CONTRADICTS-SPEC","after":"CONTRADICTS-SPEC","evidence":["crates/rivet-types/src/lib.rs:16-84",".rivet/audit/phase0/typed-id-scan.txt"],"tests":"2 unit tests; clippy failure at line 155"},
+    {"name":"rivet","subsystem":"CLI/TUI","before":"CONTRADICTS-SPEC","after":"CONTRADICTS-SPEC","evidence":["crates/rivet/src/main.rs","crates/rivet/src/tui.rs:2417-2421","crates/rivet/src/tui.rs:2675-2679"],"tests":"no test files / 0 attributes"},
+    {"name":"rivet-mcp","subsystem":"MCP edge","before":"ABSENT","after":"ABSENT","evidence":["Cargo.toml:1-15","rg rmcp crates"],"tests":"none"},
+    {"name":"rivet-eval","subsystem":"Evaluation extra","before":"COMPLETE-UNVERIFIED","after":"COMPLETE-UNVERIFIED","evidence":["crates/rivet-eval/src"],"tests":"1 unit + 1 async test inventory; no stable receipt"}
+  ]
+}
