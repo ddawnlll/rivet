@@ -227,6 +227,7 @@ impl HardState {
                 self.closed_obligations.remove(obligation_id);
                 self.obligations
                     .insert(obligation_id.clone(), reason.clone());
+                self.completed_tasks.clear();
             }
             NoesisEvent::ModelInvocationRecorded { record } => {
                 self.model_invocations.push(record.clone());
@@ -582,6 +583,33 @@ mod tests {
             },
             NoesisEvent::VerificationRecorded {
                 receipt: failed,
+                timestamp: Utc::now(),
+            },
+        ]);
+        assert!(state.obligations.contains_key(&obligation_id));
+        assert!(state.completed_tasks.is_empty());
+    }
+
+    #[test]
+    fn test_obligation_reopened_invalidates_completed_tasks() {
+        let task_id = TaskId::new();
+        let obligation_id = ObligationId::new();
+        let passing_id = ReceiptId::new();
+
+        let state = HardState::replay(&[
+            NoesisEvent::ObligationClosed {
+                obligation_id: obligation_id.clone(),
+                receipt_id: passing_id.clone(),
+                timestamp: Utc::now(),
+            },
+            NoesisEvent::CompletionAccepted {
+                task_id,
+                final_receipt: passing_id,
+                timestamp: Utc::now(),
+            },
+            NoesisEvent::ObligationReopened {
+                obligation_id: obligation_id.clone(),
+                reason: "manual test regression".into(),
                 timestamp: Utc::now(),
             },
         ]);
