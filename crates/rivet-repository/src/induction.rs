@@ -47,6 +47,14 @@ impl RepoFrontier {
     }
 
     pub fn add_node(&mut self, node: FrontierNode) {
+        if let Some(old) = self.nodes.get(&node.relative_path)
+            && old.decision == FrontierDecision::Descend
+        {
+            self.total_active_bytes = self.total_active_bytes.saturating_sub(old.size_bytes);
+            self.token_estimate = self
+                .token_estimate
+                .saturating_sub((old.size_bytes / 4).max(1) as u32);
+        }
         if node.decision == FrontierDecision::Descend {
             self.total_active_bytes += node.size_bytes;
             self.token_estimate += (node.size_bytes / 4).max(1) as u32;
@@ -55,27 +63,36 @@ impl RepoFrontier {
     }
 
     pub fn descended_paths(&self) -> Vec<String> {
-        self.nodes
+        let mut paths: Vec<String> = self
+            .nodes
             .values()
             .filter(|n| n.decision == FrontierDecision::Descend)
             .map(|n| n.relative_path.clone())
-            .collect()
+            .collect();
+        paths.sort();
+        paths
     }
 
     pub fn maybe_paths(&self) -> Vec<String> {
-        self.nodes
+        let mut paths: Vec<String> = self
+            .nodes
             .values()
             .filter(|n| n.decision == FrontierDecision::Maybe)
             .map(|n| n.relative_path.clone())
-            .collect()
+            .collect();
+        paths.sort();
+        paths
     }
 
     pub fn deferred_paths(&self) -> Vec<String> {
-        self.nodes
+        let mut paths: Vec<String> = self
+            .nodes
             .values()
             .filter(|n| n.decision == FrontierDecision::Defer)
             .map(|n| n.relative_path.clone())
-            .collect()
+            .collect();
+        paths.sort();
+        paths
     }
 }
 
@@ -94,14 +111,27 @@ impl InductionEngine {
         let mut current_tokens = 0;
 
         for entry in &census.entries {
-            let path_lower = entry.relative_path.to_lowercase();
+            let path_lower = entry.relative_path.replace('\\', "/").to_lowercase();
             let is_in_focus = active_focus.iter().any(|f| {
-                entry.relative_path.starts_with(f) || path_lower.contains(&f.to_lowercase())
+                let f_trimmed = f.trim();
+                if f_trimmed.is_empty() {
+                    return false;
+                }
+                let f_norm = f_trimmed.replace('\\', "/").to_lowercase();
+                entry.relative_path.starts_with(&f_norm)
+                    || path_lower == f_norm
+                    || path_lower.starts_with(&format!("{f_norm}/"))
             });
+
+            let filename = path_lower.rsplit('/').next().unwrap_or(&path_lower);
             let is_mentioned = prompt_lower.contains(&path_lower)
-                || prompt_lower
-                    .split_whitespace()
-                    .any(|w| path_lower.contains(w) && w.len() > 3);
+                || (filename.len() > 3 && prompt_lower.contains(filename))
+                || prompt_lower.split_whitespace().any(|w| {
+                    let w_clean = w.trim_matches(|c: char| {
+                        !c.is_alphanumeric() && c != '_' && c != '.' && c != '/'
+                    });
+                    w_clean.len() > 3 && (w_clean == path_lower || w_clean == filename)
+                });
 
             let (decision, rationale) = match entry.relevance {
                 PathRelevance::Ignored => (FrontierDecision::Ignored, "Matched .gitignore".into()),
@@ -150,16 +180,20 @@ impl InductionEngine {
 }
 
 fn is_entrypoint_file(path: &str) -> bool {
-    let name = path.rsplit('/').next().unwrap_or(path).to_ascii_lowercase();
+    let norm = path.replace('\\', "/").to_ascii_lowercase();
+    let filename = norm.rsplit('/').next().unwrap_or(&norm);
     matches!(
-        name.as_str(),
+        filename,
         "cargo.toml"
             | "package.json"
             | "pyproject.toml"
             | "readme.md"
-            | "src/lib.rs"
-            | "src/main.rs"
             | "index.ts"
+            | "main.rs"
+            | "lib.rs"
+    ) || matches!(
+        norm.as_str(),
+        "src/lib.rs" | "src/main.rs" | "src/index.ts" | "src/index.js"
     )
 }
 

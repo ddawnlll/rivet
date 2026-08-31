@@ -331,10 +331,20 @@ impl IgnoreRules {
 }
 
 fn relative_path(root: &Path, path: &Path) -> String {
-    path.strip_prefix(root)
-        .unwrap_or(path)
-        .to_string_lossy()
-        .replace('\\', "/")
+    let clean_root = root.to_string_lossy().replace(r"\\?\", "").replace('\\', "/");
+    let clean_path = path.to_string_lossy().replace(r"\\?\", "").replace('\\', "/");
+    let root_trimmed = clean_root.trim_end_matches('/');
+
+    if let Some(stripped) = clean_path.strip_prefix(root_trimmed) {
+        stripped.trim_start_matches('/').to_string()
+    } else {
+        path.strip_prefix(root)
+            .unwrap_or(path)
+            .to_string_lossy()
+            .replace('\\', "/")
+            .trim_start_matches('/')
+            .to_string()
+    }
 }
 
 fn wildcard_matches(pattern: &str, value: &str) -> bool {
@@ -352,6 +362,9 @@ fn wildcard_matches(pattern: &str, value: &str) -> bool {
                     let recursive = pattern.get(p + 1) == Some(&b'*');
                     if recursive {
                         dp[p + 2][v] = true;
+                        if pattern.get(p + 2) == Some(&b'/') {
+                            dp[p + 3][v] = true;
+                        }
                     } else {
                         dp[p + 1][v] = true;
                     }
