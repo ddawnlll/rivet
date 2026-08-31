@@ -31,7 +31,8 @@ async fn test_goal_compiler_and_hephaestus_reframing_loop() {
     let tmp = tempfile::tempdir().unwrap();
     let runtime = Arc::new(Runtime::new(tmp.path()));
 
-    let harness = HarnessCore::new(store, model, runtime);
+    let mut harness = HarnessCore::new(store, model, runtime);
+    harness.enable_hephaestus(3);
 
     // 1. Test Goal Initialization
     let goal_prompt = "Fix database concurrency bug in src/db.rs and ensure cargo test passes";

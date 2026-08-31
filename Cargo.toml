@@ -4,11 +4,13 @@ members = [
     "crates/rivet-types",
     "crates/accp",
     "crates/noesis",
+    "crates/rivet-view",
     "crates/praxis",
     "crates/hephaestus",
     "crates/rivet-store",
     "crates/rivet-model",
     "crates/rivet-model-genai",
+    "crates/rivet-mcp",
     "crates/rivet-runtime",
     "crates/rivet-repository",
     "crates/rivet-core",
@@ -28,15 +30,18 @@ license = "MIT OR Apache-2.0"
 rivet-types = { path = "crates/rivet-types" }
 accp = { path = "crates/accp" }
 noesis = { path = "crates/noesis" }
+rivet-view = { path = "crates/rivet-view" }
 praxis = { path = "crates/praxis" }
 hephaestus = { path = "crates/hephaestus" }
 rivet-store = { path = "crates/rivet-store" }
 rivet-model = { path = "crates/rivet-model" }
 rivet-model-genai = { path = "crates/rivet-model-genai" }
 rivet-model-rig = { path = "crates/rivet-model-rig" }
+rivet-mcp = { path = "crates/rivet-mcp" }
 rivet-runtime = { path = "crates/rivet-runtime" }
 rivet-repository = { path = "crates/rivet-repository" }
 rivet-core = { path = "crates/rivet-core" }
+rivet-eval = { path = "crates/rivet-eval" }
 
 # Rig LLM Framework
 rig = { package = "rig-core", version = "0.42" }

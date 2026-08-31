@@ -9,10 +9,12 @@ license.workspace = true
 rivet-types = { workspace = true }
 accp = { workspace = true }
 noesis = { workspace = true }
+rivet-view = { workspace = true }
 praxis = { workspace = true }
 hephaestus = { workspace = true }
 rivet-store = { workspace = true }
 rivet-model = { workspace = true }
+rivet-mcp = { workspace = true }
 rivet-runtime = { workspace = true }
 rivet-repository = { workspace = true }
 tokio = { workspace = true }
@@ -26,3 +28,4 @@ async-trait = { workspace = true }
 [dev-dependencies]
 tempfile = { workspace = true }
 rivet-model-genai = { workspace = true }
+rivet-eval = { workspace = true }

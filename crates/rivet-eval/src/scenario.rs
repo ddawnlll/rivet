@@ -97,4 +97,65 @@ impl ScenarioSuite {
             },
         ]
     }
+
+    /// Alien project control scenarios (TypeScript, Python, Greenfield) to prevent overfitting
+    pub fn alien_suite() -> Vec<BenchmarkScenario> {
+        vec![
+            BenchmarkScenario {
+                scenario_id: "alien-ts-service".into(),
+                title: "TypeScript Service Rate Limiter Fix".into(),
+                description: "Fix sliding window counter in TypeScript API gateway".into(),
+                initial_files: vec![
+                    (
+                        "package.json".into(),
+                        "{\"name\": \"ts-gateway\", \"version\": \"1.0.0\"}\n".into(),
+                    ),
+                    (
+                        "src/limiter.ts".into(),
+                        "export function checkLimit(count: number): boolean { return count < 100; }\n".into(),
+                    ),
+                ],
+                user_prompt: "Fix checkLimit in src/limiter.ts to enforce 100 req/min limit.".into(),
+                verification_command: "npm test".into(),
+                expected_exit_code: 0,
+                max_turns: 4,
+            },
+            BenchmarkScenario {
+                scenario_id: "alien-python-data".into(),
+                title: "Python Data Normalization Pipeline Fix".into(),
+                description: "Fix pandas dataframe null handling in Python data loader".into(),
+                initial_files: vec![
+                    (
+                        "pyproject.toml".into(),
+                        "[project]\nname = \"data-loader\"\nversion = \"0.1.0\"\n".into(),
+                    ),
+                    (
+                        "loader.py".into(),
+                        "def clean_data(df): return df.dropna()\n".into(),
+                    ),
+                ],
+                user_prompt: "Update loader.py to drop nulls across columns.".into(),
+                verification_command: "pytest".into(),
+                expected_exit_code: 0,
+                max_turns: 4,
+            },
+            BenchmarkScenario {
+                scenario_id: "alien-greenfield-init".into(),
+                title: "Greenfield Project Initialization".into(),
+                description: "Initialize minimal verified package structure from scratch".into(),
+                initial_files: vec![],
+                user_prompt: "Initialize a new Rust library crate with a basic health check function and test.".into(),
+                verification_command: "cargo check".into(),
+                expected_exit_code: 0,
+                max_turns: 5,
+            },
+        ]
+    }
+
+    /// Complete suite including V8 flagship and Alien control benchmarks
+    pub fn all_benchmark_scenarios() -> Vec<BenchmarkScenario> {
+        let mut all = Self::standard_v8_suite();
+        all.extend(Self::alien_suite());
+        all
+    }
 }

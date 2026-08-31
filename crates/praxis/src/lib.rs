@@ -16,6 +16,7 @@ pub mod ledger;
 pub mod merkle;
 pub mod parsers;
 pub mod pipeline;
+pub mod reviewer;
 pub mod types;
 
 pub use circuit_breaker::{CircuitBreaker, CircuitBreakerConfig, CircuitBreakerState};
@@ -30,6 +31,7 @@ pub use merkle::{
 };
 pub use parsers::{CargoTestParser, GoTestParser, JestParser, ParsedTestReport, PytestParser};
 pub use pipeline::{VerityPipeline, VerityPipelineResult};
+pub use reviewer::{BlindReviewerEngine, ReviewPayload, ReviewVerdict, VerificationLevel};
 pub use types::*;
 
 use accp::{VerificationReceipt, VerificationRequest};

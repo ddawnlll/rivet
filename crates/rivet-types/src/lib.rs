@@ -286,6 +286,9 @@ pub enum RivetError {
     #[error("Protocol serialization error: {0}")]
     Serialization(String),
 
+    #[error("Operation timed out: {0}")]
+    Timeout(String),
+
     #[error("Invalid or unsafe path: {0}")]
     InvalidPath(String),
 }

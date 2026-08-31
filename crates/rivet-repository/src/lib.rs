@@ -7,8 +7,19 @@ use rivet_types::*;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+pub mod ast_parser;
+pub mod capability_graph;
+pub mod git;
 pub mod induction;
+pub mod project_graph;
+
+pub use ast_parser::{AstParser, ExtractedFileAst, ExtractedSymbol, SymbolKind};
+pub use capability_graph::{CapabilityCost, CapabilityEffect, CapabilityGraph, CapabilityProvider};
+pub use git::{GitInspector, GitRepositoryStatus};
 pub use induction::{FrontierDecision, FrontierNode, InductionEngine, RepoFrontier};
+pub use project_graph::{
+    EdgeKind, EdgeProvenance, NodeKind, ProjectEdge, ProjectGraph, ProjectNode,
+};
 
 const DEFERRED_DIRS: &[&str] = &["node_modules", "target", "vendor", "dist"];
 

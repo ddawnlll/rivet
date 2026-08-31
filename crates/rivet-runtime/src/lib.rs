@@ -20,6 +20,14 @@ const MAX_OBSERVATION_BYTES: usize = 64 * 1024;
 pub const DEFAULT_MAX_COMMAND_OUTPUT_BYTES: usize = 1024 * 1024;
 const OUTPUT_TRUNCATION_MARKER: &str = "\n[output truncated]";
 
+pub mod roles;
+pub mod sandbox;
+pub mod semantic_patch;
+
+pub use roles::{CapabilityPolicy, WorkerRole};
+pub use sandbox::{NetworkPolicy, SandboxConfig, SandboxEnforcer};
+pub use semantic_patch::{PatchIntent, PatchOperation, SemanticPatchEngine};
+
 pub struct Runtime {
     working_dir: PathBuf,
     executed_actions: Arc<Mutex<HashMap<String, CachedAction>>>,
@@ -255,6 +263,67 @@ impl Runtime {
                     }
                 }
             }
+            "semantic.patch" => {
+                let operation = match proposal
+                    .parameters
+                    .get("operation")
+                    .and_then(|v| v.as_str())
+                {
+                    Some("insert_before") => PatchOperation::InsertBefore,
+                    Some("insert_after") => PatchOperation::InsertAfter,
+                    Some("rename_symbol") => PatchOperation::RenameSymbol,
+                    Some("delete_symbol") => PatchOperation::DeleteSymbol,
+                    _ => PatchOperation::ReplaceBody,
+                };
+                let proposed_artifact = proposal
+                    .parameters
+                    .get("content")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let new_symbol_name = proposal
+                    .parameters
+                    .get("new_symbol_name")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+
+                let intent = PatchIntent {
+                    target: proposal.target.clone(),
+                    expected_revision: proposal.scope.revision,
+                    operation,
+                    proposed_artifact,
+                    new_symbol_name,
+                };
+
+                match SemanticPatchEngine::apply_patch(
+                    &self.working_dir,
+                    &intent,
+                    proposal.scope.revision,
+                )
+                .await
+                {
+                    Ok(msg) => (
+                        true,
+                        Some(0),
+                        msg,
+                        serde_json::json!({
+                            "kind": "semantic.patch",
+                            "target": proposal.target,
+                            "operation": format!("{:?}", operation),
+                        }),
+                    ),
+                    Err(error) => (
+                        false,
+                        Some(1),
+                        format!("Semantic patch failed: {error}"),
+                        serde_json::json!({
+                            "kind": "semantic.patch.failed",
+                            "target": proposal.target,
+                            "error": error.to_string(),
+                        }),
+                    ),
+                }
+            }
             _ => (
                 false,
                 Some(1),
@@ -435,7 +504,6 @@ impl ManagedChild {
     fn spawn(mut command: Command) -> io::Result<Self> {
         #[cfg(unix)]
         {
-            use std::os::unix::process::CommandExt;
             unsafe {
                 command.pre_exec(|| {
                     if setpgid(0, 0) == -1 {

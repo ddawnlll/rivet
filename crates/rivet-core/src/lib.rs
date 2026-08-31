@@ -125,13 +125,22 @@ impl HarnessCore {
             runtime,
             goal_spec: Arc::new(Mutex::new(None)),
             failure_tracker: Arc::new(Mutex::new(FailureClusterTracker::new())),
-            hephaestus: Arc::new(HephaestusEngine::new(3)),
+            hephaestus: Arc::new(HephaestusEngine::disabled()),
             repository_id: std::env::var("RIVET_REPOSITORY_ID").unwrap_or_else(|_| "rivet".into()),
             relevant_files: Arc::new(Mutex::new(Vec::new())),
             repository_signals: Arc::new(Mutex::new(Vec::new())),
             cycle_lock: Arc::new(Mutex::new(())),
             phase: Arc::new(Mutex::new(RunPhase::Idle)),
         }
+    }
+
+    pub fn with_hephaestus(mut self, engine: HephaestusEngine) -> Self {
+        self.hephaestus = Arc::new(engine);
+        self
+    }
+
+    pub fn enable_hephaestus(&mut self, threshold: usize) {
+        self.hephaestus = Arc::new(HephaestusEngine::enabled(threshold));
     }
 
     /// Compile a user prompt into a formal GoalSpec, materialize its obligations
@@ -235,11 +244,27 @@ impl HarnessCore {
         recent_evidence.sort();
         recent_evidence.truncate(32);
 
+        let mut contradictions: Vec<_> = hard
+            .contradictions
+            .values()
+            .map(|c| format!("{}: {}", c.claim_id, c.reason))
+            .collect();
+        contradictions.sort();
+
+        let mut rejected_claims: Vec<_> = hard
+            .rejected_claims
+            .values()
+            .map(|r| format!("{}: {}", r.claim_id, r.reason))
+            .collect();
+        rejected_claims.sort();
+
         CognitiveView {
             hard_revision: hard.revision,
             repository_id: self.repository_id.clone(),
             goal_description: goal.to_string(),
             active_claims,
+            contradictions,
+            rejected_claims,
             open_obligations,
             recent_evidence,
             repository_signals,

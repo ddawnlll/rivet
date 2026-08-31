@@ -20,6 +20,25 @@ pub struct ClaimRecord {
     pub updated_at: DateTime<Utc>,
 }
 
+/// Materialized contradiction record in Hard State
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContradictionRecord {
+    pub claim_id: ClaimId,
+    pub contradicted_by: Vec<EvidenceId>,
+    pub reason: String,
+    pub scope: Scope,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Materialized rejected belief record in Hard State
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RejectionRecord {
+    pub claim_id: ClaimId,
+    pub reason: String,
+    pub evidence: Vec<EvidenceId>,
+    pub timestamp: DateTime<Utc>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum InvocationReason {
@@ -94,6 +113,19 @@ pub enum NoesisEvent {
         reason: String,
         timestamp: DateTime<Utc>,
     },
+    ClaimContradicted {
+        claim_id: ClaimId,
+        contradicted_by: Vec<EvidenceId>,
+        reason: String,
+        scope: Scope,
+        timestamp: DateTime<Utc>,
+    },
+    ClaimRejected {
+        claim_id: ClaimId,
+        reason: String,
+        evidence: Vec<EvidenceId>,
+        timestamp: DateTime<Utc>,
+    },
     ModelInvocationRecorded {
         record: ModelInvocationRecord,
     },
@@ -112,6 +144,10 @@ pub struct HardState {
     #[serde(default)]
     pub active_task_id: Option<TaskId>,
     pub claims: HashMap<ClaimId, ClaimRecord>,
+    #[serde(default)]
+    pub contradictions: HashMap<ClaimId, ContradictionRecord>,
+    #[serde(default)]
+    pub rejected_claims: HashMap<ClaimId, RejectionRecord>,
     pub obligations: HashMap<ObligationId, String>,
     /// Durable scope declarations for open and historically closed obligations.
     #[serde(default)]
@@ -168,6 +204,48 @@ impl HardState {
                     record.status = *new_status;
                     record.updated_at = *timestamp;
                 }
+            }
+            NoesisEvent::ClaimContradicted {
+                claim_id,
+                contradicted_by,
+                reason,
+                scope,
+                timestamp,
+            } => {
+                if let Some(record) = self.claims.get_mut(claim_id) {
+                    record.status = EpistemicStatus::Rejected;
+                    record.updated_at = *timestamp;
+                }
+                self.contradictions.insert(
+                    claim_id.clone(),
+                    ContradictionRecord {
+                        claim_id: claim_id.clone(),
+                        contradicted_by: contradicted_by.clone(),
+                        reason: reason.clone(),
+                        scope: scope.clone(),
+                        created_at: *timestamp,
+                    },
+                );
+            }
+            NoesisEvent::ClaimRejected {
+                claim_id,
+                reason,
+                evidence,
+                timestamp,
+            } => {
+                if let Some(record) = self.claims.get_mut(claim_id) {
+                    record.status = EpistemicStatus::Rejected;
+                    record.updated_at = *timestamp;
+                }
+                self.rejected_claims.insert(
+                    claim_id.clone(),
+                    RejectionRecord {
+                        claim_id: claim_id.clone(),
+                        reason: reason.clone(),
+                        evidence: evidence.clone(),
+                        timestamp: *timestamp,
+                    },
+                );
             }
             NoesisEvent::EvidenceRecorded {
                 evidence_id,
@@ -347,6 +425,10 @@ pub struct CognitiveView {
     pub repository_id: String,
     pub goal_description: String,
     pub active_claims: Vec<ClaimRecord>,
+    #[serde(default)]
+    pub contradictions: Vec<String>,
+    #[serde(default)]
+    pub rejected_claims: Vec<String>,
     pub open_obligations: Vec<String>,
     #[serde(default)]
     pub recent_evidence: Vec<String>,
@@ -377,6 +459,22 @@ impl CognitiveView {
             out.push_str("### AUTHORITATIVE HARD CLAIMS:\n");
             for c in &self.active_claims {
                 out.push_str(&format!("- [{}] {}: {}\n", c.status, c.id, c.proposition));
+            }
+            out.push('\n');
+        }
+
+        if !self.contradictions.is_empty() {
+            out.push_str("### DETECTED CONTRADICTIONS (Must resolve before completion):\n");
+            for c in &self.contradictions {
+                out.push_str(&format!("- [!] {}\n", c));
+            }
+            out.push('\n');
+        }
+
+        if !self.rejected_claims.is_empty() {
+            out.push_str("### REJECTED / FALSIFIED CLAIMS (Do not re-explore):\n");
+            for r in &self.rejected_claims {
+                out.push_str(&format!("- [x] {}\n", r));
             }
             out.push('\n');
         }
@@ -624,6 +722,8 @@ mod tests {
             repository_id: "repo".into(),
             goal_description: "x".repeat(10_000),
             active_claims: vec![],
+            contradictions: vec![],
+            rejected_claims: vec![],
             open_obligations: vec![],
             recent_evidence: vec![],
             repository_signals: vec![],
@@ -647,6 +747,8 @@ mod tests {
             repository_id: "repo".into(),
             goal_description: "inspect repository".into(),
             active_claims: vec![],
+            contradictions: vec![],
+            rejected_claims: vec![],
             open_obligations: vec![],
             recent_evidence: vec![],
             repository_signals: vec!["src files=3 bytes=120 relevance=Active".into()],
@@ -660,5 +762,68 @@ mod tests {
         let prompt = view.format_prompt_block();
         assert!(prompt.contains("REPOSITORY CENSUS SIGNALS (not semantic decisions)"));
         assert!(prompt.contains("src files=3 bytes=120 relevance=Active"));
+    }
+
+    #[test]
+    fn contradiction_and_rejection_materialization_and_replay() {
+        let claim_id = ClaimId::new();
+        let ev1 = EvidenceId::new();
+        let ev2 = EvidenceId::new();
+        let scope = Scope::global("rivet", Revision::ZERO);
+
+        let events = vec![
+            NoesisEvent::ClaimAsserted {
+                claim_id: claim_id.clone(),
+                proposition: "Parser is zero-copy".into(),
+                status: EpistemicStatus::Supported,
+                evidence: vec![ev1.clone()],
+                scope: scope.clone(),
+                timestamp: Utc::now(),
+            },
+            NoesisEvent::ClaimContradicted {
+                claim_id: claim_id.clone(),
+                contradicted_by: vec![ev2.clone()],
+                reason: "Allocates String on every token".into(),
+                scope: scope.clone(),
+                timestamp: Utc::now(),
+            },
+            NoesisEvent::ClaimRejected {
+                claim_id: ClaimId::new(),
+                reason: "Approach dead-ends with borrow-checker cycle".into(),
+                evidence: vec![ev2],
+                timestamp: Utc::now(),
+            },
+        ];
+
+        let state = HardState::replay(&events);
+        assert_eq!(state.contradictions.len(), 1);
+        assert_eq!(state.rejected_claims.len(), 1);
+        assert_eq!(
+            state.claims.get(&claim_id).unwrap().status,
+            EpistemicStatus::Rejected
+        );
+
+        let view = CognitiveView {
+            hard_revision: state.revision,
+            repository_id: "rivet".into(),
+            goal_description: "Refactor parser".into(),
+            active_claims: vec![],
+            contradictions: vec!["Parser allocates String on every token".into()],
+            rejected_claims: vec!["Borrow-checker cycle approach".into()],
+            open_obligations: vec![],
+            recent_evidence: vec![],
+            repository_signals: vec![],
+            unknowns: vec![],
+            active_hypotheses: vec![],
+            active_focus: vec![],
+            relevant_files: vec![],
+            token_budget_hint: 512,
+            model_invocation_count: 1,
+        };
+        let prompt = view.format_prompt_block();
+        assert!(prompt.contains("### DETECTED CONTRADICTIONS"));
+        assert!(prompt.contains("Parser allocates String on every token"));
+        assert!(prompt.contains("### REJECTED / FALSIFIED CLAIMS"));
+        assert!(prompt.contains("Borrow-checker cycle approach"));
     }
 }

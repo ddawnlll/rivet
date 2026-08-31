@@ -18,6 +18,12 @@ pub enum AblationMode {
     NoPraxisVerity,
     /// Without Hephaestus Cold-Path Cognition (no stagnation intervention)
     NoHephaestus,
+    /// Without Cognitive View Compiler (raw context dump)
+    NoCognitiveView,
+    /// Without Project Graph Structural Model
+    NoProjectGraph,
+    /// Without Blind Reviewer Independence
+    NoBlindReviewer,
 }
 
 impl AblationMode {
@@ -28,6 +34,9 @@ impl AblationMode {
             Self::NoACCPGates,
             Self::NoPraxisVerity,
             Self::NoHephaestus,
+            Self::NoCognitiveView,
+            Self::NoProjectGraph,
+            Self::NoBlindReviewer,
         ]
     }
 
@@ -38,6 +47,9 @@ impl AblationMode {
             Self::NoACCPGates => "Ablation: -ACCP Semantic Gate",
             Self::NoPraxisVerity => "Ablation: -Praxis Verification",
             Self::NoHephaestus => "Ablation: -Hephaestus Cold-Path",
+            Self::NoCognitiveView => "Ablation: -Cognitive View Compiler",
+            Self::NoProjectGraph => "Ablation: -Project Graph Structural Model",
+            Self::NoBlindReviewer => "Ablation: -Blind Reviewer Independence",
         }
     }
 }

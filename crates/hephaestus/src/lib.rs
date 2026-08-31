@@ -73,20 +73,42 @@ impl FailureClusterTracker {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct HephaestusEngine {
+    pub enabled: bool,
     pub failure_threshold: usize,
 }
 
 impl HephaestusEngine {
     pub fn new(threshold: usize) -> Self {
         Self {
+            enabled: false,
             failure_threshold: threshold,
         }
     }
 
+    pub fn enabled(threshold: usize) -> Self {
+        Self {
+            enabled: true,
+            failure_threshold: threshold,
+        }
+    }
+
+    pub fn disabled() -> Self {
+        Self {
+            enabled: false,
+            failure_threshold: 3,
+        }
+    }
+
+    pub fn with_enabled(mut self, enabled: bool) -> Self {
+        self.enabled = enabled;
+        self
+    }
+
     /// Check if consecutive failures warrant cold-path intervention
     pub fn should_intervene(&self, tracker: &FailureClusterTracker) -> bool {
-        tracker.consecutive_failures >= self.failure_threshold
+        self.enabled && tracker.consecutive_failures >= self.failure_threshold
     }
 
     /// Analyze failure patterns and generate an optimal ReframingProposal
@@ -148,7 +170,7 @@ mod tests {
 
     #[test]
     fn test_hephaestus_stagnation_detection_and_reframing() {
-        let engine = HephaestusEngine::new(3);
+        let engine = HephaestusEngine::enabled(3);
         let mut tracker = FailureClusterTracker::new();
 
         tracker.record_failure("src/auth.rs", "error[E0308]: mismatched types");
@@ -164,5 +186,15 @@ mod tests {
             ReframingStrategy::InterfaceContractMismatch
         );
         assert!(!reframing.new_hypothesis_candidates.is_empty());
+    }
+
+    #[test]
+    fn test_hephaestus_disabled_by_default() {
+        let engine = HephaestusEngine::new(3);
+        let mut tracker = FailureClusterTracker::new();
+        for _ in 0..10 {
+            tracker.record_failure("src/lib.rs", "error");
+        }
+        assert!(!engine.should_intervene(&tracker));
     }
 }

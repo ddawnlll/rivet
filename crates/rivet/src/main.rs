@@ -51,6 +51,9 @@ struct Cli {
     #[arg(long, help = "Custom base URL endpoint")]
     base_url: Option<String>,
 
+    #[arg(long, help = "Enable mechanical trace logging and decision receipts")]
+    trace: bool,
+
     #[command(subcommand)]
     command: Option<Commands>,
 }
@@ -124,12 +127,17 @@ enum AuthSubcommands {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_default_env().add_directive(tracing::Level::INFO.into()))
-        .init();
-
     let cli = Cli::parse();
     let auth_store = AuthStore::new();
+
+    let filter_level = if cli.trace {
+        tracing::Level::DEBUG
+    } else {
+        tracing::Level::INFO
+    };
+    tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::from_default_env().add_directive(filter_level.into()))
+        .init();
 
     // Handle Auth and Models commands before opening project state
     if let Some(Commands::Auth { sub }) = cli.command {
@@ -190,10 +198,10 @@ async fn main() -> anyhow::Result<()> {
             );
             println!("⏸️  Deferred Trees: {}", census.deferred_count);
         }
-        Some(Commands::Chat { path, .. }) => run_chat(&path, resolved).await?,
+        Some(Commands::Chat { path, .. }) => run_chat(&path, resolved, cli.trace).await?,
         Some(Commands::Tui { path, .. }) => run_tui(&path, resolved, auth_store).await?,
         _ => {
-            run_chat(&target_dir, resolved).await?;
+            run_chat(&target_dir, resolved, cli.trace).await?;
         }
     }
 
@@ -236,7 +244,11 @@ async fn run_tui(
     app.run().await
 }
 
-async fn run_chat(target_dir: &Path, config: ResolvedProviderConfig) -> anyhow::Result<()> {
+async fn run_chat(
+    target_dir: &Path,
+    config: ResolvedProviderConfig,
+    trace: bool,
+) -> anyhow::Result<()> {
     println!("\n🧠 Initializing Noesis Hard State & ACCP Engine...");
     let state_dir = target_dir.join(".rivet");
     tokio::fs::create_dir_all(&state_dir).await?;
@@ -322,8 +334,29 @@ async fn run_chat(target_dir: &Path, config: ResolvedProviderConfig) -> anyhow::
             continue;
         }
 
+        if trace {
+            let hard = harness.hard_state.lock().await;
+            println!(
+                "🔍 [TRACE] Pre-step Hard Revision: {}, Active Claims: {}, Contradictions: {}, Open Obligations: {}",
+                hard.revision,
+                hard.claims.len(),
+                hard.contradictions.len(),
+                hard.obligations.len()
+            );
+        }
+
         match harness.step("Repository engineering session", prompt).await {
-            Ok(response) => println!("\n🤖 Rivet Response:\n{}", response),
+            Ok(response) => {
+                if trace {
+                    let hard = harness.hard_state.lock().await;
+                    println!(
+                        "🔍 [TRACE] Post-step Hard Revision: {}, Verified Receipts: {}",
+                        hard.revision,
+                        hard.verification_receipts.len()
+                    );
+                }
+                println!("\n🤖 Rivet Response:\n{}", response);
+            }
             Err(error) => println!("\n⚠️ Model/session error: {}", error),
         }
     }

@@ -390,7 +390,6 @@ impl ManagedChild {
     fn spawn(mut command: Command) -> io::Result<Self> {
         #[cfg(unix)]
         {
-            use std::os::unix::process::CommandExt;
             unsafe {
                 command.pre_exec(|| {
                     if setpgid(0, 0) == -1 {
