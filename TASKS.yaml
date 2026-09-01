@@ -40,14 +40,14 @@ tasks:
   - id: "M1-001"
     phase: 1
     title: "Fetch anomalyco/opencode; select known-good pinned commit"
-    status: "IN_PROGRESS"
+    status: "DONE"
     acceptance:
       - "upstream remote added, push disabled"
-      - "one commit hash recorded in MIGRATION.md §2"
+      - "one commit hash recorded in MIGRATION.md §2 (ebece6efd7b11401cf1e7390b5a22991b6608cc4)"
   - id: "M1-002"
     phase: 1
     title: "Merge upstream into main as real downstream (unrelated histories)"
-    status: "OPEN"
+    status: "DONE"
     acceptance:
       - "upstream tree present at pinned commit"
       - "Rivet governance records intact (docs/, site/, IMPLEMENTATION.md, TASKS.yaml, MIGRATION.md)"
@@ -55,7 +55,7 @@ tasks:
   - id: "M1-003"
     phase: 1
     title: "OpenCode baseline builds + original tests pass"
-    status: "OPEN"
+    status: "DONE"
     acceptance:
       - "bun install succeeds at pinned commit"
       - "baseline test/lint/typecheck/build recorded in MIGRATION.md"

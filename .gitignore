@@ -1,34 +1,34 @@
-# OS & Editor
 .DS_Store
-Thumbs.db
-desktop.ini
-.idea/
-.vscode/
-*.swp
-*~
-
-# Python
-__pycache__/
-*.py[cod]
-.venv/
-venv/
-.pytest_cache/
-*.egg-info/
-dist/
-build/
-
-# Rust (Rivet runtime)
-target/
-**/*.rs.bk
-
-# Local provider credentials
+node_modules
+.worktrees
+.sst
 .env
-.env.*
-!.env.example
+.env.local
+.idea
+.vscode
+.codex
+*~
+playground
+tmp
+dist
+ts-dist
+.turbo
+**/.serena
+.serena/
+**/.omo
+.omo/
+/result
+refs
+Session.vim
+/opencode.json
+a.out
+target
+.scripts
+.direnv/
 
-# Scratch & Temporary
-tmp/
-scratch/
-node_modules/
-.rivet/
-.rivet-auth.json
+# Local dev files
+opencode-dev
+UPCOMING_CHANGELOG.md
+logs/
+*.bun-build
+tsconfig.tsbuildinfo

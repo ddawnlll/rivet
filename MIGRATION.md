@@ -15,12 +15,12 @@
 | Origin remote at archive time | `https://github.com/ddawnlll/rivet.git` (main, ahead of origin by 15) |
 | Policy | Archive branch/tag and their history are NEVER deleted. The Rust implementation is the executable reference/oracle for ACCP, Noesis, Praxis, Cognitive View, revision, evidence and completion semantics. |
 
-## 2. Pinned OpenCode upstream (Phase 1 — in progress)
+## 2. Pinned OpenCode upstream (Phase 1 — completed)
 
 | Item | Value |
 |---|---|
 | Upstream remote | `https://github.com/anomalyco/opencode` |
-| Pinned commit | TBD (recorded when baseline merge lands) |
+| Pinned commit | `ebece6efd7b11401cf1e7390b5a22991b6608cc4` |
 | Pin policy | One known-good commit; NO continuous rebase against upstream during the port. |
 
 ## 3. Subsystem mapping (Rust → fork)
