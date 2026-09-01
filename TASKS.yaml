@@ -1,204 +1,133 @@
-version: "0.3.0"
+version: "0.4.0-migration"
 status: "EXECUTION_READY"
-active_phase: 6
+active_phase: 1
+campaign: "Rivet ⇄ OpenCode semantic-replacement migration"
+constitution: "site/index.html generated from docs/charter + docs/contracts + docs/architecture"
+oracle: "archive/pre-opencode-migration (commit 9defbb187443faf3b57419f8f3ab6b82a46bdb71, Rust workspace)"
+previous_queue_note: "The v0.3.0 Rust implementation queue is preserved at archive/rivet-rust-pre-opencode:TASKS.yaml"
 
 rules:
-  - "Implement against frozen types in crates/ only"
-  - "Every task must have unit/integration tests before mark done"
-  - "Architecture invention is out of scope"
+  - "Rivet constitution wins over OpenCode behavior on conflict"
+  - "Every ported semantic must have a constitutional test"
+  - "No test deletion for green CI; replacements need documented reason"
+  - "No continuous rebase against upstream during the port"
+  - "Provider/model/frontend are commodity substrate; lifecycle/authority/verification are Rivet-owned"
 
 tasks:
-  # =========================================================================
-  # PHASE 1: WORKSPACE BOOTSTRAP & CANONICAL TYPE-LEVEL SKELETON
-  # =========================================================================
-  - id: "T-001"
-    phase: 1
-    title: "Rust Workspace & Cargo.toml Root Initialization"
-    description: "Create the root Cargo.toml workspace and directory structure for all 12 crates."
-    crates: ["rivet-types", "accp", "noesis", "praxis", "hephaestus", "rivet-store", "rivet-model", "rivet-model-genai", "rivet-runtime", "rivet-repository", "rivet-core", "rivet"]
+  # PHASE 0 — PRESERVE OLD RIVET
+  - id: "M0-001"
+    phase: 0
+    title: "Commit working tree safely"
     status: "DONE"
-    acceptance_criteria:
-      - "cargo check --workspace exits with 0"
-      - "Cargo.lock generated"
-
-  - id: "T-002"
-    phase: 1
-    title: "Canonical ID, Revision & Epistemic Types (rivet-types)"
-    description: "Implement strongly typed IDs (SessionId, TaskId, ClaimId, EvidenceId, ArtifactId, Revision), EpistemicStatus, and Core Error types."
-    crates: ["rivet-types"]
+    evidence: "commit 9defbb1 on main; cargo check --workspace clean"
+  - id: "M0-002"
+    phase: 0
+    title: "Immutable archive branch + annotated tag"
     status: "DONE"
-    acceptance_criteria:
-      - "All ID types have Display, Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize"
-      - "Revision implements strict ordering and hashing"
-
-  - id: "T-003"
-    phase: 1
-    title: "ACCP 3.0 Typed Envelopes & Semantic Invariants (accp)"
-    description: "Implement ACCP 3.0 message envelopes (ActionProposal, ActionDecision, ExecutionReceipt, ClaimProposal, VerificationRequest, VerificationReceipt, StateTransitionProposal, CompletionProposal, CompletionDecision) and invariant enforcement."
-    crates: ["accp"]
+    evidence: "branch archive/rivet-rust-pre-opencode, tag archive/pre-opencode-migration @ 9defbb187443faf3b57419f8f3ab6b82a46bdb71"
+  - id: "M0-003"
+    phase: 0
+    title: "MIGRATION.md record + decision register entries D-044..D-047"
     status: "DONE"
-    acceptance_criteria:
-      - "AccpMessage enum covers all 9 normative classes"
-      - "Unit tests for illegal semantic casts (e.g. ModelClaim -> Observation rejection)"
-
-  - id: "T-004"
-    phase: 1
-    title: "Noesis Memory & Event Ledger Contracts (noesis)"
-    description: "Implement NoesisEvent, HardState materialized view, SoftWorkspace bounded RAM model, StatePromotion, and Invalidation rules."
-    crates: ["noesis"]
+    evidence: "MIGRATION.md §1-2, docs/decisions/DECISION_REGISTER.md"
+  - id: "M0-004"
+    phase: 0
+    title: "Constitution verified consistent (site/index.html ⇄ docs/)"
     status: "DONE"
-    acceptance_criteria:
-      - "Event append and replay produces deterministic HardState"
-      - "SoftWorkspace bounded capacity and eviction policy works"
+    evidence: "explore audit: 52 articles, I-01..I-20, responsibility matrix, canonical cycle all match"
 
-  - id: "T-005"
+  # PHASE 1 — ESTABLISH OPENCODE BASE
+  - id: "M1-001"
     phase: 1
-    title: "Model Backend & Action Contracts (rivet-model)"
-    description: "Implement ModelBackend trait (invoke, stream), CognitiveAction parser, and InvocationReceipt accounting."
-    crates: ["rivet-model"]
-    status: "DONE"
-    acceptance_criteria:
-      - "ModelBackend trait defined with async invoke/stream"
-      - "CognitiveAction deserializes typed tool/state/completion calls"
+    title: "Fetch anomalyco/opencode; select known-good pinned commit"
+    status: "IN_PROGRESS"
+    acceptance:
+      - "upstream remote added, push disabled"
+      - "one commit hash recorded in MIGRATION.md §2"
+  - id: "M1-002"
+    phase: 1
+    title: "Merge upstream into main as real downstream (unrelated histories)"
+    status: "OPEN"
+    acceptance:
+      - "upstream tree present at pinned commit"
+      - "Rivet governance records intact (docs/, site/, IMPLEMENTATION.md, TASKS.yaml, MIGRATION.md)"
+      - "Rust workspace relocated to legacy/rivet-rust/ (D-047), still cargo-checkable"
+  - id: "M1-003"
+    phase: 1
+    title: "OpenCode baseline builds + original tests pass"
+    status: "OPEN"
+    acceptance:
+      - "bun install succeeds at pinned commit"
+      - "baseline test/lint/typecheck/build recorded in MIGRATION.md"
+      - "committed as separate baseline commit"
 
-  # =========================================================================
-  # PHASE 2: NOESIS STATE KERNEL & DURABLE STORE
-  # =========================================================================
-  - id: "N-001"
+  # PHASE 2 — CLASSIFY TEST CORPUS
+  - id: "M2-001"
     phase: 2
-    title: "redb Embedded HardStateStore Implementation (rivet-store)"
-    description: "Implement HardStateStore trait backed by redb ACID table for NoesisEvent ledger and checkpointing."
-    crates: ["rivet-store"]
-    status: "DONE"
-    acceptance_criteria:
-      - "ACID transaction guarantees verified with crash/replay test"
-      - "Zero-copy reads on event scans"
+    title: "Audit OpenCode test corpus → SUBSTRATE / BEHAVIOR / SEMANTIC"
+    status: "OPEN"
+    acceptance:
+      - "every test file classified in MIGRATION.md §5 with rationale"
+      - "SEMANTIC conflicts mapped to replacing Rivet constitutional tests"
 
-  - id: "N-002"
-    phase: 2
-    title: "Noesis SoftWorkspace Bounded Lifecycle & Eviction"
-    description: "Implement working memory in RAM: active focus, hypotheses, candidate actions with strict token/item bound."
-    crates: ["noesis"]
-    status: "DONE"
-    acceptance_criteria:
-      - "Working memory cannot exceed configured token limit"
-      - "Non-authoritative flag strictly preserved"
-
-  - id: "N-003"
-    phase: 2
-    title: "Cognitive View Compiler Projection"
-    description: "Compile HardState + SoftWorkspace + RepoFrontier into task-conditioned CognitiveView struct."
-    crates: ["noesis", "rivet-core"]
-    status: "DONE"
-    acceptance_criteria:
-      - "Produces concise CognitiveView payload"
-      - "Excludes raw chat history and deferred subtree dumps"
-
-  # =========================================================================
-  # PHASE 3: PRAXIS & ACCP EXECUTION GATES
-  # =========================================================================
-  - id: "P-001"
+  # PHASE 3 — PORT RIVET SEMANTICS
+  - id: "M3-001"
     phase: 3
-    title: "Praxis Mechanical Verification Engine (praxis)"
-    description: "Implement test execution, output parsing (cargo test, pytest, etc.), and signed VerificationReceipt generation."
-    crates: ["praxis"]
-    status: "DONE"
-    acceptance_criteria:
-      - "Executes targeted tests without LLM intervention"
-      - "Parses test pass/fail/error counts reliably"
-
-  - id: "A-001"
+    title: "Port rivet-types + ACCP 3.0 envelopes & semantic gate (TS)"
+    status: "OPEN"
+    acceptance: ["illegal casts rejected: claim→observation, proposal→execution, evidence→verified, completion-proposal→complete"]
+  - id: "M3-002"
     phase: 3
-    title: "ACCP Action Authorization Policy Enforcer (accp)"
-    description: "Enforce action permissions, read/write scopes, and destructive action blocks."
-    crates: ["accp"]
-    status: "DONE"
-    acceptance_criteria:
-      - "Rejects write actions outside declared scope"
-      - "Blocks destructive actions without explicit user authority"
+    title: "Port Noesis: event-sourced Hard State, revision engine, bounded Soft Workspace"
+    status: "OPEN"
+    acceptance: ["deterministic replay", "soft state cannot silently become hard state"]
+  - id: "M3-003"
+    phase: 3
+    title: "Port Cognitive View Compiler (eligibility→expansion→ranking→compression→contradictions→serialization)"
+    status: "OPEN"
+    acceptance: ["projection correctness tests", "retrieved content is context, not new evidence"]
+  - id: "M3-004"
+    phase: 3
+    title: "Port Praxis scoped verification + VerificationReceipt"
+    status: "OPEN"
+    acceptance: ["scope cannot inflate", "failure reopens obligation"]
+  - id: "M3-005"
+    phase: 3
+    title: "Harness owns lifecycle; authoritative promotion & completion gating"
+    status: "OPEN"
+    acceptance: ["controller cannot mint VERIFIED/COMPLETE", "stale authority fails closed"]
 
-  # =========================================================================
-  # PHASE 4: RUNTIME & REPOSITORY INDUCTION
-  # =========================================================================
-  - id: "R-001"
+  # PHASE 4 — COGNITIVE LOOP
+  - id: "M4-001"
     phase: 4
-    title: "OS Process & File Mutation Runtime (rivet-runtime)"
-    description: "Implement sandboxed command execution (tokio::process) with timeout, cancellation, and stdout/stderr capture."
-    crates: ["rivet-runtime"]
-    status: "DONE"
-    acceptance_criteria:
-      - "Handles process timeouts and SIGINT cancellation cleanly"
-      - "Safe atomic file writes"
+    title: "Canonical cycle wired end-to-end in fork runtime"
+    status: "OPEN"
+    acceptance: ["Goal→View→Controller→ACCP→gate→decision→execution→receipt→evidence→Praxis→Noesis→new view→continue/complete"]
 
-  - id: "R-002"
-    phase: 4
-    title: "Adaptive Project Induction & Deterministic Census (rivet-repository)"
-    description: "Implement fast tree walking, .gitignore parsing, size histograms, and DEFER tree classification."
-    crates: ["rivet-repository"]
-    status: "DONE"
-    acceptance_criteria:
-      - "Census finishes in <50ms for average repos"
-      - "node_modules/target/vendor are DEFERRED, not deleted"
-
-  # =========================================================================
-  # PHASE 5: MODEL ADAPTER & CANONICAL COGNITIVE CYCLE
-  # =========================================================================
-  - id: "M-001"
+  # PHASE 5 — PERSISTENCE / RESTART
+  - id: "M5-001"
     phase: 5
-    title: "genai Multi-Provider Model Adapter (rivet-model-genai)"
-    description: "Implement ModelBackend using genai crate supporting Anthropic, OpenAI, Gemini, Ollama."
-    crates: ["rivet-model-genai"]
-    status: "DONE"
-    acceptance_criteria:
-      - "Streaming and non-streaming responses normalized to ACCP actions"
-      - "Token usage tracked in InvocationReceipt"
+    title: "Hard State survives restart on OpenCode storage substrate"
+    status: "OPEN"
+    acceptance: ["provenance survives", "current revision preserved", "stale proposals rejected", "interrupted actions not duplicated", "chat history never authoritative"]
 
-  - id: "C-001"
-    phase: 5
-    title: "Canonical Cognitive Cycle & RunPhase State Machine (rivet-core)"
-    description: "Implement the end-to-end cognitive loop orchestrating View -> Model -> ACCP -> Runtime -> Praxis -> Noesis."
-    crates: ["rivet-core"]
-    status: "DONE"
-    acceptance_criteria:
-      - "Full cycle executes end-to-end without panics"
-      - "Completion strictly requires Praxis PASS"
-
-  # =========================================================================
-  # PHASE 6: CLI & DOGFOODING HARNESS
-  # =========================================================================
-  - id: "U-001"
+  # PHASE 6 — PROVIDERS / TOOLS / PERMISSIONS
+  - id: "M6-001"
     phase: 6
-    title: "Interactive Terminal REPL (rivet)"
-    description: "Implement the CLI entrypoint (clap) and interactive chat/work loop."
-    crates: ["rivet"]
-    status: "DONE"
-    acceptance_criteria:
-      - "rivet . starts interactive session on current directory"
-      - "Supports session resume from persistent redb store"
+    title: "Provider-native tool calls → ACCP ActionProposal adapter"
+    status: "OPEN"
+    acceptance: ["no tool bypass of ACCP", "permission infra adapted beneath authority semantics"]
 
-remaining_gaps:
-  - id: "RG-001"
-    priority: "P0"
-    title: "Goal & Obligation Graph Compiler"
-    status: "DONE"
-    evidence: "Implemented GoalCompiler in rivet-core with ObligationGraph, typed predicates, and automatic Noesis obligation materialization."
-  - id: "RG-002"
-    priority: "P0"
-    title: "Adaptive Repository Induction (DESCEND / MAYBE / DEFER)"
-    status: "DONE"
-    evidence: "Implemented InductionEngine and RepoFrontier in rivet-repository with progressive disclosure and goal-conditioned cognitive budget."
-  - id: "RG-003"
-    priority: "P0"
-    title: "Hephaestus Cold-Path Stagnation & Reframing Integration"
-    status: "DONE"
-    evidence: "Implemented FailureClusterTracker and dynamic reframing in hephaestus, fully integrated with HarnessCore RunPhase::Stagnated."
-  - id: "RG-004"
-    priority: "P1"
-    title: "Ratatui Terminal Developer Cockpit (TUI)"
-    status: "DONE"
-    evidence: "Implemented interactive multi-pane TUI cockpit in rivet CLI displaying live HardState, SoftWorkspace, and CognitiveStream."
-  - id: "RG-005"
-    priority: "P1"
-    title: "Benchmark & Scientific Ablation Evaluation Engine (rivet-eval)"
-    status: "DONE"
-    evidence: "Created crates/rivet-eval with standard V8 scenario suites, 5 ablation modes, and automated Markdown scorecard generator."
+  # PHASE 7 — CONSTITUTIONAL TEST PORT
+  - id: "M7-001"
+    phase: 7
+    title: "Port all meaningful Rust Rivet tests (CT-001..CT-008, I-01..I-20, restart/replay/projection)"
+    status: "OPEN"
+    acceptance: ["listed minimum set all present and passing in fork"]
+
+  # PHASE 8 — REAL E2E VALIDATION
+  - id: "M8-001"
+    phase: 8
+    title: "Real-model cognitive episodes (investigation, multi-turn, restart-resume, mutation, verification, rejected+valid completion)"
+    status: "OPEN"
+    acceptance: ["episode transcripts archived", "adversarial semantic cases pass", "no faked provider success"]
