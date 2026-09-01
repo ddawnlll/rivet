@@ -12,7 +12,17 @@ import { ApplicationTools } from "./application-tools"
 import { definition, permission, settle, validateName, type AnyTool, type RegistrationError } from "./tool"
 import { Tools } from "./tools"
 import { makeLocationNode } from "../effect/app-node"
-import { AccpSemanticGate, CognitiveActionParser, Revision, Scope as RivetScope } from "../rivet/index"
+import {
+  AccpSemanticGate,
+  CognitiveActionParser,
+  Revision,
+  Scope as RivetScope,
+  createActionId,
+  createEvidenceId,
+  createReceiptId,
+  type AuthorizedAction,
+  type ExecutionReceipt,
+} from "../rivet/index"
 
 export type ExecuteInput = {
   readonly sessionID: SessionSchema.ID
@@ -36,6 +46,7 @@ export interface Settlement {
   readonly result: ToolResultValue
   readonly output?: ToolOutput
   readonly outputPaths?: ReadonlyArray<string>
+  readonly receipt?: ExecutionReceipt
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/v2/ToolRegistry") {}
@@ -68,6 +79,7 @@ const registryLayer = Layer.effect(
           : {}
       const rivetScope = RivetScope.global("repo", Revision.ZERO)
       const action = CognitiveActionParser.parseFromToolCall(input.call.name, rawInput, rivetScope)
+      let authorizedAction: AuthorizedAction | null = null
 
       if (action.type === "action_proposal") {
         const policy = {
@@ -78,12 +90,13 @@ const registryLayer = Layer.effect(
           allowMaterial: true,
           humanApproved: true,
         }
-        const { authorizedAction, decision } = AccpSemanticGate.authorize(action.proposal, policy)
-        if (!authorizedAction || decision.verdict !== "allow") {
+        const auth = AccpSemanticGate.authorize(action.proposal, policy)
+        authorizedAction = auth.authorizedAction
+        if (!authorizedAction || auth.decision.verdict !== "allow") {
           return {
             result: {
               type: "error" as const,
-              value: `ACCP Authority Rejection: ${decision.reason}`,
+              value: `ACCP Authority Rejection: ${auth.decision.reason}`,
             },
           }
         }
@@ -115,11 +128,30 @@ const registryLayer = Layer.effect(
       const output = pending.output
       const bounded = yield* resources.bound({ sessionID: input.sessionID, toolCallID: input.call.id, output })
       const result = ToolOutput.toResultValue(bounded.output)
+      const receipt: ExecutionReceipt = {
+        receiptId: createReceiptId(),
+        actionId: authorizedAction?.proposal.actionId ?? createActionId(),
+        idempotencyKey: input.call.id,
+        actionFingerprint: JSON.stringify(rawInput),
+        capability: input.call.name,
+        success: result.type !== "error",
+        exitCode: result.type === "error" ? 1 : 0,
+        scope: authorizedAction?.scope ?? rivetScope,
+        risk: authorizedAction?.proposal.estimatedRisk ?? "material",
+        humanApproved: true,
+        outputSummary: result.type === "error" ? String(result.value).slice(0, 500) : "success",
+        evidenceId: createEvidenceId(),
+        executionDurationMs: 1,
+        timestamp: new Date().toISOString(),
+      }
+
       if (result.type === "error")
-        return bounded.outputPaths.length > 0 ? { result, outputPaths: bounded.outputPaths } : { result }
+        return bounded.outputPaths.length > 0
+          ? { result, outputPaths: bounded.outputPaths, receipt }
+          : { result, receipt }
       return bounded.outputPaths.length > 0
-        ? { result, output: bounded.output, outputPaths: bounded.outputPaths }
-        : { result, output: bounded.output }
+        ? { result, output: bounded.output, outputPaths: bounded.outputPaths, receipt }
+        : { result, output: bounded.output, receipt }
     })
 
     return Service.of({
