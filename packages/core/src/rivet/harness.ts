@@ -211,6 +211,15 @@ export class HarnessCore {
     return this.goalSpec
   }
 
+  async resume(): Promise<boolean> {
+    const events = await this.store.loadEvents(Revision.ZERO)
+    if (events.length === 0) return false
+    for (const e of events) {
+      this.hardState.apply(e)
+    }
+    return true
+  }
+
   compileCognitiveView(): CognitiveView {
     const compiled = CognitiveViewCompiler.compile({
       hardState: this.hardState,

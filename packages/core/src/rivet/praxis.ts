@@ -152,7 +152,7 @@ export class MerkleTree {
   }
 }
 
-export interface GateResult {
+export interface BasicGateResult {
   readonly gateName: string
   readonly passed: boolean
   readonly reason: string
@@ -203,7 +203,7 @@ export class PraxisEngine {
     evidenceReferenced: boolean
     executionSuccess: boolean
     testsPassed: boolean
-  }): GateResult[] {
+  }): BasicGateResult[] {
     return [
       {
         gateName: "SchemaGate",

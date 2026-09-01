@@ -5,6 +5,7 @@ import {
   type ObligationId,
   type ReceiptId,
   Revision,
+  RivetError,
   type Scope,
   type SessionId,
   type TaskId,
@@ -138,6 +139,13 @@ export type NoesisEvent =
       readonly timestamp: string
     }
   | {
+      readonly type: "claim_promoted"
+      readonly claimId: ClaimId
+      readonly status: EpistemicStatus
+      readonly evidenceId: EvidenceId
+      readonly timestamp: string
+    }
+  | {
       readonly type: "process_error_attributed"
       readonly record: ProcessErrorAttributionRecord
     }
@@ -207,6 +215,24 @@ export class HardState {
           createdAt: event.timestamp,
         })
         this.cascadeClaimInvalidation(event.claimId, event.reason)
+        break
+      }
+      case "claim_promoted": {
+        if (!this.evidence.has(event.evidenceId)) {
+          throw new RivetError(
+            "SemanticViolation",
+            `Unknown evidence reference: ${event.evidenceId}`
+          )
+        }
+        const record = this.claims.get(event.claimId)
+        if (record) {
+          this.claims.set(event.claimId, {
+            ...record,
+            status: event.status,
+            supportingEvidence: [...record.supportingEvidence, event.evidenceId],
+            updatedAt: event.timestamp,
+          })
+        }
         break
       }
       case "claim_rejected": {

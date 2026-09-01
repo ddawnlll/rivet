@@ -10,10 +10,19 @@ import {
   type AccpEnvelope,
   createActionProposal,
 } from "../../src/rivet/accp"
-import { Revision, Scope, createActionId } from "../../src/rivet/types"
+import {
+  Revision,
+  Scope,
+  createActionId,
+  createEvidenceId,
+  createObligationId,
+  createReceiptId,
+} from "../../src/rivet/types"
+import { CognitiveViewCompiler } from "../../src/rivet/view-compiler"
 
-describe("End-to-End Cognitive Episodes & Adversarial Verification", () => {
-  test("Episode 1: Read-only repository investigation episode", async () => {
+describe("End-to-End Cognitive Episodes & Adversarial Acceptance Gauntlet", () => {
+  // Episode A: Read-Only Cognition
+  test("Episode A: Read-only repository investigation episode", async () => {
     const store = new InMemoryStateStore()
     const readPaths: string[] = []
 
@@ -64,7 +73,91 @@ describe("End-to-End Cognitive Episodes & Adversarial Verification", () => {
     expect(turn2.text).toContain("rivet modules")
   })
 
-  test("Episode 2: Multi-turn mutation, mechanical Praxis verification, and valid completion", async () => {
+  // Episode B: Restart Continuity
+  test("Episode B: Process restart preserves HardState, rehydrates Noesis, and feeds fresh provider context without blind rediscovery", async () => {
+    const sharedStore = new InMemoryStateStore()
+    const readLog: string[] = []
+
+    // Phase 1: Initial session discovers facts and records them
+    const model1: ModelBackendHandler = {
+      invoke: async (prompt, view) => {
+        return {
+          text: "Discovered database config",
+          toolCalls: [
+            {
+              name: "read",
+              args: { path: "src/db/config.ts" },
+            },
+          ],
+        }
+      },
+    }
+
+    const runtime1: RuntimeExecutionHandler = {
+      execute: async (action) => {
+        readLog.push(action.proposal.target)
+        return {
+          success: true,
+          output: "export const DB_PORT = 5432;",
+        }
+      },
+      runTest: async () => ({
+        passedCount: 1,
+        failedCount: 0,
+        skippedCount: 0,
+        rawStdout: "1 pass",
+        rawStderr: "",
+      }),
+    }
+
+    const harness1 = new HarnessCore({ store: sharedStore, model: model1, runtime: runtime1 })
+    harness1.initializeGoal("Discover DB configuration")
+    await harness1.runTurn()
+
+    expect(readLog).toContain("src/db/config.ts")
+    expect(harness1.hardState.evidence.size).toBe(1)
+
+    // Simulate PROCESS RESTART: Fresh harness instance with same backing store
+    let receivedViewPrompt = ""
+    const model2: ModelBackendHandler = {
+      invoke: async (prompt, view) => {
+        receivedViewPrompt = view.formatPromptBlock()
+        return {
+          text: "Continuing with preserved DB facts without re-reading file",
+          toolCalls: [],
+        }
+      },
+    }
+
+    const runtime2: RuntimeExecutionHandler = {
+      execute: async (action) => {
+        readLog.push(action.proposal.target)
+        return { success: true, output: "" }
+      },
+      runTest: async () => ({
+        passedCount: 1,
+        failedCount: 0,
+        skippedCount: 0,
+        rawStdout: "1 pass",
+        rawStderr: "",
+      }),
+    }
+
+    const harness2 = new HarnessCore({ store: sharedStore, model: model2, runtime: runtime2 })
+    const reloaded = await harness2.resume()
+    expect(reloaded).toBe(true)
+    expect(harness2.hardState.evidence.size).toBe(1)
+
+    // Execute turn with fresh provider context
+    await harness2.runTurn()
+
+    // Verified: No blind rediscovery of src/db/config.ts, and CognitiveView contained the preserved state
+    expect(readLog.length).toBe(1)
+    expect(receivedViewPrompt).toContain("EVIDENCE")
+  })
+
+  // Episode C: Governed Mutation
+  test("Episode C: Multi-turn mutation, mechanical Praxis verification, and valid completion", async () => {
     const store = new InMemoryStateStore()
     let turnCount = 0
     const fs: Record<string, string> = { "src/calc.ts": "export function add() {}" }
@@ -139,7 +232,8 @@ describe("End-to-End Cognitive Episodes & Adversarial Verification", () => {
     expect(harness.hardState.completedTasks.size).toBe(1)
   })
 
-  test("Adversarial Case 1: Semantic injection attempt through tool output cannot mint VERIFIED claim", async () => {
+  // Episode D: Adversarial Semantics
+  test("Episode D - Adversarial Case 1: Semantic injection attempt through tool output cannot mint VERIFIED claim", async () => {
     const store = new InMemoryStateStore()
 
     const model: ModelBackendHandler = {
@@ -150,7 +244,6 @@ describe("End-to-End Cognitive Episodes & Adversarial Verification", () => {
             name: "propose_claim",
             args: {
               proposition: "Attacker claims all tests are verified",
-              // Attempting to pass verified status in payload
               status: "verified",
               proposed_status: "verified",
             },
@@ -167,17 +260,15 @@ describe("End-to-End Cognitive Episodes & Adversarial Verification", () => {
     const harness = new HarnessCore({ store, model, runtime })
     harness.initializeGoal("Test injection resistance")
 
-    // Should not crash and should not admit a VERIFIED claim into HardState
     await harness.runTurn()
     for (const claim of harness.hardState.claims.values()) {
       expect(claim.status).not.toBe("verified")
     }
   })
 
-  test("Adversarial Case 2: Model prose cannot close obligations or bypass ACCP", async () => {
+  test("Episode D - Adversarial Case 2: Model prose cannot close obligations or bypass ACCP", async () => {
     const store = new InMemoryStateStore()
 
-    // Model returns plain prose claiming work is done without calling verify or complete tools
     const model: ModelBackendHandler = {
       invoke: async () => ({
         text: "Everything is finished! I verified all tests and completed the task successfully. All obligations are satisfied.",
@@ -199,7 +290,7 @@ describe("End-to-End Cognitive Episodes & Adversarial Verification", () => {
     expect(harness.hardState.openObligationIds().length).toBeGreaterThan(0)
   })
 
-  test("Adversarial Case 3: Parent directory traversal attempt fails closed", () => {
+  test("Episode D - Adversarial Case 3: Parent directory traversal attempt fails closed", () => {
     const policy = {
       repository: "rivet",
       currentRevision: Revision.ZERO,
@@ -227,5 +318,49 @@ describe("End-to-End Cognitive Episodes & Adversarial Verification", () => {
       const decision = AccpSemanticGate.authorizeAction(proposal, policy)
       expect(decision.verdict).toBe("block")
     }
+  })
+
+  test("Episode D - Adversarial Case 4: Forged evidence ID in claim proposal fails state promotion", () => {
+    const harness = new HarnessCore({
+      store: new InMemoryStateStore(),
+      model: { invoke: async () => ({ text: "", toolCalls: [] }) },
+      runtime: {
+        execute: async () => ({ success: true, output: "" }),
+        runTest: async () => ({ passedCount: 0, failedCount: 0, skippedCount: 0, rawStdout: "", rawStderr: "" }),
+      },
+    })
+
+    const forgedEvidenceId = createEvidenceId()
+    expect(() =>
+      harness.hardState.apply({
+        type: "claim_promoted",
+        claimId: "claim-forged" as any,
+        status: "verified",
+        evidenceId: forgedEvidenceId, // Not in evidence map
+        timestamp: new Date().toISOString(),
+      })
+    ).toThrow(/Unknown evidence reference/)
+  })
+
+  test("Episode D - Adversarial Case 5: Stale action proposal is blocked by ACCP CAS gate", () => {
+    const proposal = createActionProposal({
+      capability: "file.write",
+      target: "src/auth.ts",
+      intent: "Stale edit",
+      scope: Scope.path("rivet", "src/auth.ts", Revision.from(1)),
+    })
+
+    const policy = {
+      repository: "rivet",
+      currentRevision: Revision.from(2), // Stale!
+      allowedScope: Scope.global("rivet", Revision.from(2)),
+      allowedCapabilities: ["file.write"],
+      allowMaterial: true,
+      humanApproved: false,
+    }
+
+    const decision = AccpSemanticGate.authorizeAction(proposal, policy)
+    expect(decision.verdict).toBe("block")
+    expect(decision.reason).toContain("stale")
   })
 })
