@@ -29,8 +29,27 @@ export class Service extends Context.Service<Service, Interface>()("@opencode/v2
 const layer = Layer.effect(
   Service,
   Effect.sync(() => {
+    const defaultCommands = new Map<string, Types.DeepMutable<Info>>([
+      [
+        "goal",
+        {
+          name: "goal",
+          description: "Initialize and execute an autonomous Rivet goal with ACCP governance and Praxis verification",
+          template: "[RIVET GOAL EXECUTION]\nGoal: $ARGUMENTS\nObligations: Compile GoalSpec and establish mechanical Praxis verification.",
+        } as Types.DeepMutable<Info>,
+      ],
+      [
+        "review",
+        {
+          name: "review",
+          description: "Run Rivet Blind Reviewer on current workspace diff without implementer bias",
+          template: "[RIVET BLIND REVIEW]\nScope: $ARGUMENTS\nReview all changed files for regressions and security invariants.",
+        } as Types.DeepMutable<Info>,
+      ],
+    ])
+
     const state = State.create<Data, Draft>({
-      initial: () => ({ commands: new Map() }),
+      initial: () => ({ commands: new Map(defaultCommands) }),
       draft: (draft) => ({
         list: () => Array.from(draft.commands.values()) as Info[],
         get: (name) => draft.commands.get(name),

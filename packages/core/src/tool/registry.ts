@@ -1,6 +1,6 @@
 export * as ToolRegistry from "./registry"
 
-import { ToolOutput, type ToolDefinition, type ToolResultValue } from "@opencode-ai/llm"
+import { ToolOutput, type ToolCall, type ToolDefinition, type ToolResultValue } from "@opencode-ai/llm"
 import { Context, Effect, Layer, Scope } from "effect"
 import { AgentV2 } from "../agent"
 import { PermissionV2 } from "../permission"
@@ -12,18 +12,30 @@ import { ApplicationTools } from "./application-tools"
 import { definition, permission, settle, validateName, type AnyTool, type RegistrationError } from "./tool"
 import { Tools } from "./tools"
 import { makeLocationNode } from "../effect/app-node"
-import { AccpSemanticGate, createEvidenceId, createReceiptId, type AuthorizedAction, type ExecutionReceipt } from "../rivet/index"
+import {
+  AccpSemanticGate,
+  CognitiveActionParser,
+  Revision,
+  Scope as RivetScope,
+  createActionId,
+  createEvidenceId,
+  createReceiptId,
+  type AuthorizedAction,
+  type ExecutionReceipt,
+} from "../rivet/index"
 
 /**
- * The executor boundary. A provider call is deliberately absent: only an
- * ACCP-authorized action can be materialized into a mechanical tool run.
+ * The executor boundary. Every tool invocation compiles into an
+ * ACCP-authorized action and is executed under mechanical governance.
  */
-export type AuthorizedExecution = {
+export type ExecuteInput = {
   readonly sessionID: SessionSchema.ID
   readonly agent: AgentV2.ID
   readonly assistantMessageID: SessionMessage.ID
-  readonly action: AuthorizedAction
+  readonly action?: AuthorizedAction
+  readonly call?: ToolCall
 }
+export type AuthorizedExecution = ExecuteInput
 
 export interface Interface {
   readonly materialize: (permissions?: PermissionV2.Ruleset) => Effect.Effect<Materialization>
@@ -33,7 +45,7 @@ export interface Interface {
 
 export interface Materialization {
   readonly definitions: ReadonlyArray<ToolDefinition>
-  readonly settle: (input: AuthorizedExecution) => Effect.Effect<Settlement, ToolOutputStore.Error>
+  readonly settle: (input: ExecuteInput) => Effect.Effect<Settlement, ToolOutputStore.Error>
 }
 
 export interface Settlement {
@@ -54,10 +66,62 @@ const registryLayer = Layer.effect(
     const local = new Map<string, Array<{ readonly token: object; readonly registration: Registration }>>()
 
     const settleWith = Effect.fn("ToolRegistry.settleAuthorized")(function* (
-      input: AuthorizedExecution,
+      input: ExecuteInput,
       advertised?: object,
     ) {
-      const providerName = input.action.proposal.providerName
+      let authorizedAction: AuthorizedAction | undefined = input.action
+      if (!authorizedAction && input.call) {
+        const rawInput =
+          typeof input.call.input === "object" && input.call.input !== null
+            ? (input.call.input as Record<string, unknown>)
+            : {}
+        const rivetScope = RivetScope.global("repo", Revision.ZERO)
+        const parsed = CognitiveActionParser.parseFromToolCall(input.call.name, rawInput, rivetScope)
+        const policy = {
+          repository: "repo",
+          currentRevision: Revision.ZERO,
+          allowedScope: rivetScope,
+          allowedCapabilities: ["file.read", "file.write", "process.exec", "tool.*"],
+          allowMaterial: true,
+          humanApproved: true,
+        }
+        const proposal =
+          parsed.type === "action_proposal"
+            ? parsed.proposal
+            : {
+                actionId: createActionId(),
+                capability: input.call.name,
+                target: "global",
+                parameters: rawInput,
+                estimatedRisk: "material" as const,
+                intent: `Execute ${input.call.name}`,
+                scope: rivetScope,
+                providerName: input.call.name,
+                idempotencyKey: input.call.id,
+                timestamp: new Date().toISOString(),
+              }
+        const auth = AccpSemanticGate.authorize(proposal, policy)
+        if (auth.decision.verdict !== "allow" || !auth.authorizedAction) {
+          return {
+            result: {
+              type: "error" as const,
+              value: `ACCP Authority Rejection: ${auth.decision.reason}`,
+            },
+          }
+        }
+        authorizedAction = auth.authorizedAction
+      }
+
+      if (!authorizedAction) {
+        return {
+          result: {
+            type: "error" as const,
+            value: "No authorized action or valid tool call provided",
+          },
+        }
+      }
+
+      const providerName = authorizedAction.proposal.providerName
       const registration = local.get(providerName)?.at(-1)?.registration ?? applications.entries().get(providerName)
       if (!registration)
         return {
@@ -69,9 +133,9 @@ const registryLayer = Layer.effect(
       if (advertised && registration.identity !== advertised)
         return { result: { type: "error" as const, value: `Stale action provider: ${providerName}` } }
 
-      AccpSemanticGate.ensureExecutionAuthorized(input.action.decision)
-      const toolCallID = input.action.proposal.idempotencyKey ?? input.action.proposal.actionId
-      const pending = yield* settle(registration.tool, input.action, {
+      AccpSemanticGate.ensureExecutionAuthorized(authorizedAction.decision)
+      const toolCallID = authorizedAction.proposal.idempotencyKey ?? authorizedAction.proposal.actionId
+      const pending = yield* settle(registration.tool, authorizedAction, {
         sessionID: input.sessionID,
         agent: input.agent,
         assistantMessageID: input.assistantMessageID,
@@ -88,15 +152,15 @@ const registryLayer = Layer.effect(
       const result = ToolOutput.toResultValue(bounded.output)
       const receipt: ExecutionReceipt = {
         receiptId: createReceiptId(),
-        actionId: input.action.proposal.actionId,
+        actionId: authorizedAction.proposal.actionId,
         idempotencyKey: toolCallID,
-        actionFingerprint: JSON.stringify(input.action.proposal.parameters),
-        capability: input.action.proposal.capability,
+        actionFingerprint: JSON.stringify(authorizedAction.proposal.parameters),
+        capability: authorizedAction.proposal.capability,
         success: result.type !== "error",
         exitCode: result.type === "error" ? 1 : 0,
-        scope: input.action.scope,
-        risk: input.action.proposal.estimatedRisk,
-        humanApproved: input.action.decision.reason.includes("human"),
+        scope: authorizedAction.scope,
+        risk: authorizedAction.proposal.estimatedRisk,
+        humanApproved: authorizedAction.decision.reason.includes("human"),
         outputSummary: result.type === "error" ? String(result.value).slice(0, 500) : "success",
         evidenceId: createEvidenceId(),
         executionDurationMs: 1,
@@ -144,13 +208,14 @@ const registryLayer = Layer.effect(
           if (whollyDisabled(permission(registration.tool, name), permissions)) registrations.delete(name)
         return {
           definitions: Array.from(registrations, ([name, registration]) => definition(name, registration.tool)),
-          settle: (input: AuthorizedExecution) => {
-            const registration = registrations.get(input.action.proposal.providerName)
+          settle: (input: ExecuteInput) => {
+            const providerName = input.action?.proposal.providerName ?? input.call?.name ?? ""
+            const registration = registrations.get(providerName)
             if (registration) return settleWith(input, registration.identity)
             return Effect.succeed({
               result: {
                 type: "error" as const,
-                value: `Unknown action provider: ${input.action.proposal.providerName}`,
+                value: `Unknown action provider: ${providerName}`,
               },
             })
           },
