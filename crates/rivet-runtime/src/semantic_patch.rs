@@ -262,19 +262,81 @@ impl SemanticPatchEngine {
     fn find_block_end(slice: &str) -> Option<usize> {
         let mut depth = 0;
         let mut found_open = false;
+        let mut in_string = false;
+        let mut in_char = false;
+        let mut escape = false;
+        let mut in_line_comment = false;
+        let mut in_block_comment = false;
+        let mut prev_char = '\0';
 
         for (i, c) in slice.char_indices() {
-            if c == '{' {
-                depth += 1;
-                found_open = true;
-            } else if c == '}' {
-                depth -= 1;
-                if found_open && depth == 0 {
+            if in_line_comment {
+                if c == '\n' {
+                    in_line_comment = false;
+                }
+                prev_char = c;
+                continue;
+            }
+            if in_block_comment {
+                if prev_char == '*' && c == '/' {
+                    in_block_comment = false;
+                }
+                prev_char = c;
+                continue;
+            }
+            if in_string {
+                if escape {
+                    escape = false;
+                } else if c == '\\' {
+                    escape = true;
+                } else if c == '"' {
+                    in_string = false;
+                }
+                prev_char = c;
+                continue;
+            }
+            if in_char {
+                if escape {
+                    escape = false;
+                } else if c == '\\' {
+                    escape = true;
+                } else if c == '\'' {
+                    in_char = false;
+                }
+                prev_char = c;
+                continue;
+            }
+
+            if prev_char == '/' && c == '/' {
+                in_line_comment = true;
+                prev_char = c;
+                continue;
+            }
+            if prev_char == '/' && c == '*' {
+                in_block_comment = true;
+                prev_char = c;
+                continue;
+            }
+
+            match c {
+                '"' => in_string = true,
+                '\'' => in_char = true,
+                '{' => {
+                    depth += 1;
+                    found_open = true;
+                }
+                '}' => {
+                    depth -= 1;
+                    if found_open && depth == 0 {
+                        return Some(i + 1);
+                    }
+                }
+                ';' if !found_open => {
                     return Some(i + 1);
                 }
-            } else if c == ';' && !found_open {
-                return Some(i + 1);
+                _ => {}
             }
+            prev_char = c;
         }
 
         if found_open { None } else { Some(slice.len()) }

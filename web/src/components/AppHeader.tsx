@@ -11,6 +11,7 @@ type Props = {
   onOpenAuth: () => void
   onOpenMcp: () => void
   onPickModel: (provider: string, model: string) => void
+  onOpenCommand: () => void
 }
 
 export function AppHeader({
@@ -21,6 +22,7 @@ export function AppHeader({
   onOpenAuth,
   onOpenMcp,
   onPickModel,
+  onOpenCommand,
 }: Props) {
   const [modelPickerOpen, setModelPickerOpen] = useState(false)
   const [activeTabProvider, setActiveTabProvider] = useState<string | null>(null)
@@ -60,6 +62,11 @@ export function AppHeader({
           </DropdownMenu.Portal>
         </DropdownMenu.Root>
       </div>
+
+      <button className="commandTrigger" type="button" onClick={onOpenCommand} aria-label="Open command menu">
+        <span>Search Rivet</span>
+        <kbd>⌘ K</kbd>
+      </button>
 
       <div className="productControls">
         <div className="productStatus">

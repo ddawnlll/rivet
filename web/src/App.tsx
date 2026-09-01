@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react'
+import React, { startTransition, useEffect, useMemo, useRef, useState } from 'react'
 import {
   MessageSquare,
   Layers,
@@ -8,6 +8,7 @@ import {
   Brain,
   ChevronDown,
   ChevronUp,
+  Search,
 } from 'lucide-react'
 import { Toaster, toast } from 'sonner'
 import { ActivitySpine } from './components/ActivitySpine'
@@ -62,7 +63,7 @@ export function App() {
   } = store
 
   const [tab, setTab] = useState<WorkspaceTab>('conversation')
-  const [inspectorOpen, setInspectorOpen] = useState(true)
+  const [inspectorOpen, setInspectorOpen] = useState(false)
   const [projectSettingsOpen, setProjectSettingsOpen] = useState(false)
   const [authOpen, setAuthOpen] = useState(false)
   const [mcpOpen, setMcpOpen] = useState(false)
@@ -100,10 +101,13 @@ export function App() {
         event.preventDefault()
         document.querySelector<HTMLTextAreaElement>('#composerInput')?.focus()
       }
+      if (event.key === 'Escape' && inspectorOpen) {
+        setInspectorOpen(false)
+      }
     }
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
-  }, [])
+  }, [inspectorOpen])
 
   const visibleMessages = useMemo(
     () =>
@@ -165,6 +169,20 @@ export function App() {
     setPrompt(command)
   }
 
+  const openInspector = (panel: InspectorPanel) => {
+    startTransition(() => {
+      setTab(panel)
+      setInspectorOpen(true)
+    })
+  }
+
+  const showConversation = () => {
+    startTransition(() => {
+      setTab('conversation')
+      setInspectorOpen(false)
+    })
+  }
+
   const submit = (files: Attachment[]) => {
     const original = prompt
     if (original.startsWith('/goal ')) void compileGoal(original, original.slice(6))
@@ -174,7 +192,7 @@ export function App() {
   }
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell ${runActive ? 'is-running' : 'is-idle'} ${inspectorOpen ? 'has-aperture' : ''}`}>
       <a className="skip-link" href="#main-content">Skip to main content</a>
 
       <AppHeader
@@ -190,48 +208,47 @@ export function App() {
         onPickModel={(provider, model) => {
           void chooseModel(provider, model)
         }}
+        onOpenCommand={() => setCommandPaletteOpen(true)}
       />
 
-      <div className={`workspace ${inspectorOpen ? '' : 'inspector-hidden'}`}>
+      <div className="workspace">
         <nav className="edge" aria-label="Primary Navigation">
-          <NavButton label="Conversation" active={tab === 'conversation'} onClick={() => setTab('conversation')}>
+          <div className="edge-mark" aria-hidden="true"><span /></div>
+          <NavButton label="Conversation" active={!inspectorOpen} onClick={showConversation}>
             <MessageSquare size={17} />
           </NavButton>
-          <NavButton label="Hard State Obligations" active={tab === 'hard'} onClick={() => { setTab('hard'); setInspectorOpen(true) }}>
+          <NavButton label="Hard State" active={inspectorOpen && tab === 'hard'} onClick={() => openInspector('hard')}>
             <Layers size={17} />
           </NavButton>
-          <NavButton label="Soft Workspace" active={tab === 'soft'} onClick={() => { setTab('soft'); setInspectorOpen(true) }}>
+          <NavButton label="Soft Workspace" active={inspectorOpen && tab === 'soft'} onClick={() => openInspector('soft')}>
             <Cpu size={17} />
           </NavButton>
-          <NavButton label="Praxis Verification" active={tab === 'praxis'} onClick={() => { setTab('praxis'); setInspectorOpen(true) }}>
+          <NavButton label="Praxis" active={inspectorOpen && tab === 'praxis'} onClick={() => openInspector('praxis')}>
             <ShieldCheck size={17} />
           </NavButton>
-          <NavButton label="Run History" active={tab === 'history'} onClick={() => { setTab('history'); setInspectorOpen(true) }}>
+          <NavButton label="Run History" active={inspectorOpen && tab === 'history'} onClick={() => openInspector('history')}>
             <History size={17} />
           </NavButton>
+          <button className="edge-command" type="button" onClick={() => setCommandPaletteOpen(true)} aria-label="Open command menu" data-label="Command menu">
+            <Search size={16} />
+          </button>
         </nav>
 
         <main className="stage" id="main-content">
           <section className="conversation" aria-label="Rivet conversation stream">
-            {tab === 'conversation' ? (
-              <>
-                {visibleMessages.map(message => <Turn key={message.id} message={message} />)}
-                {(runActive || activities.length > 0) && (
-                  <ActivitySpine
-                    activities={activities}
-                    runActive={runActive}
-                    selected={selected}
-                    onSelect={setSelected}
-                    onCancel={() => void cancel()}
-                    focusObject={focusObject}
-                    summary={runSummary}
-                  />
-                )}
-                <div ref={bottomRef} style={{ height: '1px' }} />
-              </>
-            ) : (
-              <WorkspaceSummary tab={tab} state={state} project={project} />
+            {visibleMessages.map(message => <Turn key={message.id} message={message} />)}
+            {(runActive || activities.length > 0) && (
+              <ActivitySpine
+                activities={activities}
+                runActive={runActive}
+                selected={selected}
+                onSelect={setSelected}
+                onCancel={() => void cancel()}
+                focusObject={focusObject}
+                summary={runSummary}
+              />
             )}
+            <div ref={bottomRef} style={{ height: '1px' }} />
           </section>
 
           <Composer
@@ -255,10 +272,14 @@ export function App() {
           />
         </main>
 
-        {inspectorOpen && (
+      </div>
+
+      {inspectorOpen && (
+        <div className="aperture-layer">
+          <button className="aperture-scrim" type="button" aria-label="Close inspection" onClick={() => setInspectorOpen(false)} />
           <Inspector
             panel={tab === 'conversation' ? 'hard' : tab}
-            setPanel={next => setTab(next)}
+            setPanel={next => startTransition(() => setTab(next))}
             state={state}
             census={census}
             history={history}
@@ -271,8 +292,8 @@ export function App() {
               void loadDiff(true)
             }}
           />
-        )}
-      </div>
+        </div>
+      )}
 
       <CommandPaletteDialog
         open={commandPaletteOpen}
@@ -335,7 +356,7 @@ export function App() {
 
 function NavButton({ children, label, active, onClick }: { children: React.ReactNode; label: string; active: boolean; onClick: () => void }) {
   return (
-    <button className={active ? 'active' : ''} onClick={onClick} aria-label={label} title={label} type="button">
+    <button className={active ? 'active' : ''} onClick={onClick} aria-label={label} aria-pressed={active} data-label={label} type="button">
       {children}
     </button>
   )
@@ -416,44 +437,4 @@ function Turn({ message }: { message: Message }) {
       ) : null}
     </article>
   )
-}
-
-function WorkspaceSummary({ tab, state, project }: { tab: WorkspaceTab; state: ReturnType<typeof useSessionStore.getState>['state']; project: ReturnType<typeof useSessionStore.getState>['project'] }) {
-  if (tab === 'hard') {
-    return (
-      <div className="workspace-summary">
-        <div className="eyebrow">Authoritative Hard State</div>
-        <h1>Obligations and claims.</h1>
-        <p>Revision {state?.hard_state.revision ? `r${state.hard_state.revision}` : '—'} · {state?.hard_state.open_obligations.length ?? 0} open obligations.</p>
-      </div>
-    )
-  }
-  if (tab === 'soft') {
-    return (
-      <div className="workspace-summary">
-        <div className="eyebrow">Provisional Workspace</div>
-        <h1>Bounded Cognition</h1>
-        <p>{state?.soft_workspace.active_focus.join(' · ') || 'No active focus items recorded.'}</p>
-      </div>
-    )
-  }
-  if (tab === 'praxis') {
-    return (
-      <div className="workspace-summary">
-        <div className="eyebrow">Praxis Verification</div>
-        <h1>Verification receipts.</h1>
-        <p>{state?.hard_state.verification_receipts.length ?? 0} receipts recorded against the current project.</p>
-      </div>
-    )
-  }
-  if (tab === 'history') {
-    return (
-      <div className="workspace-summary">
-        <div className="eyebrow">Repository History</div>
-        <h1>{project?.name ?? 'Rivet'} history.</h1>
-        <p>Session run history and audit logs.</p>
-      </div>
-    )
-  }
-  return null
 }

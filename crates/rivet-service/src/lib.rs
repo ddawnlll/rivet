@@ -361,7 +361,9 @@ impl ModelBackend for BroadcastModelBackend {
             && let Some(end) = text.find("</think>")
         {
             let reasoning = text[start + 7..end].trim().to_string();
-            let body = format!("{}{}", &text[..start], &text[end + 8..]).trim().to_string();
+            let body = format!("{}{}", &text[..start], &text[end + 8..])
+                .trim()
+                .to_string();
 
             for chunk in split_into_token_chunks(&reasoning) {
                 let _ = self
@@ -666,7 +668,7 @@ impl RivetService for RivetServiceImpl {
 
         let harness = self.harness.read().await.clone();
         let result = tokio::select! {
-            result = harness.step(&goal, &runtime_prompt) => result,
+            result = harness.run_task(&goal, &runtime_prompt, 6) => result,
             Ok(()) = &mut cancel_rx => {
                 harness.cancel().await;
                 Err(RivetError::Runtime("cancelled by user".into()))

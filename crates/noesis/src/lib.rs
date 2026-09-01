@@ -351,7 +351,9 @@ impl HardState {
     pub fn cascade_claim_invalidation(&mut self, source_claim_id: &ClaimId, reason: &str) {
         let mut to_invalidate = Vec::new();
         for (id, record) in &self.claims {
-            if record.depends_on.contains(source_claim_id) && record.status != EpistemicStatus::Rejected {
+            if record.depends_on.contains(source_claim_id)
+                && record.status != EpistemicStatus::Rejected
+            {
                 to_invalidate.push(id.clone());
             }
         }
@@ -363,7 +365,9 @@ impl HardState {
                 dep_id.clone(),
                 RejectionRecord {
                     claim_id: dep_id.clone(),
-                    reason: format!("Dependency claim '{source_claim_id}' was invalidated: {reason}"),
+                    reason: format!(
+                        "Dependency claim '{source_claim_id}' was invalidated: {reason}"
+                    ),
                     evidence: Vec::new(),
                     timestamp: chrono::Utc::now(),
                 },
@@ -896,7 +900,9 @@ mod tests {
         let scope = Scope::global("rivet", Revision::ZERO);
 
         let mut state = HardState::new();
-        state.evidence.insert(ev1.clone(), "Found benchmark test passing".into());
+        state
+            .evidence
+            .insert(ev1.clone(), "Found benchmark test passing".into());
 
         assert!(state.can_promote_to_supported(std::slice::from_ref(&ev1)));
         assert!(!state.can_promote_to_supported(&[EvidenceId::new()]));
@@ -921,7 +927,10 @@ mod tests {
             timestamp: Utc::now(),
         });
 
-        assert_eq!(state.claims.get(&child_id).unwrap().status, EpistemicStatus::Supported);
+        assert_eq!(
+            state.claims.get(&child_id).unwrap().status,
+            EpistemicStatus::Supported
+        );
 
         state.apply(&NoesisEvent::ClaimContradicted {
             claim_id: parent_id.clone(),
@@ -931,8 +940,14 @@ mod tests {
             timestamp: Utc::now(),
         });
 
-        assert_eq!(state.claims.get(&parent_id).unwrap().status, EpistemicStatus::Rejected);
-        assert_eq!(state.claims.get(&child_id).unwrap().status, EpistemicStatus::Rejected);
+        assert_eq!(
+            state.claims.get(&parent_id).unwrap().status,
+            EpistemicStatus::Rejected
+        );
+        assert_eq!(
+            state.claims.get(&child_id).unwrap().status,
+            EpistemicStatus::Rejected
+        );
         assert!(state.rejected_claims.contains_key(&child_id));
     }
 }

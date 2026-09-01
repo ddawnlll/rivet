@@ -73,16 +73,55 @@ impl CognitiveAction {
             Self::extract_actions_from_str(trimmed, &mut results);
         }
 
-        // 3. If still empty, attempt to find first '{' to last '}'
-        if results.is_empty()
-            && let (Some(first_brace), Some(last_brace)) = (trimmed.find('{'), trimmed.rfind('}'))
-            && first_brace < last_brace
-        {
-            let candidate = &trimmed[first_brace..=last_brace];
-            Self::extract_actions_from_str(candidate, &mut results);
+        // 3. If still empty or partially extracted, scan for all balanced JSON objects in prose
+        if results.is_empty() {
+            for candidate in Self::find_balanced_json_objects(trimmed) {
+                Self::extract_actions_from_str(candidate, &mut results);
+            }
         }
 
         results
+    }
+
+    fn find_balanced_json_objects(text: &str) -> Vec<&str> {
+        let mut objects = Vec::new();
+        let mut in_string = false;
+        let mut escape = false;
+        let mut depth = 0;
+        let mut start_idx = None;
+
+        for (idx, ch) in text.char_indices() {
+            if in_string {
+                if escape {
+                    escape = false;
+                } else if ch == '\\' {
+                    escape = true;
+                } else if ch == '"' {
+                    in_string = false;
+                }
+            } else {
+                match ch {
+                    '"' => in_string = true,
+                    '{' => {
+                        if depth == 0 {
+                            start_idx = Some(idx);
+                        }
+                        depth += 1;
+                    }
+                    '}' if depth > 0 => {
+                        depth -= 1;
+                        if depth == 0 {
+                            if let Some(start) = start_idx {
+                                objects.push(&text[start..idx + ch.len_utf8()]);
+                            }
+                            start_idx = None;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        objects
     }
 
     fn extract_actions_from_str(text_str: &str, results: &mut Vec<Self>) {
@@ -438,9 +477,54 @@ impl CognitiveAction {
                 }
             }
             ("QUERY", _) => {
-                // Queries are not yet a distinct CognitiveAction; surface as Thought with provenance
-                let q = format!("QUERY/{kind}: {}", payload);
-                Some(Self::Thought(q))
+                let file_path = payload
+                    .get("file_path")
+                    .or_else(|| payload.get("target"))
+                    .or_else(|| payload.get("path"))
+                    .and_then(|v| v.as_str());
+                let query_type = payload
+                    .get("query_type")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+
+                if let Some(fp) = file_path {
+                    let start_line = payload.get("start_line").and_then(|v| v.as_u64());
+                    let end_line = payload.get("end_line").and_then(|v| v.as_u64());
+                    let mut params = serde_json::Map::new();
+                    if let Some(s) = start_line {
+                        params.insert("start_line".into(), serde_json::json!(s));
+                    }
+                    if let Some(e) = end_line {
+                        params.insert("end_line".into(), serde_json::json!(e));
+                    }
+                    let p = serde_json::json!({
+                        "capability": "file.read",
+                        "target": fp,
+                        "parameters": params,
+                        "intent": format!("Read file {fp}"),
+                    });
+                    serde_json::from_value::<ActionProposal>(enrich_payload(p))
+                        .ok()
+                        .map(Self::ToolCall)
+                } else if query_type.contains("SEARCH") || payload.get("pattern").is_some() {
+                    let pattern = payload
+                        .get("pattern")
+                        .or_else(|| payload.get("query"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    let p = serde_json::json!({
+                        "capability": "code.search",
+                        "target": pattern,
+                        "parameters": { "pattern": pattern },
+                        "intent": format!("Search code for {pattern}"),
+                    });
+                    serde_json::from_value::<ActionProposal>(enrich_payload(p))
+                        .ok()
+                        .map(Self::ToolCall)
+                } else {
+                    let q = format!("QUERY/{kind}: {}", payload);
+                    Some(Self::Thought(q))
+                }
             }
             _ => None,
         }

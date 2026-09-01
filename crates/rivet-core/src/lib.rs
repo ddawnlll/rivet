@@ -425,7 +425,8 @@ impl HarnessCore {
             }
 
             current_prompt = format!(
-                "Goal: {goal}\nPrevious turn {turn} produced new observations and evidence. Proceed with next required action or verification towards goal closure."
+                "Original User Request: {}\n\nPrevious turn {} executed your requested action and recorded new observations and evidence. Answer the user's request using the evidence, or propose the next required action.",
+                initial_prompt, turn
             );
         }
 
@@ -451,11 +452,7 @@ impl HarnessCore {
         Ok(outcome.text)
     }
 
-    async fn step_turn_inner(
-        &self,
-        goal: &str,
-        user_prompt: &str,
-    ) -> RivetResult<TurnOutcome> {
+    async fn step_turn_inner(&self, goal: &str, user_prompt: &str) -> RivetResult<TurnOutcome> {
         self.set_phase(RunPhase::PreparingView).await;
         let view = self.compile_view(goal).await;
         self.emit_event(HarnessEvent::CognitiveState {
@@ -657,10 +654,26 @@ impl HarnessCore {
                         timestamp: chrono::Utc::now(),
                     })
                     .await?;
+                    let evidence_summary = if let Some(content) = receipt
+                        .observations
+                        .get("content")
+                        .and_then(|v| v.as_str())
+                    {
+                        format!("{}\n```\n{}\n```", receipt.output_summary, content)
+                    } else if let Some(matches) = receipt
+                        .observations
+                        .get("matches")
+                        .and_then(|v| v.as_str())
+                    {
+                        format!("{}\n```\n{}\n```", receipt.output_summary, matches)
+                    } else {
+                        receipt.output_summary.clone()
+                    };
+
                     self.record_event(NoesisEvent::EvidenceRecorded {
                         evidence_id: receipt.evidence_id.clone(),
                         source: proposal.capability.clone(),
-                        summary: receipt.output_summary.clone(),
+                        summary: evidence_summary,
                         timestamp: chrono::Utc::now(),
                     })
                     .await?;
@@ -703,7 +716,7 @@ impl HarnessCore {
                     )?
                     .validate_direction()?;
                     AccpSemanticGate::validate_claim_proposal(&proposal)?;
-                    
+
                     let hard = self.hard_state.lock().await;
                     let can_promote = hard.can_promote_to_supported(&proposal.supporting_evidence);
                     drop(hard);
@@ -1120,15 +1133,17 @@ impl HarnessCore {
                 soft.active_focus = reframing.suggested_focus.clone();
                 drop(soft);
 
-                let _ = self.record_event(NoesisEvent::ProcessErrorAttributed {
-                    record: noesis::ProcessErrorAttributionRecord {
-                        attribution_id: ReceiptId::new(),
-                        category: format!("{:?}", reframing.strategy),
-                        diagnostic: reframing.suggested_frame.clone(),
-                        suggested_policy_repair: reframing.suggested_policy_repair.clone(),
-                        timestamp: chrono::Utc::now(),
-                    },
-                }).await;
+                let _ = self
+                    .record_event(NoesisEvent::ProcessErrorAttributed {
+                        record: noesis::ProcessErrorAttributionRecord {
+                            attribution_id: ReceiptId::new(),
+                            category: format!("{:?}", reframing.strategy),
+                            diagnostic: reframing.suggested_frame.clone(),
+                            suggested_policy_repair: reframing.suggested_policy_repair.clone(),
+                            timestamp: chrono::Utc::now(),
+                        },
+                    })
+                    .await;
 
                 self.set_phase(RunPhase::Stagnated).await;
             }
@@ -1407,7 +1422,7 @@ fn scope_contains_at_revision(outer: &Scope, inner: &Scope) -> bool {
 fn parse_report(program: &str, stdout: &str, stderr: &str) -> ParsedTestReport {
     match program {
         "cargo" => CargoTestParser::parse(stdout, stderr),
-        "pytest" => PytestParser::parse(stdout, stderr),
+        "pytest" | "python" | "python3" => PytestParser::parse(stdout, stderr),
         "go" => GoTestParser::parse(stdout, stderr),
         "npm" | "pnpm" | "yarn" | "jest" | "vitest" => JestParser::parse(stdout, stderr),
         _ => CargoTestParser::parse(stdout, stderr),

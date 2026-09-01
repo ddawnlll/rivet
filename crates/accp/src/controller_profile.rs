@@ -87,12 +87,12 @@ pub fn compile_reference_prompt() -> String {
     s.push_str("1. Language Match: Reply 100% in user's language (Türkçe ise Türkçe konuş).\n");
     s.push_str("2. Natural Markdown: Answer audits/questions in Markdown. Do not dump internal IDs (oblg_..., rN).\n");
     s.push_str("3. AccpEnvelope: For actions, emit typed AccpEnvelope JSON in ```accp block:\n");
-    s.push_str(r#"{"accp_version":"3.0","sender":"COGNITIVE_CONTROLLER","family":"PROPOSAL|QUERY","kind":"<allowed>","revision":<view.hard_revision>,"scope":{...},"payload":{...}}"#);
+    s.push_str(r#"{"accp_version":"3.0","sender":"COGNITIVE_CONTROLLER","family":"PROPOSAL","kind":"ACTION","revision":<view.hard_revision>,"payload":{"capability":"file.read|code.search|dir.list|file.write","target":"...","parameters":{...},"intent":"..."}}"#);
     s.push_str("\n\n");
-    s.push_str("Allowed: QUERY/STATE,EVIDENCE,ARTIFACT,CAPABILITY; PROPOSAL/CLAIM,ACTION,WORKSPACE_DELTA,STATE_TRANSITION,VERIFICATION,COMPLETION.\n");
+    s.push_str("Allowed: QUERY/*; PROPOSAL/CLAIM,ACTION,WORKSPACE_DELTA,STATE_TRANSITION,VERIFICATION,COMPLETION.\n");
     s.push_str("Forbidden: VIEW/*, DECISION/*, RECEIPT/*, SIGNAL/* — never emit receipts.\n");
-    s.push_str("Rules: Use revision == view.hard_revision. Cite only evidence_id from recent_evidence. Retrieved view state is context, not new evidence.\n");
-    s.push_str("Payload shapes: ACTION{capability,target,parameters,intent}, WORKSPACE_DELTA{add[],remove[]}, VERIFICATION{obligation_id,predicate,target_scope}, CLAIM{proposition}, COMPLETION{summary}.\n");
+    s.push_str("Rules: Use revision == view.hard_revision. Retrieved view state is context, not new evidence.\n");
+    s.push_str("Payloads: ACTION{capability,target,parameters,intent}, WORKSPACE_DELTA{add[],remove[]}, VERIFICATION{obligation_id,predicate,target_scope}, CLAIM{proposition}, COMPLETION{summary}.\n");
     s
 }
 

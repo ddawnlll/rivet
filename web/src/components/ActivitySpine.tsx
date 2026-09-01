@@ -53,20 +53,22 @@ export function ActivitySpine({ activities, runActive, selected, onSelect, onCan
           const cls = isLatestActive ? 'active' : isSelected ? 'selected' : 'done'
 
           return (
-            <div
+            <button
+              type="button"
               key={activity.id}
               className={`activityRow ${activity.kind.replace(/\s+/g, '-').toLowerCase()} ${cls}`}
               onClick={() => {
                 onSelect(activity)
                 setApertureOpen(true)
               }}
-              style={{ cursor: 'pointer' }}
+              aria-pressed={isSelected}
+              aria-label={`Inspect ${activity.kind}: ${activity.body.replace(/<[^>]+>/g, '')}`}
             >
               <span className="eventDot" />
               <span className="kind">{activity.kind}</span>
               <span className="eventBody" dangerouslySetInnerHTML={{ __html: activity.body }} />
               <span className="eventMeta">{activity.timestamp}</span>
-            </div>
+            </button>
           )
         })}
       </div>

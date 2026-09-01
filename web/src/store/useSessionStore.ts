@@ -154,16 +154,36 @@ export const useSessionStore = create<SessionStore>((set, get) => {
       }
       case 'status': {
         const label = phaseLabel(event.phase)
-        if (label === 'idle') set({ runActive: false })
-        set(state => ({
-          messages: state.messages.map((m, idx) => {
-            if (idx === state.messages.length - 1 && m.role === 'rivet' && m.live) {
-              return { ...m, statusMessage: event.message, livePhase: event.phase }
-            }
-            return m
-          })
-        }))
-        get().addActivity({ kind: label, body: event.message, status: 'active', detail: [['PHASE', event.phase], ['SOURCE', 'Harness lifecycle']] })
+        if (label === 'idle') {
+          const finalElapsed = runStartTime ? Math.max(0.1, Math.round((Date.now() - runStartTime) / 100) / 10) : undefined
+          runStartTime = null
+          rawBuffer = ''
+          set(state => ({
+            runActive: false,
+            messages: state.messages.map((m, idx) => {
+              if (idx === state.messages.length - 1 && m.role === 'rivet') {
+                return {
+                  ...m,
+                  live: false,
+                  statusMessage: undefined,
+                  livePhase: event.phase,
+                  elapsedSeconds: m.elapsedSeconds ?? finalElapsed,
+                }
+              }
+              return m
+            })
+          }))
+        } else {
+          set(state => ({
+            messages: state.messages.map((m, idx) => {
+              if (idx === state.messages.length - 1 && m.role === 'rivet' && m.live) {
+                return { ...m, statusMessage: event.message, livePhase: event.phase }
+              }
+              return m
+            })
+          }))
+        }
+        get().addActivity({ kind: label, body: event.message, status: label === 'idle' ? 'done' : 'active', detail: [['PHASE', event.phase], ['SOURCE', 'Harness lifecycle']] })
         break
       }
       case 'cognitive_state': {

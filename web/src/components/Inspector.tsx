@@ -29,9 +29,9 @@ export function Inspector({
   onOpenArtifact,
 }: Props) {
   return (
-    <aside className="inspector" aria-label="Inspector sidebar">
+    <aside className="inspector" aria-label="Cognitive aperture">
       <header>
-        <span>Inspection Details</span>
+        <div><span className="aperture-kicker">Depth on intent</span><strong>Cognitive Aperture</strong></div>
         <button onClick={onClose} aria-label="Close inspector">×</button>
       </header>
 
@@ -50,7 +50,7 @@ export function Inspector({
       </div>
 
       {panel === 'hard' && (
-        <div className="panel-content">
+        <div className="panel-content" key="hard">
           <Label>Authoritative Hard State</Label>
           <Metric label="Revision" value={String(state?.hard_state.revision ?? '—')} />
           <Metric label="Phase" value={state ? phase(state.phase) : 'Disconnected'} />
@@ -81,7 +81,7 @@ export function Inspector({
       )}
 
       {panel === 'soft' && (
-        <div className="panel-content soft-panel">
+        <div className="panel-content soft-panel" key="soft">
           <Label>Provisional Soft Workspace</Label>
           {state ? (
             <>
@@ -98,7 +98,7 @@ export function Inspector({
       )}
 
       {panel === 'praxis' && (
-        <div className="panel-content">
+        <div className="panel-content" key="praxis">
           <Label>Praxis Verifications</Label>
           {state?.hard_state.verification_receipts.length ? (
             state.hard_state.verification_receipts.map(receipt => (
@@ -120,7 +120,7 @@ export function Inspector({
       )}
 
       {panel === 'history' && (
-        <div className="panel-content">
+        <div className="panel-content" key="history">
           <Label>Run History</Label>
           {history.length ? (
             history.slice().reverse().map(item => (
@@ -137,7 +137,7 @@ export function Inspector({
       )}
 
       {panel === 'diff' && (
-        <div className="panel-content">
+        <div className="panel-content" key="diff">
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
             <Label>Working Tree Changes</Label>
             <button

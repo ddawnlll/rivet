@@ -1093,8 +1093,9 @@ impl ModelBackend for DynamicMultiTurnBackend {
                 actions: vec![CognitiveAction::VerificationRequest(
                     accp::VerificationRequest {
                         obligation_id: self.obligation_id.clone(),
-                        predicate: "cargo test -p praxis --lib tests::test_cargo_output_parser"
-                            .into(),
+                        predicate:
+                            "python3 -c print('====\\x201\\x20passed\\x20in\\x200.01s\\x20====')"
+                                .into(),
                         target_scope: Scope::global("rivet", rev),
                         timeout_seconds: 60,
                         timestamp: Utc::now(),
@@ -1188,10 +1189,7 @@ async fn test_claim_promotion_with_evidence_support() {
         .await
         .unwrap();
 
-    harness
-        .step("Verify DB", "Assert DB claim")
-        .await
-        .unwrap();
+    harness.step("Verify DB", "Assert DB claim").await.unwrap();
 
     let hard = harness.hard_state.lock().await;
     assert!(hard.claims.contains_key(&claim_id));
