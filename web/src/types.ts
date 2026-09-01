@@ -1,8 +1,9 @@
 export type ConnectionState = 'connecting' | 'live' | 'offline'
 export type RunPhase = string
 
-export type UiEvent =
-  | { type: 'run_started'; run_id: string; prompt: string; goal: string }
+export type UiEvent = { run_id?: string; turn?: number } & (
+  | { type: 'run_started'; prompt: string; goal: string }
+  | { type: 'assistant_turn_started' }
   | { type: 'assistant_delta'; delta: string }
   | { type: 'assistant_reasoning_delta'; delta: string }
   | { type: 'status'; phase: RunPhase; message: string }
@@ -15,8 +16,9 @@ export type UiEvent =
   | { type: 'hard_state_mutation'; revision: number; mutation: string; entity_id?: string; from?: string; to?: string }
   | { type: 'steer_accepted'; prompt: string }
   | { type: 'cancelled'; message: string }
-  | { type: 'completed'; summary: string }
+  | { type: 'completed'; summary: string; phase: RunPhase }
   | { type: 'error'; message: string }
+)
 
 export interface Attachment { name: string; mime_type: string; content: string; size: number }
 export interface Obligation { id: string; description: string; scope: string; status: string }
@@ -35,6 +37,7 @@ export interface Project { id: string; name: string; path: string; branch?: stri
 export interface Provider { id: string; name: string; models: string[]; configured: boolean; masked_key?: string; base_url?: string }
 export interface ModelCatalog { active_provider: string; active_model: string; providers: Provider[] }
 export interface HistoryEntry { id: string; prompt: string; status: string; revision?: number; created_at: string }
+export interface StepResponse { text: string; phase: RunPhase; revision: number }
 export interface Diff { status: string; text: string; files: string[] }
 export interface McpToolInfo { capability_id: string; tool_name: string; description: string; input_schema: unknown; is_verified_provider: boolean }
 export interface McpServerInfo { name: string; command: string; args: string[]; disabled: boolean; tools_count: number; tools: McpToolInfo[]; status: string }

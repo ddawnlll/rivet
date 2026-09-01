@@ -1,0 +1,23 @@
+[package]
+name = "rivet-spec-hunter"
+version = "0.3.0"
+edition = "2024"
+description = "Independent spec-driven hunter — derives oracle from ACCP spec, not from Harness code. Ruthless."
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+rivet-types = { workspace = true }
+accp = { workspace = true }
+noesis = { workspace = true }
+rivet-core = { workspace = true }
+rivet-store = { workspace = true }
+rivet-runtime = { workspace = true }
+rivet-model = { workspace = true }
+chrono = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+async-trait = { workspace = true }
+tempfile = { workspace = true }
+wiremock = "0.6"
+rivet-model-genai = { workspace = true }

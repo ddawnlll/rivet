@@ -60,6 +60,25 @@ export function parseThoughtAndBody(raw: string): { reasoning?: string; body: st
   }
 }
 
+export type MotionMode = 'system' | 'full' | 'reduced'
+
+function applyMotionMode(mode: MotionMode) {
+  if (typeof document !== 'undefined') {
+    document.documentElement.dataset.motion = mode
+  }
+}
+
+const initialMotionMode: MotionMode = (() => {
+  if (typeof localStorage !== 'undefined') {
+    const saved = localStorage.getItem('rivet:motion_mode')
+    if (saved === 'system' || saved === 'full' || saved === 'reduced') {
+      return saved
+    }
+  }
+  return 'system'
+})()
+applyMotionMode(initialMotionMode)
+
 interface SessionStore {
   connection: ConnectionState
   state: State | null
@@ -76,7 +95,9 @@ interface SessionStore {
   focusObject: { phase: string; title: string; text: string } | null
   runSummary: string | null
   mcpServers: McpServerInfo[]
+  motionMode: MotionMode
 
+  setMotionMode: (mode: MotionMode) => void
   setSelected: (activity: Activity | null) => void
   setAuthority: (authority: { requestId: string; capability: string; target: string } | null) => void
   addActivity: (activity: Omit<Activity, 'id' | 'timestamp'>) => void
@@ -104,12 +125,19 @@ let reconnectTimeout: number | undefined
 let reconnectAttempts = 0
 let runStartTime: number | null = null
 let rawBuffer = ''
+let activeRunId: string | null = null
+let activeTurn = 0
 let timerInterval: number | undefined
 
 export const useSessionStore = create<SessionStore>((set, get) => {
   const receiveEvent = (event: UiEvent) => {
+    if (event.type !== 'run_started' && event.run_id && event.run_id !== activeRunId) {
+      return
+    }
     switch (event.type) {
       case 'run_started': {
+        activeRunId = event.run_id ?? null
+        activeTurn = 0
         runStartTime = Date.now()
         rawBuffer = ''
         set(state => ({
@@ -126,7 +154,22 @@ export const useSessionStore = create<SessionStore>((set, get) => {
         get().addActivity({ kind: 'request', body: event.prompt, status: 'active', authoritative: true, detail: [['GOAL', event.goal], ['INPUT', 'raw user turn'], ['SOURCE', 'RivetService']] })
         break
       }
+      case 'assistant_turn_started': {
+        if (event.turn && event.turn <= activeTurn) break
+        activeTurn = event.turn ?? activeTurn + 1
+        rawBuffer = ''
+        set(state => ({
+          messages: state.messages.map((message, index) => {
+            if (index === state.messages.length - 1 && message.role === 'rivet' && message.live) {
+              return { ...message, body: '', reasoning: undefined, statusMessage: `Model turn ${activeTurn}…` }
+            }
+            return message
+          })
+        }))
+        break
+      }
       case 'assistant_reasoning_delta': {
+        if (event.turn && event.turn !== activeTurn) break
         const elapsed = runStartTime ? Math.max(0.1, Math.round((Date.now() - runStartTime) / 100) / 10) : undefined
         set(state => ({
           messages: state.messages.map((m, idx) => {
@@ -139,6 +182,7 @@ export const useSessionStore = create<SessionStore>((set, get) => {
         break
       }
       case 'assistant_delta': {
+        if (event.turn && event.turn !== activeTurn) break
         rawBuffer += event.delta
         const { reasoning, body } = parseThoughtAndBody(rawBuffer)
         const elapsed = runStartTime ? Math.max(0.1, Math.round((Date.now() - runStartTime) / 100) / 10) : undefined
@@ -154,35 +198,18 @@ export const useSessionStore = create<SessionStore>((set, get) => {
       }
       case 'status': {
         const label = phaseLabel(event.phase)
-        if (label === 'idle') {
-          const finalElapsed = runStartTime ? Math.max(0.1, Math.round((Date.now() - runStartTime) / 100) / 10) : undefined
-          runStartTime = null
-          rawBuffer = ''
-          set(state => ({
-            runActive: false,
-            messages: state.messages.map((m, idx) => {
-              if (idx === state.messages.length - 1 && m.role === 'rivet') {
-                return {
-                  ...m,
-                  live: false,
-                  statusMessage: undefined,
-                  livePhase: event.phase,
-                  elapsedSeconds: m.elapsedSeconds ?? finalElapsed,
-                }
+        set(state => ({
+          messages: state.messages.map((message, index) => {
+            if (index === state.messages.length - 1 && message.role === 'rivet' && message.live) {
+              return {
+                ...message,
+                statusMessage: label === 'idle' ? 'Finalizing response…' : event.message,
+                livePhase: event.phase,
               }
-              return m
-            })
-          }))
-        } else {
-          set(state => ({
-            messages: state.messages.map((m, idx) => {
-              if (idx === state.messages.length - 1 && m.role === 'rivet' && m.live) {
-                return { ...m, statusMessage: event.message, livePhase: event.phase }
-              }
-              return m
-            })
-          }))
-        }
+            }
+            return message
+          })
+        }))
         get().addActivity({ kind: label, body: event.message, status: label === 'idle' ? 'done' : 'active', detail: [['PHASE', event.phase], ['SOURCE', 'Harness lifecycle']] })
         break
       }
@@ -256,6 +283,8 @@ export const useSessionStore = create<SessionStore>((set, get) => {
         get().addActivity({ kind: 'cancelled', body: event.message, status: 'alert', authoritative: true, detail: [['RUN', 'cancelled by user']] })
         runStartTime = null
         rawBuffer = ''
+        activeRunId = null
+        activeTurn = 0
         break
       }
       case 'completed': {
@@ -264,11 +293,15 @@ export const useSessionStore = create<SessionStore>((set, get) => {
           runActive: false,
           focusObject: null,
           runSummary: event.summary,
-          messages: state.messages.map(m => m.live ? { ...m, live: false, elapsedSeconds: finalElapsed ?? m.elapsedSeconds, statusMessage: undefined } : m)
+          messages: state.messages.map((message, index) => index === state.messages.length - 1 && message.role === 'rivet'
+            ? { ...message, body: event.summary, live: false, elapsedSeconds: finalElapsed ?? message.elapsedSeconds, statusMessage: undefined, livePhase: event.phase }
+            : message)
         }))
-        get().addActivity({ kind: 'receipt', body: event.summary, status: 'done', authoritative: true, detail: [['RUN', 'completed'], ['AUTHORITY', 'RivetService'], ['NEXT', 'inspect state or continue']] })
+        get().addActivity({ kind: 'receipt', body: event.summary, status: 'done', authoritative: true, detail: [['RUN', phaseLabel(event.phase)], ['AUTHORITY', 'RivetService'], ['NEXT', 'inspect state or continue']] })
         runStartTime = null
         rawBuffer = ''
+        activeRunId = null
+        activeTurn = 0
         void get().refreshState()
         void get().refreshHistory()
         break
@@ -282,6 +315,8 @@ export const useSessionStore = create<SessionStore>((set, get) => {
         get().addActivity({ kind: 'error', body: event.message, status: 'alert', detail: [['STATUS', 'run interrupted']] })
         runStartTime = null
         rawBuffer = ''
+        activeRunId = null
+        activeTurn = 0
         break
       }
     }
@@ -357,6 +392,15 @@ export const useSessionStore = create<SessionStore>((set, get) => {
     focusObject: null,
     runSummary: null,
     mcpServers: [],
+    motionMode: initialMotionMode,
+
+    setMotionMode: (mode: MotionMode) => {
+      if (typeof localStorage !== 'undefined') {
+        localStorage.setItem('rivet:motion_mode', mode)
+      }
+      applyMotionMode(mode)
+      set({ motionMode: mode })
+    },
 
     setSelected: activity => set({ selected: activity }),
     setAuthority: authority => set({ authority }),
@@ -464,7 +508,23 @@ export const useSessionStore = create<SessionStore>((set, get) => {
       runStartTime = Date.now()
       rawBuffer = ''
       try {
-        await postRun(prompt, state.state?.task_id, attachments, state.runActive, activeSocket)
+        const response = await postRun(prompt, state.state?.task_id, attachments, state.runActive, activeSocket)
+        if (response) {
+          const finalElapsed = runStartTime ? Math.max(0.1, Math.round((Date.now() - runStartTime) / 100) / 10) : undefined
+          set(current => ({
+            runActive: false,
+            runSummary: response.text,
+            messages: current.messages.map((message, index) => index === current.messages.length - 1 && message.role === 'rivet'
+              ? { ...message, body: response.text, live: false, statusMessage: undefined, livePhase: response.phase, elapsedSeconds: finalElapsed }
+              : message)
+          }))
+          runStartTime = null
+          rawBuffer = ''
+          activeRunId = null
+          activeTurn = 0
+          void get().refreshState()
+          void get().refreshHistory()
+        }
       } catch (error) {
         set({ runActive: false })
         toast.error(error instanceof Error ? error.message : 'RivetService is unavailable')

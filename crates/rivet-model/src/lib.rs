@@ -571,19 +571,12 @@ pub struct TokenUsage {
 impl ModelResponse {
     pub fn from_text(text_content: impl Into<String>, usage: TokenUsage) -> Self {
         let text_content = text_content.into();
-        let mut actions = CognitiveAction::parse_text(&text_content);
-        if actions.is_empty() {
-            // If LLM returned literal JSON null or empty, treat as empty Thought (no hardcode)
-            // Let the Harness / TUI decide how to render; do not inject fake greeting.
-            // Text content stays as original so provenance is preserved, but TUI will filter "null" display.
-            let is_null = text_content.trim() == "null" || text_content.trim() == "\"null\"";
-            if is_null || text_content.trim().is_empty() {
-                // Keep text_content as empty, push empty Thought so it doesn't become "null" spam
-                actions.push(CognitiveAction::Thought(String::new()));
-            } else {
-                actions.push(CognitiveAction::Thought(text_content.clone()));
-            }
-        }
+        // Prose is presentation, not a controller action. In particular, a normal
+        // conversational answer must leave `actions` empty so the Harness can
+        // terminate an adaptive run after one model invocation. Explicit typed
+        // `thought` envelopes still parse as `CognitiveAction::Thought`, but they
+        // are handled as non-continuing metadata by HarnessCore.
+        let actions = CognitiveAction::parse_text(&text_content);
         Self {
             text_content,
             actions,

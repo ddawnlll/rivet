@@ -587,35 +587,7 @@ fn close_job(job: usize) {
 }
 
 fn shlex_split(cmd: &str) -> Vec<String> {
-    let mut args = Vec::new();
-    let mut current = String::new();
-    let mut in_single_quote = false;
-    let mut in_double_quote = false;
-    let mut escaped = false;
-
-    for c in cmd.chars() {
-        if escaped {
-            current.push(c);
-            escaped = false;
-        } else if c == '\\' && !in_single_quote {
-            escaped = true;
-        } else if c == '\'' && !in_double_quote {
-            in_single_quote = !in_single_quote;
-        } else if c == '"' && !in_single_quote {
-            in_double_quote = !in_double_quote;
-        } else if c.is_whitespace() && !in_single_quote && !in_double_quote {
-            if !current.is_empty() {
-                args.push(current);
-                current = String::new();
-            }
-        } else {
-            current.push(c);
-        }
-    }
-    if !current.is_empty() {
-        args.push(current);
-    }
-    args
+    rivet_types::shlex_split(cmd)
 }
 
 fn safe_cwd(repo_root: &Path, subdirectory: &str) -> Result<std::path::PathBuf, String> {

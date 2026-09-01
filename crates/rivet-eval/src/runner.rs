@@ -58,9 +58,13 @@ impl EvalRunner {
                     gate_passes += 1;
                     if harness.current_phase().await == rivet_core::RunPhase::Completed {
                         if !scenario.verification_command.is_empty() {
-                            let mut parts = scenario.verification_command.split_whitespace();
-                            let prog = parts.next().unwrap_or("cargo");
-                            let args: Vec<&str> = parts.collect();
+                            let parts = rivet_types::shlex_split(&scenario.verification_command);
+                            let prog = parts.first().map(|s| s.as_str()).unwrap_or("cargo");
+                            let args: Vec<&str> = if parts.len() > 1 {
+                                parts[1..].iter().map(|s| s.as_str()).collect()
+                            } else {
+                                Vec::new()
+                            };
                             let output = tokio::process::Command::new(prog)
                                 .args(&args)
                                 .current_dir(repo_root)

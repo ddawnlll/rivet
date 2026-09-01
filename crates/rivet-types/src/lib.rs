@@ -227,6 +227,39 @@ pub fn is_safe_relative_path(path: impl AsRef<Path>) -> bool {
         .any(|component| matches!(component, std::path::Component::ParentDir))
 }
 
+/// Tokenize a shell command string respecting single and double quotes and escapes.
+pub fn shlex_split(cmd: &str) -> Vec<String> {
+    let mut args = Vec::new();
+    let mut current = String::new();
+    let mut in_single_quote = false;
+    let mut in_double_quote = false;
+    let mut escaped = false;
+
+    for c in cmd.chars() {
+        if escaped {
+            current.push(c);
+            escaped = false;
+        } else if c == '\\' && !in_single_quote {
+            escaped = true;
+        } else if c == '\'' && !in_double_quote {
+            in_single_quote = !in_single_quote;
+        } else if c == '"' && !in_single_quote {
+            in_double_quote = !in_double_quote;
+        } else if c.is_whitespace() && !in_single_quote && !in_double_quote {
+            if !current.is_empty() {
+                args.push(current);
+                current = String::new();
+            }
+        } else {
+            current.push(c);
+        }
+    }
+    if !current.is_empty() {
+        args.push(current);
+    }
+    args
+}
+
 /// Standard error taxonomy for Rivet
 #[derive(thiserror::Error, Debug)]
 pub enum RivetError {
@@ -300,5 +333,25 @@ mod tests {
         assert!(!is_safe_relative_path("C:\\secrets.env"));
         assert!(!is_safe_relative_path("/etc/passwd"));
         assert!(!is_safe_relative_path("\\windows\\system32"));
+    }
+
+    #[test]
+    fn test_shlex_split() {
+        let args = shlex_split(
+            "cargo test -p rivet-core -- \"my test name\" 'another arg' test\\ with\\ space",
+        );
+        assert_eq!(
+            args,
+            vec![
+                "cargo",
+                "test",
+                "-p",
+                "rivet-core",
+                "--",
+                "my test name",
+                "another arg",
+                "test with space"
+            ]
+        );
     }
 }

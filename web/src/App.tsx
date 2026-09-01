@@ -64,6 +64,8 @@ export function App() {
 
   const [tab, setTab] = useState<WorkspaceTab>('conversation')
   const [inspectorOpen, setInspectorOpen] = useState(false)
+  const [inspectorMounted, setInspectorMounted] = useState(false)
+  const inspectorTimerRef = useRef<number | null>(null)
   const [projectSettingsOpen, setProjectSettingsOpen] = useState(false)
   const [authOpen, setAuthOpen] = useState(false)
   const [mcpOpen, setMcpOpen] = useState(false)
@@ -72,18 +74,57 @@ export function App() {
   const [prompt, setPrompt] = useState('')
   const [attachments, setAttachments] = useState<Attachment[]>([])
   const [search, setSearch] = useState('')
-  const bottomRef = useRef<HTMLDivElement>(null)
+  const [showJumpToLatest, setShowJumpToLatest] = useState(false)
+  const conversationRef = useRef<HTMLElement>(null)
+  const autoScrollRef = useRef(true)
+
+  const openInspector = (panel: InspectorPanel) => {
+    if (inspectorTimerRef.current !== null) {
+      window.clearTimeout(inspectorTimerRef.current)
+      inspectorTimerRef.current = null
+    }
+    setTab(panel)
+    setInspectorMounted(true)
+    setInspectorOpen(true)
+  }
+
+  const closeInspector = () => {
+    setInspectorOpen(false)
+    if (inspectorTimerRef.current !== null) {
+      window.clearTimeout(inspectorTimerRef.current)
+    }
+    inspectorTimerRef.current = window.setTimeout(() => {
+      setInspectorMounted(false)
+      inspectorTimerRef.current = null
+    }, 240)
+  }
+
+  const toggleInspector = () => {
+    if (inspectorOpen) {
+      closeInspector()
+    } else {
+      openInspector(tab === 'conversation' ? 'hard' : tab)
+    }
+  }
+
+  const showConversation = () => {
+    setTab('conversation')
+    closeInspector()
+  }
 
   // Initialize store lifecycle & WS connection on mount (run once)
   useEffect(() => {
     const cleanup = initSession()
     return cleanup
-  }, [])
+  }, [initSession])
 
   useEffect(() => {
-    if (runActive) {
-      bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
-    }
+    const stream = conversationRef.current
+    if (!stream || !autoScrollRef.current) return
+    const frame = window.requestAnimationFrame(() => {
+      stream.scrollTop = stream.scrollHeight
+    })
+    return () => window.cancelAnimationFrame(frame)
   }, [messages, runActive, activities])
 
   // Global keyboard shortcuts
@@ -95,19 +136,19 @@ export function App() {
       }
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'b') {
         event.preventDefault()
-        setInspectorOpen(open => !open)
+        toggleInspector()
       }
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'f') {
         event.preventDefault()
         document.querySelector<HTMLTextAreaElement>('#composerInput')?.focus()
       }
       if (event.key === 'Escape' && inspectorOpen) {
-        setInspectorOpen(false)
+        closeInspector()
       }
     }
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
-  }, [inspectorOpen])
+  }, [inspectorOpen, tab])
 
   const visibleMessages = useMemo(
     () =>
@@ -116,6 +157,7 @@ export function App() {
         : messages,
     [search, messages]
   )
+  const showIdleWorkspace = !runActive && activities.length === 0 && visibleMessages.length <= 1
 
   const handleCommandSelect = (command: string) => {
     if (command.startsWith('/goal ')) {
@@ -124,22 +166,19 @@ export function App() {
       return
     }
     if (command === '/sidebar') {
-      setInspectorOpen(open => !open)
+      toggleInspector()
       return
     }
     if (command === '/workspace') {
-      setTab('soft')
-      setInspectorOpen(true)
+      openInspector('soft')
       return
     }
     if (command === '/obligations') {
-      setTab('hard')
-      setInspectorOpen(true)
+      openInspector('hard')
       return
     }
     if (command === '/census') {
-      setTab('history')
-      setInspectorOpen(true)
+      openInspector('history')
       void loadCensus(true)
       return
     }
@@ -149,8 +188,7 @@ export function App() {
       return
     }
     if (command === '/sessions') {
-      setTab('history')
-      setInspectorOpen(true)
+      openInspector('history')
       return
     }
     if (command === '/auth') {
@@ -169,26 +207,32 @@ export function App() {
     setPrompt(command)
   }
 
-  const openInspector = (panel: InspectorPanel) => {
-    startTransition(() => {
-      setTab(panel)
-      setInspectorOpen(true)
-    })
-  }
-
-  const showConversation = () => {
-    startTransition(() => {
-      setTab('conversation')
-      setInspectorOpen(false)
-    })
-  }
-
   const submit = (files: Attachment[]) => {
     const original = prompt
+    autoScrollRef.current = true
+    setShowJumpToLatest(false)
     if (original.startsWith('/goal ')) void compileGoal(original, original.slice(6))
     else void send(original, files)
     setPrompt('')
     setAttachments([])
+  }
+
+  const handleConversationScroll = () => {
+    const stream = conversationRef.current
+    if (!stream) return
+    const isNearBottom = stream.scrollHeight - stream.scrollTop - stream.clientHeight < 120
+    if (autoScrollRef.current !== isNearBottom) {
+      autoScrollRef.current = isNearBottom
+      setShowJumpToLatest(!isNearBottom)
+    }
+  }
+
+  const jumpToLatest = () => {
+    const stream = conversationRef.current
+    if (!stream) return
+    autoScrollRef.current = true
+    setShowJumpToLatest(false)
+    stream.scrollTo({ top: stream.scrollHeight, behavior: 'smooth' })
   }
 
   return (
@@ -235,8 +279,24 @@ export function App() {
         </nav>
 
         <main className="stage" id="main-content">
-          <section className="conversation" aria-label="Rivet conversation stream">
-            {visibleMessages.map(message => <Turn key={message.id} message={message} />)}
+          <section
+            ref={conversationRef}
+            className="conversation"
+            aria-label="Rivet conversation stream"
+            onScroll={handleConversationScroll}
+          >
+            {showIdleWorkspace ? (
+              <IdleWorkspace
+                projectName={project?.name ?? 'rivet'}
+                revision={project?.revision ?? '—'}
+                hardRevision={state?.hard_state.revision}
+                openObligations={state?.hard_state.open_obligations.length ?? 0}
+                onStart={() => document.querySelector<HTMLTextAreaElement>('#composerInput')?.focus()}
+                onInspect={() => openInspector('hard')}
+              />
+            ) : (
+              visibleMessages.map(message => <Turn key={message.id} message={message} />)
+            )}
             {(runActive || activities.length > 0) && (
               <ActivitySpine
                 activities={activities}
@@ -248,8 +308,14 @@ export function App() {
                 summary={runSummary}
               />
             )}
-            <div ref={bottomRef} style={{ height: '1px' }} />
           </section>
+
+          {showJumpToLatest ? (
+            <button type="button" className="jumpToLatest" onClick={jumpToLatest} aria-label="Jump to latest message">
+              <ChevronDown size={14} />
+              <span>Latest</span>
+            </button>
+          ) : null}
 
           <Composer
             value={prompt}
@@ -274,17 +340,17 @@ export function App() {
 
       </div>
 
-      {inspectorOpen && (
-        <div className="aperture-layer">
-          <button className="aperture-scrim" type="button" aria-label="Close inspection" onClick={() => setInspectorOpen(false)} />
+      {inspectorMounted && (
+        <div className={`aperture-layer ${inspectorOpen ? 'open' : 'closing'}`} data-state={inspectorOpen ? 'open' : 'closed'}>
+          <button className="aperture-scrim" type="button" aria-label="Close inspection" onClick={closeInspector} />
           <Inspector
             panel={tab === 'conversation' ? 'hard' : tab}
-            setPanel={next => startTransition(() => setTab(next))}
+            setPanel={next => setTab(next)}
             state={state}
             census={census}
             history={history}
             diff={diff}
-            onClose={() => setInspectorOpen(false)}
+            onClose={closeInspector}
             onCensus={() => void loadCensus(true)}
             onDiff={() => void loadDiff(true)}
             onOpenArtifact={() => {
@@ -362,18 +428,63 @@ function NavButton({ children, label, active, onClick }: { children: React.React
   )
 }
 
+function IdleWorkspace({
+  projectName,
+  revision,
+  hardRevision,
+  openObligations,
+  onStart,
+  onInspect,
+}: {
+  projectName: string
+  revision: string
+  hardRevision?: number
+  openObligations: number
+  onStart: () => void
+  onInspect: () => void
+}) {
+  return (
+    <section className="idleWorkspace" aria-labelledby="idle-title">
+      <div className="idleOverline">
+        <span className="readySignal" />
+        <span>Workspace ready</span>
+        <i />
+        <span>{projectName} · {revision}</span>
+      </div>
+
+      <h1 id="idle-title">What needs to<br /><span>hold true?</span></h1>
+      <p>
+        Give Rivet a bounded outcome. Scope, evidence, verification, and authoritative changes stay visible while the work unfolds.
+      </p>
+
+      <div className="idleActions">
+        <button type="button" className="idlePrimary" onClick={onStart}>
+          Start with an outcome <kbd>⌘ F</kbd>
+        </button>
+        <button type="button" className="idleSecondary" onClick={onInspect}>
+          <span>Inspect hard state</span>
+          <small>r{hardRevision ?? '—'} · {openObligations} open →</small>
+        </button>
+      </div>
+
+      <div className="idlePrinciples" aria-label="Rivet work principles">
+        <span>Scope bounded</span>
+        <span>Evidence visible</span>
+        <span>Verification explicit</span>
+      </div>
+    </section>
+  )
+}
+
 function ThinkingBlock({ reasoning, isLive, elapsedSeconds }: { reasoning: string; isLive?: boolean; elapsedSeconds?: number }) {
   const [open, setOpen] = useState(false)
   const contentRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
-    if (isLive) {
-      setOpen(true)
-      if (contentRef.current) {
-        contentRef.current.scrollTop = contentRef.current.scrollHeight
-      }
+    if (isLive && open && contentRef.current) {
+      contentRef.current.scrollTop = contentRef.current.scrollHeight
     }
-  }, [reasoning, isLive])
+  }, [reasoning, isLive, open])
 
   return (
     <div className="thinking-block">
@@ -384,7 +495,7 @@ function ThinkingBlock({ reasoning, isLive, elapsedSeconds }: { reasoning: strin
         aria-expanded={open}
       >
         <Brain size={12} />
-        <span>{isLive ? 'reasoning process…' : 'reasoning summary'}</span>
+        <span>{isLive ? 'Thinking' : 'Reasoning summary'}</span>
         {elapsedSeconds !== undefined && (
           <span>({elapsedSeconds.toFixed(1)}s)</span>
         )}
@@ -401,13 +512,10 @@ function ThinkingBlock({ reasoning, isLive, elapsedSeconds }: { reasoning: strin
 
 function Turn({ message }: { message: Message }) {
   return (
-    <article className={`turn ${message.role}`}>
+    <article className={`turn ${message.role} turn-animate`}>
       <div className="role-header">
         <div className="role-meta-left">
           <div className="role">{message.role === 'you' ? 'You' : message.role === 'system' ? 'System' : 'Rivet'}</div>
-          {message.live && message.statusMessage && (
-            <span className="live-status-pill">{message.statusMessage}</span>
-          )}
         </div>
       </div>
 
@@ -427,7 +535,7 @@ function Turn({ message }: { message: Message }) {
             <MarkdownView content={message.body} isLive={message.live} />
           )
         ) : message.live && !message.reasoning ? (
-          <p className="rivetLead">{message.statusMessage || 'Preparing cognitive view…'}</p>
+          <p className="rivetLead responsePending"><span />Thinking…</p>
         ) : null}
       </div>
       {message.attachments?.length ? (

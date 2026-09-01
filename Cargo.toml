@@ -19,6 +19,7 @@ members = [
     "crates/rivet",
     "crates/rivet-eval",
     "crates/rivet-model-rig",
+    "crates/rivet-spec-hunter",
 ]
 
 [workspace.package]

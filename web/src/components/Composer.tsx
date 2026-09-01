@@ -272,7 +272,7 @@ export function Composer({
           {attachments.map(file => (
             <button
               type="button"
-              className="contextChip"
+              className="contextChip chip-enter"
               key={file.name}
               onClick={() => onRemoveAttachment(file.name)}
               aria-label={`Remove attachment ${file.name}`}
@@ -289,7 +289,7 @@ export function Composer({
           {runActive && (
             <button
               type="button"
-              className="iconButton"
+              className="iconButton stopRunBtn"
               onClick={onCancel}
               title="Stop run execution"
               style={{ width: 'auto', padding: '0 8px', gap: '4px', fontSize: '10px' }}
@@ -302,6 +302,8 @@ export function Composer({
             className="sendButton"
             aria-label={runActive ? 'Steer run' : 'Send'}
             disabled={!value.trim()}
+            data-ready={Boolean(value.trim())}
+            data-steer={runActive}
           >
             <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.7">
               <path d="M12 19V5" />

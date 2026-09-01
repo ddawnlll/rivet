@@ -3,6 +3,7 @@ import * as Dialog from '@radix-ui/react-dialog'
 import * as Tabs from '@radix-ui/react-tabs'
 import { X, FileCode, Check, Copy, FolderGit2, ShieldAlert, Cpu, Server, Plus, Minus } from 'lucide-react'
 import type { Activity, Diff, McpServerInfo, ModelCatalog, Project, SaveAuthPayload } from '../types'
+import { useSessionStore, type MotionMode } from '../store/useSessionStore'
 
 export function Aperture({ activity, onClose }: { activity: Activity; onClose: () => void }) {
   return (
@@ -106,6 +107,29 @@ export function ProjectSettings({
               <span>Session State</span>
               <b>Persistent</b>
             </div>
+          </div>
+
+          <div className="motion-settings-section" style={{ marginTop: '1.25rem', paddingTop: '1rem', borderTop: '1px solid var(--line-soft)' }}>
+            <div className="panel-label" style={{ marginBottom: '8px' }}>Interface Motion & Transitions</div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '6px' }}>
+              {(['system', 'full', 'reduced'] as MotionMode[]).map(mode => {
+                const isSelected = (useSessionStore.getState().motionMode || 'system') === mode
+                return (
+                  <button
+                    key={mode}
+                    type="button"
+                    className={`provider-tab-btn ${isSelected ? 'active' : ''}`}
+                    onClick={() => useSessionStore.getState().setMotionMode(mode)}
+                    style={{ justifyContent: 'center', padding: '7px 8px', textTransform: 'capitalize', fontSize: '12px' }}
+                  >
+                    <span>{mode === 'system' ? 'System (Auto)' : mode === 'full' ? 'Full Motion' : 'Reduced'}</span>
+                  </button>
+                )
+              })}
+            </div>
+            <p className="dialog-note" style={{ marginTop: '6px' }}>
+              Reduced mode replaces transforms with subtle opacity fades and disables continuous ambient animations.
+            </p>
           </div>
 
           {onSwitchProject && (

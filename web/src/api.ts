@@ -1,4 +1,4 @@
-import type { Attachment, Census, Diff, HistoryEntry, ModelCatalog, Project, State, UiEvent } from './types'
+import type { Attachment, Census, Diff, HistoryEntry, ModelCatalog, Project, State, StepResponse, UiEvent } from './types'
 
 export class ApiError extends Error {
   constructor(public readonly status: number, message: string) { super(message) }
@@ -34,8 +34,8 @@ export const removeAuth = (provider: string) =>
 
 export function postRun(prompt: string, goal: string | undefined, attachments: Attachment[], steer: boolean, socket: WebSocket | null) {
   const payload = { type: steer ? 'steer' : 'step', prompt, goal, attachments }
-  if (socket?.readyState === WebSocket.OPEN) { socket.send(JSON.stringify(payload)); return Promise.resolve() }
-  return api('step', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ prompt, goal, attachments }) }).then(() => undefined)
+  if (socket?.readyState === WebSocket.OPEN) { socket.send(JSON.stringify(payload)); return Promise.resolve(undefined) }
+  return api<StepResponse>('step', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ prompt, goal, attachments }) })
 }
 
 export function postGoal(prompt: string, socket: WebSocket | null) {

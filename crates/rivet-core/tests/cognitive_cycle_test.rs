@@ -1093,9 +1093,7 @@ impl ModelBackend for DynamicMultiTurnBackend {
                 actions: vec![CognitiveAction::VerificationRequest(
                     accp::VerificationRequest {
                         obligation_id: self.obligation_id.clone(),
-                        predicate:
-                            "python3 -c print('====\\x201\\x20passed\\x20in\\x200.01s\\x20====')"
-                                .into(),
+                        predicate: "python3 -c \"print('==== 1 passed in 0.01s ====')\"".into(),
                         target_scope: Scope::global("rivet", rev),
                         timeout_seconds: 60,
                         timestamp: Utc::now(),
@@ -1156,6 +1154,160 @@ async fn test_autonomous_multi_turn_run_task_to_completion() {
 }
 
 #[tokio::test]
+async fn plain_text_and_thought_only_responses_stop_after_one_turn() {
+    for response in [
+        ModelResponse::from_text("Selam, iyiyim.", TokenUsage::default()),
+        ModelResponse {
+            text_content: "Structured thought only".into(),
+            actions: vec![CognitiveAction::Thought("No action required".into())],
+            usage: TokenUsage::default(),
+        },
+    ] {
+        let harness = HarnessCore::new(
+            Arc::new(MemoryStore::new()),
+            Arc::new(ScriptedModelBackend::new(vec![response.clone()])),
+            Arc::new(Runtime::new(env!("CARGO_MANIFEST_DIR"))),
+        );
+
+        let result = harness
+            .run_task("Conversation", "naber", 6)
+            .await
+            .expect("non-action responses must terminate normally");
+
+        assert_eq!(result, response.text_content);
+        assert_eq!(harness.current_phase().await, RunPhase::Idle);
+        assert_eq!(harness.hard_state.lock().await.model_invocations.len(), 1);
+    }
+}
+
+struct RepeatedReadBackend {
+    invocations: Arc<Mutex<usize>>,
+}
+
+#[async_trait]
+impl ModelBackend for RepeatedReadBackend {
+    async fn invoke(&self, request: ModelRequest) -> RivetResult<ModelResponse> {
+        *self.invocations.lock().await += 1;
+        Ok(ModelResponse {
+            text_content: "Reading the same file again".into(),
+            actions: vec![CognitiveAction::ToolCall(ActionProposal {
+                action_id: ActionId::new(),
+                capability: "file.read".into(),
+                target: "sample.txt".into(),
+                parameters: serde_json::json!({}),
+                estimated_risk: ActionRisk::Inspect,
+                intent: "Read sample".into(),
+                scope: Scope::global("rivet", request.cognitive_view.hard_revision),
+                idempotency_key: None,
+                timestamp: Utc::now(),
+            })],
+            usage: TokenUsage::default(),
+        })
+    }
+}
+
+#[tokio::test]
+async fn repeated_semantic_action_is_skipped_and_stagnates() {
+    let directory = tempfile::tempdir().unwrap();
+    tokio::fs::write(directory.path().join("sample.txt"), "one copy")
+        .await
+        .unwrap();
+    let invocations = Arc::new(Mutex::new(0));
+    let harness = HarnessCore::new(
+        Arc::new(MemoryStore::new()),
+        Arc::new(RepeatedReadBackend {
+            invocations: invocations.clone(),
+        }),
+        Arc::new(Runtime::new(directory.path())),
+    );
+
+    harness
+        .run_task("Read once", "read sample.txt", 6)
+        .await
+        .expect("duplicate action should terminate with the last safe response");
+
+    assert_eq!(*invocations.lock().await, 2);
+    assert_eq!(harness.current_phase().await, RunPhase::Stagnated);
+    let hard = harness.hard_state.lock().await;
+    assert_eq!(hard.execution_receipts.len(), 1);
+    assert_eq!(hard.evidence.len(), 1);
+    assert!(
+        hard.process_error_attributions
+            .iter()
+            .any(|record| record.category == "NO_PROGRESS")
+    );
+}
+
+struct AdvancingBackend {
+    turn: Arc<Mutex<usize>>,
+}
+
+#[async_trait]
+impl ModelBackend for AdvancingBackend {
+    async fn invoke(&self, _request: ModelRequest) -> RivetResult<ModelResponse> {
+        let mut turn = self.turn.lock().await;
+        *turn += 1;
+        Ok(ModelResponse {
+            text_content: format!("Planning turn {}", *turn),
+            actions: vec![CognitiveAction::HypothesisDelta {
+                add: vec![format!("hypothesis-{}", *turn)],
+                remove: vec![],
+            }],
+            usage: TokenUsage::default(),
+        })
+    }
+}
+
+#[tokio::test]
+async fn budget_exhaustion_is_a_failed_run_not_idle_success() {
+    let harness = HarnessCore::new(
+        Arc::new(MemoryStore::new()),
+        Arc::new(AdvancingBackend {
+            turn: Arc::new(Mutex::new(0)),
+        }),
+        Arc::new(Runtime::new(env!("CARGO_MANIFEST_DIR"))),
+    );
+
+    let error = harness
+        .run_task("Never complete", "keep planning", 2)
+        .await
+        .expect_err("turn budget exhaustion must be a terminal error");
+
+    assert!(error.to_string().contains("budget exhausted"));
+    assert_eq!(harness.current_phase().await, RunPhase::Failed);
+    assert!(
+        harness
+            .hard_state
+            .lock()
+            .await
+            .process_error_attributions
+            .iter()
+            .any(|record| record.category == "BUDGET_EXHAUSTED")
+    );
+}
+
+#[tokio::test]
+async fn cancelled_harness_accepts_a_fresh_run() {
+    let harness = HarnessCore::new(
+        Arc::new(MemoryStore::new()),
+        Arc::new(ScriptedModelBackend::new(vec![ModelResponse::from_text(
+            "Fresh response",
+            TokenUsage::default(),
+        )])),
+        Arc::new(Runtime::new(env!("CARGO_MANIFEST_DIR"))),
+    );
+    harness.cancel().await;
+
+    let response = harness
+        .run_task("Conversation", "try again", 6)
+        .await
+        .expect("a new run must reset a terminal cancellation phase");
+
+    assert_eq!(response, "Fresh response");
+    assert_eq!(harness.current_phase().await, RunPhase::Idle);
+}
+
+#[tokio::test]
 async fn test_claim_promotion_with_evidence_support() {
     let tmp_dir = tempfile::tempdir().unwrap();
     let store = Arc::new(MemoryStore::new());
@@ -1197,4 +1349,41 @@ async fn test_claim_promotion_with_evidence_support() {
         hard.claims.get(&claim_id).unwrap().status,
         EpistemicStatus::Supported
     );
+}
+
+#[tokio::test]
+async fn test_verification_predicate_with_quoted_args() {
+    let store = Arc::new(MemoryStore::new());
+    let obligation_id = ObligationId::new();
+    let harness = HarnessCore::new(
+        store,
+        Arc::new(ScriptedModelBackend::new(Vec::new())),
+        Arc::new(Runtime::new(env!("CARGO_MANIFEST_DIR"))),
+    );
+
+    harness
+        .record_event(NoesisEvent::ObligationCreated {
+            obligation_id: obligation_id.clone(),
+            description: "Quoted python test passes".into(),
+            scope: Scope::global("rivet", Revision::ZERO),
+            timestamp: Utc::now(),
+        })
+        .await
+        .unwrap();
+
+    let receipt = harness
+        .run_verification(accp::VerificationRequest {
+            obligation_id: obligation_id.clone(),
+            predicate: "python3 -c \"print('==== 1 passed in 0.01s ====')\"".into(),
+            target_scope: Scope::global("rivet", Revision(1)),
+            timeout_seconds: 30,
+            timestamp: Utc::now(),
+        })
+        .await
+        .expect("quoted predicate verification must succeed");
+
+    assert!(receipt.passed);
+    assert_eq!(receipt.obligation_id, obligation_id);
+    let hard = harness.hard_state.lock().await;
+    assert!(hard.closed_obligations.contains_key(&obligation_id));
 }

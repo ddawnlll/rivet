@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import { useState } from 'react'
 import type { Activity } from '../types'
 
 type Props = {
@@ -11,99 +11,115 @@ type Props = {
   summary?: string | null
 }
 
-export function ActivitySpine({ activities, runActive, selected, onSelect, onCancel, summary }: Props) {
-  const [apertureOpen, setApertureOpen] = useState(false)
+const HIDDEN_LIFECYCLE_PHASES = new Set([
+  'preparing view',
+  'invoking model',
+  'decoding actions',
+  'responding',
+  'idle',
+])
 
-  const meaningfulActivities = activities.filter(
-    a => a.kind !== 'request' && !a.body.startsWith('task_') && a.kind !== 'preparing view'
-  )
+const plainText = (value: string) => value
+  .replace(/<[^>]+>/g, '')
+  .replace(/\s+/g, ' ')
+  .trim()
 
-  const activeActivity = selected ?? meaningfulActivities.find(a => a.status === 'active') ?? meaningfulActivities.at(-1)
+const normalizedKind = (activity: Activity) => activity.kind
+  .replace(/([a-z])([A-Z])/g, '$1 $2')
+  .replaceAll('_', ' ')
+  .toLowerCase()
 
-  if (!runActive && !summary && meaningfulActivities.length === 0) {
-    return null
-  }
+const isLifecycleNoise = (activity: Activity) => {
+  const kind = normalizedKind(activity)
+  const source = activity.detail.find(([key]) => key.toLowerCase() === 'source')?.[1]?.toLowerCase()
+  return source === 'harness lifecycle' || HIDDEN_LIFECYCLE_PHASES.has(kind)
+}
+
+const stepLabel = (activity: Activity) => {
+  const value = `${normalizedKind(activity)} ${plainText(activity.body)}`.toLowerCase()
+  if (/\b(read|open|view|inspect)\b/.test(value)) return 'Read'
+  if (/\b(write|wrote|edit|patch|modify|create)\b/.test(value)) return 'Wrote'
+  if (/\b(search|find|grep|glob|rg|list)\b/.test(value)) return 'Searched'
+  if (/\b(test|verify|praxis|check|lint|build)\b/.test(value)) return 'Verified'
+  if (/\b(exec|shell|bash|command|cargo|npm)\b/.test(value)) return 'Ran'
+  if (value.includes('hard state')) return 'Updated'
+  if (value.includes('observation')) return 'Observed'
+  if (value.includes('cognitive state')) return 'Considered'
+  if (/\b(error|blocked|authority|cancelled)\b/.test(value)) return 'Attention'
+  if (/\b(receipt|complete|completed)\b/.test(value)) return 'Completed'
+  return normalizedKind(activity).replace(/\b\w/g, letter => letter.toUpperCase())
+}
+
+export function ActivitySpine({
+  activities,
+  runActive,
+  selected,
+  onSelect,
+  onCancel,
+  focusObject,
+  summary,
+}: Props) {
+  const [showAll, setShowAll] = useState(false)
+
+  const steps = activities.filter(activity => (
+    activity.kind !== 'request' &&
+    !activity.body.startsWith('task_') &&
+    !isLifecycleNoise(activity)
+  ))
+
+  if (!runActive && !summary && steps.length === 0) return null
+
+  const visibleSteps = showAll ? steps.slice(-12) : steps.slice(-4)
+  const hiddenCount = Math.max(0, steps.length - visibleSteps.length)
+  const currentText = focusObject?.title || plainText(steps.at(-1)?.body ?? '')
 
   return (
-    <div className="liveRun" aria-live="polite">
-      <div className="liveRunHeader">
-        <div className="name">
-          <span className={`liveDot ${runActive ? 'pulse' : ''}`} />
-          <span>{runActive ? 'live run' : 'run complete'}</span>
+    <section className={`runProgress ${runActive ? 'active' : 'complete'}`} aria-live="polite" aria-label="Run progress">
+      <header className="progressHeader">
+        <div className="progressTitle">
+          <span className={`progressOrb ${runActive ? 'spinning' : ''}`} aria-hidden="true" />
+          <strong>{runActive ? 'Thinking' : 'Run complete'}</strong>
+          <span className="progressCurrent">
+            {runActive ? (currentText || 'Working through the request…') : (summary || 'Work settled')}
+          </span>
         </div>
-        <div className="runMeta">
-          {runActive && (
-            <button
-              type="button"
-              onClick={onCancel}
-              className="stopBtn"
-              title="Stop active run"
-            >
-              stop
+
+        <div className="progressActions">
+          {steps.length > 4 ? (
+            <button type="button" className="progressToggle" onClick={() => setShowAll(value => !value)}>
+              {showAll ? 'Show less' : `${hiddenCount} previous`}
             </button>
-          )}
-          <span>{meaningfulActivities.length} events</span>
-        </div>
-      </div>
-
-      <div className="activityStream">
-        {meaningfulActivities.slice(-12).map((activity, idx) => {
-          const isLatestActive = runActive && idx === Math.min(11, meaningfulActivities.length - 1)
-          const isSelected = selected?.id === activity.id
-          const cls = isLatestActive ? 'active' : isSelected ? 'selected' : 'done'
-
-          return (
-            <button
-              type="button"
-              key={activity.id}
-              className={`activityRow ${activity.kind.replace(/\s+/g, '-').toLowerCase()} ${cls}`}
-              onClick={() => {
-                onSelect(activity)
-                setApertureOpen(true)
-              }}
-              aria-pressed={isSelected}
-              aria-label={`Inspect ${activity.kind}: ${activity.body.replace(/<[^>]+>/g, '')}`}
-            >
-              <span className="eventDot" />
-              <span className="kind">{activity.kind}</span>
-              <span className="eventBody" dangerouslySetInnerHTML={{ __html: activity.body }} />
-              <span className="eventMeta">{activity.timestamp}</span>
+          ) : null}
+          {runActive ? (
+            <button type="button" onClick={onCancel} className="stopBtn" title="Stop active run">
+              Stop
             </button>
-          )
-        })}
-      </div>
-
-      {activeActivity && activeActivity.detail.length > 0 && (
-        <>
-          <button
-            className="activityInspect"
-            type="button"
-            onClick={() => setApertureOpen(open => !open)}
-          >
-            {apertureOpen ? 'close inspection' : `inspect ${activeActivity.kind} event`}
-          </button>
-
-          <div className={`runAperture ${apertureOpen ? 'open' : ''}`}>
-            <dl className="apertureInner">
-              {activeActivity.detail.map(([key, value]) => (
-                <React.Fragment key={key}>
-                  <dt>{key}</dt>
-                  <dd>{value}</dd>
-                </React.Fragment>
-              ))}
-            </dl>
-          </div>
-        </>
-      )}
-
-      {summary && (
-        <div className="runReceipt show">
-          <div className="runReceiptTitle">{summary}</div>
-          <div className="runReceiptMeta">
-            Praxis verified · authoritative state updated · inspect diff for details
-          </div>
+          ) : null}
         </div>
-      )}
-    </div>
+      </header>
+
+      {visibleSteps.length > 0 ? (
+        <div className="progressSteps">
+          {visibleSteps.map(activity => {
+            const isSelected = selected?.id === activity.id
+            const text = plainText(activity.body)
+            return (
+              <button
+                type="button"
+                key={activity.id}
+                className={`progressStep ${activity.status} ${isSelected ? 'selected' : ''} progressStep-enter`}
+                onClick={() => onSelect(activity)}
+                aria-pressed={isSelected}
+                title={text}
+              >
+                <span className="stepMark" aria-hidden="true" />
+                <span className="stepKind">{stepLabel(activity)}</span>
+                <span className="stepBody">{text}</span>
+              </button>
+            )
+          })}
+        </div>
+      ) : null}
+    </section>
   )
 }

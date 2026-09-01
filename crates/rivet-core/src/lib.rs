@@ -21,6 +21,7 @@ use rivet_runtime::Runtime;
 use rivet_store::HardStateStore;
 use rivet_types::*;
 use rivet_view::{CognitiveViewCompiler, CompilationContext, RepresentationMode};
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::Mutex;
@@ -48,8 +49,41 @@ pub enum RunPhase {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct TurnOutcome {
     pub text: String,
+    /// True only when the controller emitted an action that can require another
+    /// model turn. Plain prose and Thought metadata are deliberately excluded.
     pub has_actions: bool,
     pub is_completed: bool,
+    /// Whether this turn admitted a previously unseen action/state change.
+    pub made_progress: bool,
+}
+
+#[derive(Default)]
+struct RunLoopGuard {
+    seen_action_signatures: HashSet<String>,
+}
+
+fn action_requires_follow_up(action: &CognitiveAction) -> bool {
+    !matches!(action, CognitiveAction::Thought(_))
+}
+
+fn is_authoritative_proposal(action: &CognitiveAction) -> bool {
+    matches!(
+        action,
+        CognitiveAction::ToolCall(_)
+            | CognitiveAction::VerificationRequest(_)
+            | CognitiveAction::ClaimProposal(_)
+            | CognitiveAction::StateTransitionProposal(_)
+            | CognitiveAction::CompletionRequest { .. }
+    )
+}
+
+fn action_loop_signature(proposal: &accp::ActionProposal) -> RivetResult<String> {
+    serde_json::to_string(&serde_json::json!({
+        "capability": proposal.capability,
+        "target": proposal.target,
+        "parameters": proposal.parameters,
+    }))
+    .map_err(|error| RivetError::Serialization(error.to_string()))
 }
 /// These are intentionally typed summaries: raw model chain-of-thought never
 /// crosses this boundary.
@@ -372,6 +406,7 @@ impl HarnessCore {
     /// evidence/verification and completion boundaries.
     pub async fn step(&self, goal: &str, user_prompt: &str) -> RivetResult<String> {
         let _cycle_guard = self.cycle_lock.lock().await;
+        self.reset_terminal_phase().await;
         let result = self.step_inner(goal, user_prompt).await;
         if result.is_err() {
             self.set_phase(RunPhase::Failed).await;
@@ -390,9 +425,10 @@ impl HarnessCore {
         max_turns: usize,
     ) -> RivetResult<String> {
         let _cycle_guard = self.cycle_lock.lock().await;
+        self.reset_terminal_phase().await;
         let mut turn = 0;
         let mut current_prompt = initial_prompt.to_string();
-        let mut final_response = String::new();
+        let mut loop_guard = RunLoopGuard::default();
 
         while turn < max_turns {
             turn += 1;
@@ -400,14 +436,17 @@ impl HarnessCore {
                 return Err(RivetError::Runtime("Task cancelled by user".into()));
             }
 
-            let outcome = match self.step_turn_inner(goal, &current_prompt).await {
+            let outcome = match self
+                .step_turn_inner(goal, &current_prompt, Some(&mut loop_guard))
+                .await
+            {
                 Ok(res) => res,
                 Err(err) => {
                     self.set_phase(RunPhase::Failed).await;
                     return Err(err);
                 }
             };
-            final_response = outcome.text.clone();
+            let final_response = outcome.text.clone();
 
             if outcome.is_completed || self.current_phase().await == RunPhase::Completed {
                 self.set_phase(RunPhase::Completed).await;
@@ -424,6 +463,25 @@ impl HarnessCore {
                 return Ok(final_response);
             }
 
+            if !outcome.made_progress {
+                self.record_event(NoesisEvent::ProcessErrorAttributed {
+                    record: noesis::ProcessErrorAttributionRecord {
+                        attribution_id: ReceiptId::new(),
+                        category: "NO_PROGRESS".into(),
+                        diagnostic:
+                            "Controller repeated an action or produced no admissible progress"
+                                .into(),
+                        suggested_policy_repair: Some(
+                            "Stop the autonomous loop and return the best available answer".into(),
+                        ),
+                        timestamp: chrono::Utc::now(),
+                    },
+                })
+                .await?;
+                self.set_phase(RunPhase::Stagnated).await;
+                return Ok(final_response);
+            }
+
             current_prompt = format!(
                 "Original User Request: {}\n\nPrevious turn {} executed your requested action and recorded new observations and evidence. Answer the user's request using the evidence, or propose the next required action.",
                 initial_prompt, turn
@@ -436,23 +494,48 @@ impl HarnessCore {
                 category: "BUDGET_EXHAUSTED".into(),
                 diagnostic: format!("Autonomous loop reached turn limit of {max_turns}"),
                 suggested_policy_repair: Some(
-                    "Narrow scope or increase maximum turn budget".into(),
+                    "Stop the run, inspect the last admitted progress, and require a new user turn"
+                        .into(),
                 ),
                 timestamp: chrono::Utc::now(),
             },
         })
         .await?;
 
-        self.set_phase(RunPhase::Idle).await;
-        Ok(final_response)
+        self.set_phase(RunPhase::Failed).await;
+        Err(RivetError::Runtime(format!(
+            "autonomous turn budget exhausted after {max_turns} turns"
+        )))
+    }
+
+    async fn reset_terminal_phase(&self) {
+        let mut phase = self.phase.lock().await;
+        if matches!(
+            *phase,
+            RunPhase::Completed
+                | RunPhase::Cancelled
+                | RunPhase::Failed
+                | RunPhase::Stagnated
+                | RunPhase::WaitingForUser
+        ) {
+            *phase = RunPhase::Idle;
+        }
     }
 
     async fn step_inner(&self, goal: &str, user_prompt: &str) -> RivetResult<String> {
-        let outcome = self.step_turn_inner(goal, user_prompt).await?;
+        let outcome = self.step_turn_inner(goal, user_prompt, None).await?;
         Ok(outcome.text)
     }
 
-    async fn step_turn_inner(&self, goal: &str, user_prompt: &str) -> RivetResult<TurnOutcome> {
+    async fn step_turn_inner(
+        &self,
+        goal: &str,
+        user_prompt: &str,
+        mut loop_guard: Option<&mut RunLoopGuard>,
+    ) -> RivetResult<TurnOutcome> {
+        if self.current_phase().await == RunPhase::Cancelled {
+            return Err(RivetError::Runtime("Task cancelled by user".into()));
+        }
         self.set_phase(RunPhase::PreparingView).await;
         let view = self.compile_view(goal).await;
         self.emit_event(HarnessEvent::CognitiveState {
@@ -521,7 +604,19 @@ impl HarnessCore {
         .await?;
 
         self.set_phase(RunPhase::DecodingActions).await;
-        let has_actions = !response.actions.is_empty();
+        let authoritative_proposals = response
+            .actions
+            .iter()
+            .filter(|action| is_authoritative_proposal(action))
+            .count();
+        if authoritative_proposals > 1 {
+            return Err(RivetError::SemanticViolation(
+                "Controller emitted multiple authoritative proposals in one turn; ACCP requires one envelope per turn"
+                    .into(),
+            ));
+        }
+        let mut has_actions = response.actions.iter().any(action_requires_follow_up);
+        let mut made_progress = false;
         for action in response.actions {
             match action {
                 CognitiveAction::Thought(thought) => {
@@ -545,6 +640,23 @@ impl HarnessCore {
                     )?
                     .validate_direction()?;
 
+                    let loop_signature = action_loop_signature(&proposal)?;
+                    if let Some(guard) = loop_guard.as_deref_mut()
+                        && !guard.seen_action_signatures.insert(loop_signature)
+                    {
+                        self.emit_event(HarnessEvent::ToolCall {
+                            action_id: proposal.action_id.to_string(),
+                            capability: proposal.capability.clone(),
+                            target: proposal.target.clone(),
+                            status: "deduplicated".into(),
+                            summary: proposal.intent.clone(),
+                            output_summary: Some(
+                                "Skipped repeated action in the same autonomous run".into(),
+                            ),
+                        });
+                        continue;
+                    }
+
                     let idempotency_key = proposal.idempotency_identity();
                     let fingerprint = proposal.idempotency_fingerprint()?;
                     if let Some(previous) = self
@@ -567,6 +679,17 @@ impl HarnessCore {
                             receipt_id = %previous.receipt_id,
                             "returning persisted idempotent action receipt"
                         );
+                        self.emit_event(HarnessEvent::ToolCall {
+                            action_id: proposal.action_id.to_string(),
+                            capability: proposal.capability.clone(),
+                            target: proposal.target.clone(),
+                            status: "deduplicated".into(),
+                            summary: proposal.intent.clone(),
+                            output_summary: Some(format!(
+                                "Reused persisted receipt {}",
+                                previous.receipt_id
+                            )),
+                        });
                         continue;
                     }
 
@@ -654,16 +777,12 @@ impl HarnessCore {
                         timestamp: chrono::Utc::now(),
                     })
                     .await?;
-                    let evidence_summary = if let Some(content) = receipt
-                        .observations
-                        .get("content")
-                        .and_then(|v| v.as_str())
+                    let evidence_summary = if let Some(content) =
+                        receipt.observations.get("content").and_then(|v| v.as_str())
                     {
                         format!("{}\n```\n{}\n```", receipt.output_summary, content)
-                    } else if let Some(matches) = receipt
-                        .observations
-                        .get("matches")
-                        .and_then(|v| v.as_str())
+                    } else if let Some(matches) =
+                        receipt.observations.get("matches").and_then(|v| v.as_str())
                     {
                         format!("{}\n```\n{}\n```", receipt.output_summary, matches)
                     } else {
@@ -677,14 +796,20 @@ impl HarnessCore {
                         timestamp: chrono::Utc::now(),
                     })
                     .await?;
+                    made_progress = true;
                 }
                 CognitiveAction::HypothesisDelta { add, remove } => {
                     let mut soft = self.soft_workspace.lock().await;
                     for hypothesis in add {
-                        soft.add_hypothesis(hypothesis);
+                        if !soft.hypotheses.contains(&hypothesis) {
+                            soft.add_hypothesis(hypothesis);
+                            made_progress = true;
+                        }
                     }
                     for hypothesis in remove {
+                        let previous_len = soft.hypotheses.len();
                         soft.hypotheses.retain(|current| current != &hypothesis);
+                        made_progress |= soft.hypotheses.len() != previous_len;
                     }
                 }
                 CognitiveAction::VerificationRequest(request) => {
@@ -705,6 +830,7 @@ impl HarnessCore {
                     )?
                     .validate_direction()?;
                     self.run_verification_at(request, view_revision).await?;
+                    made_progress = true;
                 }
                 CognitiveAction::ClaimProposal(proposal) => {
                     self.set_phase(RunPhase::RevisingState).await;
@@ -732,6 +858,7 @@ impl HarnessCore {
                             timestamp: chrono::Utc::now(),
                         })
                         .await?;
+                        made_progress = true;
                         let mut soft = self.soft_workspace.lock().await;
                         soft.add_hypothesis(format!(
                             "Promoted claim (supported): {}",
@@ -739,10 +866,12 @@ impl HarnessCore {
                         ));
                     } else {
                         let mut soft = self.soft_workspace.lock().await;
-                        soft.add_hypothesis(format!(
-                            "Provisional claim (unpromoted): {}",
-                            proposal.proposition
-                        ));
+                        let hypothesis =
+                            format!("Provisional claim (unpromoted): {}", proposal.proposition);
+                        if !soft.hypotheses.contains(&hypothesis) {
+                            soft.add_hypothesis(hypothesis);
+                            made_progress = true;
+                        }
                     }
                 }
                 CognitiveAction::StateTransitionProposal(proposal) => {
@@ -761,6 +890,9 @@ impl HarnessCore {
                         return Err(RivetError::SemanticViolation(
                             "State transition proposal has a stale base revision".into(),
                         ));
+                    }
+                    if !proposal.obligations_to_create.is_empty() {
+                        made_progress = true;
                     }
                     for description in proposal.obligations_to_create {
                         self.record_event(NoesisEvent::ObligationCreated {
@@ -832,20 +964,33 @@ impl HarnessCore {
                         text: format!("Task completed: {summary}"),
                         has_actions: true,
                         is_completed: true,
+                        made_progress: true,
                     });
                 }
             }
         }
 
-        if !has_actions
+        let malformed_action_attempt = !has_actions
             && (response.text_content.contains("\"action_type\"")
                 || response.text_content.contains("tool_call")
-                || response.text_content.contains("completion_request"))
-        {
-            let mut soft = self.soft_workspace.lock().await;
-            soft.add_hypothesis(
-                "Corrective Guidance: Model output attempted an action proposal but the JSON payload was malformed. Please output valid JSON matching: {\"action_type\": \"tool_call\" | \"completion_request\" | ..., \"payload\": {...}}.",
+                || response.text_content.contains("completion_request"));
+        if malformed_action_attempt {
+            has_actions = true;
+            let signature = format!(
+                "malformed-controller-output:{}",
+                response.text_content.trim()
             );
+            let is_new = loop_guard
+                .as_mut()
+                .map(|guard| guard.seen_action_signatures.insert(signature))
+                .unwrap_or(true);
+            let mut soft = self.soft_workspace.lock().await;
+            if is_new {
+                soft.add_hypothesis(
+                    "Corrective Guidance: Model output attempted an action proposal but the JSON payload was malformed. Please output valid JSON matching: {\"action_type\": \"tool_call\" | \"completion_request\" | ..., \"payload\": {...}}.",
+                );
+                made_progress = true;
+            }
         }
 
         self.set_phase(RunPhase::Responding).await;
@@ -853,6 +998,7 @@ impl HarnessCore {
             text: response.text_content,
             has_actions,
             is_completed: false,
+            made_progress,
         })
     }
 
@@ -1023,13 +1169,17 @@ impl HarnessCore {
         }
         self.ensure_known_obligation(&request.obligation_id, &request.target_scope)
             .await?;
-        let mut parts = request.predicate.split_whitespace();
-        let Some(program) = parts.next() else {
+        let parts = rivet_types::shlex_split(&request.predicate);
+        let Some(program) = parts.first().map(|s| s.as_str()) else {
             return Err(RivetError::VerificationFailed(
                 "verification predicate is empty".into(),
             ));
         };
-        let args: Vec<_> = parts.collect();
+        let args: Vec<&str> = if parts.len() > 1 {
+            parts[1..].iter().map(|s| s.as_str()).collect()
+        } else {
+            Vec::new()
+        };
         self.emit_event(HarnessEvent::Praxis {
             obligation_id: request.obligation_id.to_string(),
             predicate: request.predicate.clone(),

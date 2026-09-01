@@ -15,6 +15,12 @@ type Props = {
 }
 
 const phase = (value: string) => value.replace(/([a-z])([A-Z])/g, '$1 $2').replaceAll('_', ' ')
+const compact = (value: string) => {
+  const normalized = value.replace(/```[\s\S]*$/g, '').replace(/\s+/g, ' ').trim()
+  return normalized.length > 180 ? `${normalized.slice(0, 177)}…` : normalized
+}
+
+const PANELS: InspectorPanel[] = ['hard', 'soft', 'praxis', 'history', 'diff']
 
 export function Inspector({
   panel,
@@ -28,6 +34,8 @@ export function Inspector({
   onDiff,
   onOpenArtifact,
 }: Props) {
+  const activeIndex = Math.max(0, PANELS.indexOf(panel))
+
   return (
     <aside className="inspector" aria-label="Cognitive aperture">
       <header>
@@ -35,18 +43,28 @@ export function Inspector({
         <button onClick={onClose} aria-label="Close inspector">×</button>
       </header>
 
-      <div className="panel-tabs" role="tablist" aria-label="Inspector Panels">
-        {(['hard', 'soft', 'praxis', 'history', 'diff'] as InspectorPanel[]).map(item => (
-          <button
-            key={item}
-            role="tab"
-            aria-selected={panel === item}
-            className={panel === item ? 'active' : ''}
-            onClick={() => setPanel(item)}
-          >
-            {item}
-          </button>
-        ))}
+      <div className="panel-tabs-wrapper">
+        <div className="panel-tabs" role="tablist" aria-label="Inspector Panels">
+          <div
+            className="panel-tab-indicator"
+            style={{
+              transform: `translateX(${activeIndex * 100}%)`,
+              width: `${100 / PANELS.length}%`,
+            }}
+            aria-hidden="true"
+          />
+          {PANELS.map(item => (
+            <button
+              key={item}
+              role="tab"
+              aria-selected={panel === item}
+              className={panel === item ? 'active' : ''}
+              onClick={() => setPanel(item)}
+            >
+              {item}
+            </button>
+          ))}
+        </div>
       </div>
 
       {panel === 'hard' && (
@@ -210,7 +228,11 @@ function Section({ label, items, alert = false }: { label: string; items: string
     <section className={`soft-list ${alert ? 'alert-list' : ''}`}>
       <span>{label}</span>
       {items.length ? (
-        items.slice(0, 10).map((item, index) => <p key={`${item}-${index}`}>– {item}</p>)
+        items.slice(0, 10).map(item => (
+          <p key={`${label}-${item}`} title={item.length > 180 ? 'Long record condensed for this surface.' : undefined}>
+            – {compact(item)}
+          </p>
+        ))
       ) : (
         <p>– none recorded</p>
       )}

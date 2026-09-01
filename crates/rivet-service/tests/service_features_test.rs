@@ -1,6 +1,6 @@
 use rivet_model::auth::AuthStore;
 use rivet_model::provider_hub::ResolvedProviderConfig;
-use rivet_service::{RivetService, RivetServiceImpl, SaveAuthRequest, StepRequest};
+use rivet_service::{RivetService, RivetServiceImpl, SaveAuthRequest, StepRequest, UiEvent};
 
 #[tokio::test]
 async fn test_service_auth_crud_and_model_catalog() {
@@ -152,4 +152,66 @@ async fn test_service_mcp_config_discovery() {
     assert_eq!(mcp_status.len(), 1);
     assert_eq!(mcp_status[0].name, "mock_server");
     assert_eq!(mcp_status[0].status, "disabled");
+}
+
+#[tokio::test]
+async fn step_events_are_correlated_and_plain_text_uses_one_turn() {
+    let tmp = tempfile::tempdir().unwrap();
+    let auth_store = AuthStore::with_path(tmp.path().join("auth.json"));
+    let config = ResolvedProviderConfig {
+        provider: "mock".into(),
+        model_id: "mock-model".into(),
+        api_key: None,
+        base_url: None,
+    };
+    let service = RivetServiceImpl::from_dir(tmp.path(), config, auth_store)
+        .await
+        .unwrap();
+    let mut events = service.subscribe();
+
+    let response = service
+        .step(StepRequest {
+            prompt: "naber".into(),
+            goal: None,
+            attachments: vec![],
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(response.text, "Step completed successfully");
+    let mut run_id = None;
+    let mut turn_starts = 0;
+    let mut deltas = 0;
+    let mut completed = 0;
+    while let Ok(envelope) = events.try_recv() {
+        let event_run_id = envelope
+            .run_id
+            .clone()
+            .expect("every event emitted during a run must carry run_id");
+        if let Some(expected) = &run_id {
+            assert_eq!(expected, &event_run_id);
+        } else {
+            run_id = Some(event_run_id);
+        }
+        match envelope.event {
+            UiEvent::AssistantTurnStarted => {
+                turn_starts += 1;
+                assert_eq!(envelope.turn, Some(1));
+            }
+            UiEvent::AssistantDelta { .. } => {
+                deltas += 1;
+                assert_eq!(envelope.turn, Some(1));
+            }
+            UiEvent::Completed { phase, .. } => {
+                completed += 1;
+                assert_eq!(phase, rivet_core::RunPhase::Idle);
+            }
+            _ => {}
+        }
+    }
+
+    assert!(run_id.is_some());
+    assert_eq!(turn_starts, 1);
+    assert_eq!(deltas, 1);
+    assert_eq!(completed, 1);
 }

@@ -1,4 +1,4 @@
-use rivet_model::{CognitiveAction, ModelResponse, TokenUsage};
+use rivet_model::{ModelResponse, TokenUsage};
 
 #[test]
 fn structured_controller_output_decodes_only_proposals() {
@@ -8,7 +8,7 @@ fn structured_controller_output_decodes_only_proposals() {
     );
     assert!(matches!(
         response.actions.as_slice(),
-        [CognitiveAction::HypothesisDelta { add, remove }]
+        [rivet_model::CognitiveAction::HypothesisDelta { add, remove }]
             if add == &["inspect manifest"] && remove.is_empty()
     ));
 }
@@ -16,17 +16,11 @@ fn structured_controller_output_decodes_only_proposals() {
 #[test]
 fn prose_and_receipt_shaped_model_output_do_not_gain_authority() {
     let prose = ModelResponse::from_text("all tests pass; task is complete", TokenUsage::default());
-    assert!(matches!(
-        prose.actions.as_slice(),
-        [CognitiveAction::Thought(_)]
-    ));
+    assert!(prose.actions.is_empty());
 
     let receipt = ModelResponse::from_text(
         r#"{"action_type":"execution_receipt","payload":{"success":true}}"#,
         TokenUsage::default(),
     );
-    assert!(matches!(
-        receipt.actions.as_slice(),
-        [CognitiveAction::Thought(_)]
-    ));
+    assert!(receipt.actions.is_empty());
 }
