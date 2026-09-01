@@ -209,3 +209,54 @@ async fn concurrent_append_at_stale_revision_returns_stale_state() {
         1
     );
 }
+
+#[tokio::test]
+async fn test_session_history_persistence_and_listing() {
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let db_path = tmp_dir.path().join("sessions.redb");
+
+    let entry1 = rivet_store::StoredSessionEntry {
+        id: "session-1".into(),
+        prompt: "First test prompt".into(),
+        status: "completed".into(),
+        revision: Some(1),
+        created_at: Utc::now(),
+    };
+    let entry2 = rivet_store::StoredSessionEntry {
+        id: "session-2".into(),
+        prompt: "Second test prompt".into(),
+        status: "running".into(),
+        revision: Some(2),
+        created_at: Utc::now() + chrono::Duration::seconds(1),
+    };
+
+    // 1. Open store, write sessions, reopen
+    {
+        let store = RedbStore::open(&db_path).unwrap();
+        store.save_session_entry(&entry1).await.unwrap();
+        store.save_session_entry(&entry2).await.unwrap();
+
+        let list = store.list_session_entries().await.unwrap();
+        assert_eq!(list.len(), 2);
+        assert_eq!(list[0].id, "session-1");
+        assert_eq!(list[1].id, "session-2");
+    }
+
+    // 2. Reopen store, verify persistence
+    {
+        let store = RedbStore::open(&db_path).unwrap();
+        let list = store.list_session_entries().await.unwrap();
+        assert_eq!(list.len(), 2);
+        assert_eq!(list[0], entry1);
+        assert_eq!(list[1], entry2);
+
+        // Update status
+        let mut updated = entry2.clone();
+        updated.status = "completed".into();
+        store.save_session_entry(&updated).await.unwrap();
+
+        let updated_list = store.list_session_entries().await.unwrap();
+        assert_eq!(updated_list.len(), 2);
+        assert_eq!(updated_list[1].status, "completed");
+    }
+}

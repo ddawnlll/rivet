@@ -1,30 +1,89 @@
 import { useState } from 'react'
 import type { Activity } from '../types'
 
-type Props = { activities: Activity[]; runActive: boolean; selected: Activity | null; onSelect: (activity: Activity) => void; onCancel: () => void; focusObject?: { phase: string; title: string; text: string } | null; summary?: string | null }
+type Props = {
+  activities: Activity[]
+  runActive: boolean
+  selected: Activity | null
+  onSelect: (activity: Activity) => void
+  onCancel: () => void
+  focusObject?: { phase: string; title: string; text: string } | null
+  summary?: string | null
+}
 
-export function ActivitySpine({ activities, runActive, selected, onSelect, onCancel, focusObject, summary }: Props) {
-  const [apertureId, setApertureId] = useState<string | null>(null)
-  const [receiptOpen, setReceiptOpen] = useState(false)
-  const toggleAperture = (id: string) => setApertureId(current => current === id ? null : id)
+export function ActivitySpine({ activities, runActive, selected, onSelect, onCancel, summary }: Props) {
+  const [detailsOpen, setDetailsOpen] = useState(false)
 
-  /* Run receipt — compact, reopenable per spec §4 item 14 */
-  if (!runActive && activities.length > 0) {
-    const lastActivity = activities.at(-1)
-    return <section className="live-run" aria-label="Run receipt"><header><div className="live-name">run complete</div><div className="run-meta"><span>{activities[0]?.id.slice(-5).toUpperCase() ?? '—'}</span><button onClick={() => setReceiptOpen(open => !open)}>{receiptOpen ? 'collapse' : 'reopen'}</button></div></header>
-      {receiptOpen && <div className="activity-stream">{activities.slice(-12).map(activity => <button key={activity.id} className={`activity ${activity.kind} ${activity.status} ${selected?.id === activity.id ? 'selected' : ''}`} onClick={() => onSelect(activity)} aria-label={`Inspect ${activity.kind}: ${activity.body}`}><i /><span className="kind">{activity.kind}</span><span className="body" dangerouslySetInnerHTML={{ __html: activity.body }} /><time>{activity.timestamp}</time></button>)}</div>}
-      {!receiptOpen && summary && <div className="run-receipt-summary"><p>{summary}</p></div>}
-      {!receiptOpen && lastActivity && <div className="run-receipt-meta"><span>{lastActivity.kind} · {lastActivity.status}</span><span>{activities.length} events</span></div>}
-    </section>
+  // Filter out internal noisy events
+  const meaningfulActivities = activities.filter(
+    a => a.kind !== 'request' && !a.body.startsWith('task_') && a.kind !== 'preparing view'
+  )
+
+  const activeActivity = meaningfulActivities.find(a => a.status === 'active') ?? meaningfulActivities.at(-1)
+
+  if (!runActive) {
+    if (!summary && meaningfulActivities.length === 0) return null
+    return (
+      <div className="run-status-compact completed" aria-label="Run summary">
+        {summary && <div className="summary-pill">{summary}</div>}
+        {meaningfulActivities.length > 0 && (
+          <div className="activity-toggle">
+            <button
+              type="button"
+              className="ghost-toggle"
+              onClick={() => setDetailsOpen(open => !open)}
+            >
+              <span>{detailsOpen ? '▾ Hide execution steps' : `▸ View ${meaningfulActivities.length} step${meaningfulActivities.length > 1 ? 's' : ''}`}</span>
+            </button>
+            {detailsOpen && (
+              <div className="activity-stream-compact">
+                {meaningfulActivities.map(activity => (
+                  <button
+                    key={activity.id}
+                    type="button"
+                    className={`activity-mini ${activity.kind} ${activity.status} ${selected?.id === activity.id ? 'selected' : ''}`}
+                    onClick={() => onSelect(activity)}
+                  >
+                    <span className="kind">{activity.kind}</span>
+                    <span className="body" dangerouslySetInnerHTML={{ __html: activity.body }} />
+                    <time>{activity.timestamp}</time>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    )
   }
 
-  return <section className="live-run" aria-label="Live Rivet run"><header><div className="live-name"><i className={runActive ? 'pulse' : ''} />{runActive ? 'live run' : 'run receipt'}</div><div className="run-meta"><span>{activities[0]?.id.slice(-5).toUpperCase() ?? '—'}</span>{runActive && <button onClick={onCancel}>cancel</button>}</div></header><div className="activity-stream">{activities.slice(-32).map(activity => {
-    const isSelected = selected?.id === activity.id || apertureId === activity.id
-    return <div key={activity.id}>
-      <button className={`activity ${activity.kind} ${activity.status} ${isSelected ? 'selected' : ''}`} onClick={() => { onSelect(activity); toggleAperture(activity.id) }} aria-label={`Inspect ${activity.kind}: ${activity.body}`}><i /><span className="kind">{activity.kind}</span><span className="body" dangerouslySetInnerHTML={{ __html: activity.body }} /><time>{activity.timestamp}</time></button>
-      {isSelected && apertureId === activity.id && <div className="run-aperture open" role="region" aria-label="Event inspection"><dl>{activity.detail.map(([k, v]) => <div key={k}><dt>{k}</dt><dd dangerouslySetInnerHTML={{ __html: v }} /></div>)}<div key="inspect"><dt>AUTHORITATIVE</dt><dd>{activity.authoritative ? 'yes' : 'provisional'}</dd></div></dl><button type="button" onClick={() => setApertureId(null)}>close inspection</button></div>}
+  return (
+    <div className="run-status-compact active" aria-label="Live run progress">
+      <div className="status-indicator-bar">
+        <div className="status-dot-pulse" aria-hidden="true" />
+        <span className="status-current-label">
+          {activeActivity ? `${activeActivity.kind}: ${activeActivity.body}` : 'Rivet is thinking…'}
+        </span>
+        <button type="button" className="mini-cancel-btn" onClick={onCancel}>
+          Cancel
+        </button>
+      </div>
+
+      {meaningfulActivities.length > 1 && (
+        <details className="status-details-accordion" open={detailsOpen} onToggle={e => setDetailsOpen(e.currentTarget.open)}>
+          <summary>
+            {meaningfulActivities.length} step{meaningfulActivities.length > 1 ? 's' : ''} in progress
+          </summary>
+          <div className="activity-stream-compact">
+            {meaningfulActivities.slice(-6).map(activity => (
+              <div key={activity.id} className="activity-mini-item">
+                <span className="kind">{activity.kind}</span>
+                <span className="body" dangerouslySetInnerHTML={{ __html: activity.body }} />
+              </div>
+            ))}
+          </div>
+        </details>
+      )}
     </div>
-  })}</div>
-  {focusObject && <div className="focus-object"><div className="focus-phase">{focusObject.phase}</div><div className="focus-title">{focusObject.title}</div><div className="focus-text">{focusObject.text}</div></div>}
-  {activities.length > 0 && <p className="inspect-hint">Select an event to inspect its Cognitive Aperture. Older events compress as the run advances.</p>}</section>
+  )
 }

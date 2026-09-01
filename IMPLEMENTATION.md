@@ -8,7 +8,7 @@
 ## 1. Core Technical Invariants
 
 * **Language & Edition:** Rust 2024.
-* **Process Model:** Single OS process, in-memory first, zero internal IPC/RPC/gRPC/MCP.
+* **Process Model:** Single OS process, in-memory first, zero internal IPC/RPC/gRPC/MCP between core subsystems. Frontend projections (TUI/Web/Tauri) consume a shared `RivetService` facade; Web/Tauri transport is a local projection, not an internal subsystem bus.
 * **Async Runtime:** Tokio only at true I/O boundaries (model streaming, process execution, fs, persistence).
 * **Harness Ownership:** Rivet owns its Harness Core, session lifecycle, and cognitive state transitions. External agent frameworks are not lifecycle owners.
 * **Hard State ≠ Soft Workspace ≠ Context:**
@@ -40,7 +40,10 @@ crates/
 ├── rivet-mcp              # [Adapter] rmcp external capability bridge (optional/external only)
 ├── rivet-store            # [Persistence] HardStateStore trait, redb embedded storage backend
 ├── rivet-repository       # [Induction] Deterministic census, repo frontier, Project Graph, DEFER policy
-└── rivet-runtime          # [Execution] OS process runner, file system, Git integration, sandbox
+├── rivet-runtime          # [Execution] OS process runner, file system, Git integration, sandbox
+├── rivet-service          # [Facade] UI-agnostic Harness facade (RivetService) — TUI/Web/Tauri shared contract
+├── rivet-api              # [Transport] axum REST + SSE/WebSocket (`rivet serve`)
+└── web/                   # [Frontend] Vite + React + shadcn (Web & Tauri shared build)
 ```
 
 ---
@@ -120,6 +123,30 @@ crates/
   - Monografta listelenen 20 anayasal kuralın (I-01 .. I-20) uçtan uca entegrasyon testlerinin yazılması.
 - [x] **7.2 `evals/` Senaryoları:**
   - V8 amiral gemisi, yabancı diller (`alien-rust`, `alien-ts`, `alien-python`) ve greenfield test senaryoları.
+
+### Phase 8: Unified Service Facade — Web / Tauri / TUI Adapter (Aktif)
+- [ ] **8.1 `crates/rivet-service` — RivetService Facade:**
+  - `HarnessCore` etrafında `RivetService` trait/facade (`step`, `stream_step`, `initialize_goal`, `get_state`, `get_census`, `get_obligations`).
+  - `UiEvent` broadcast (`AssistantDelta`, `Status`, `AuthorityPrompt`, `VerificationUpdate`, `Completed`).
+  - TUI, Web ve Tauri aynı contract'ı tüketir; lifecycle ve Noesis revision ownership Harness Core'da kalır.
+- [ ] **8.2 `crates/rivet-api` — `rivet serve` Transport:**
+  - `axum` + SSE/WebSocket (`POST /api/step`, `GET /api/stream`, `GET /api/state`, `GET /api/census`).
+  - Single-process local projection; internal subsystem'ler arası IPC değil.
+- [ ] **8.3 `web/` — Vite + React + shadcn Frontend (Chat-Only Surface):**
+  - Chat-only: merkezi chat stream, sağda projection drawer (mode değil).
+  - Tier 1 (her zaman açık): Open Obligations + Verification + Contradictions (Hard State).
+  - Tier 2 (collapsed): Soft Workspace hypotheses/focus + Cognitive View sent to model.
+  - Tier 3 (on-demand): Recent Evidence/Receipts, Census Frontier, Full HardState explorer.
+  - Hard = solid kart, Soft = dashed/soluk (non-authoritative ayrımı).
+- [ ] **8.4 Tauri Wrapper:**
+  - Aynı `web/dist` build'ini `tauri::command` ile saran thin shell (`invoke("step")` ↔ `RivetService::step`).
+  - Web ve Desktop %100 aynı React codebase.
+- [ ] **8.5 TUI Refactor — Facade'e Bağlama:**
+  - `crates/rivet/src/tui.rs` içindeki direkt `HarnessCore` çağrılarını `RivetService`'e taşıma.
+  - F1-F5 mode tab yerine chat + projection drawer modeline geçiş (monograf #interaction-model-chat-only-surface uyumu).
+- [ ] **8.6 Dokümantasyon & Monograf Rebuild:**
+  - `docs/architecture/ADAPTER_STRATEGY.md` ve `docs/architecture/TECHNICAL_ARCHITECTURE_V03.md` UI strategy güncellemesi.
+  - `uv run tools/build_monograph.py --docs docs --out site/index.html` ile monograf rebuild.
 
 ---
 

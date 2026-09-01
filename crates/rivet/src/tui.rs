@@ -38,12 +38,13 @@ use ratatui::{
         ScrollbarOrientation, ScrollbarState, Tabs, Wrap,
     },
 };
-use rivet_core::{HarnessCore, RunPhase};
+use rivet_core::RunPhase;
 use rivet_model::auth::AuthStore;
 use rivet_model::provider_hub::{
     ProviderRegistry, ResolvedProviderConfig, fetch_remote_models, get_known_providers,
 };
 use rivet_repository::{CensusRunner, RepositoryCensus};
+use rivet_service::{RivetService, StepRequest};
 use std::collections::HashMap;
 use std::future::Future;
 use std::io::{self, Write, stdout};
@@ -1098,7 +1099,7 @@ pub enum AppEvent {
 // =============================================================================
 
 pub struct TuiApp {
-    pub harness: Arc<HarnessCore>,
+    pub service: Arc<dyn RivetService>,
     pub dynamic_backend: Arc<rivet_model::DynamicModelBackend>,
     pub auth_store: AuthStore,
     pub active_config: ResolvedProviderConfig,
@@ -1185,17 +1186,22 @@ pub struct TuiApp {
 }
 
 async fn run_cancellable_model_step(
-    harness: Arc<HarnessCore>,
+    service: Arc<dyn RivetService>,
     goal: String,
     prompt: String,
     tx: UnboundedSender<AppEvent>,
     cancel_rx: oneshot::Receiver<()>,
 ) {
-    let operation_harness = harness.clone();
+    let operation_service = service.clone();
     let operation = async move {
-        operation_harness
-            .step(&goal, &prompt)
+        operation_service
+            .step(StepRequest {
+                prompt,
+                goal: Some(goal),
+                attachments: vec![],
+            })
             .await
+            .map(|resp| resp.text)
             .map_err(|error| error.to_string())
     };
     match wait_for_cancellable_result(operation, cancel_rx).await {
@@ -1203,7 +1209,7 @@ async fn run_cancellable_model_step(
             let _ = tx.send(AppEvent::ModelResponse(result));
         }
         None => {
-            harness.cancel().await;
+            let _ = service.cancel().await;
             let _ = tx.send(AppEvent::ModelCancelled);
         }
     }
@@ -1223,20 +1229,25 @@ where
 }
 
 async fn run_cancellable_goal(
-    harness: Arc<HarnessCore>,
+    service: Arc<dyn RivetService>,
     goal_prompt: String,
     tx: UnboundedSender<AppEvent>,
     cancel_rx: oneshot::Receiver<()>,
 ) {
+    let result = service
+        .initialize_goal(&goal_prompt)
+        .await
+        .map(|dto| (dto.summary.clone(), dto.obligations_created))
+        .map_err(|e| e.to_string());
     tokio::select! {
-        result = harness.initialize_goal(&goal_prompt) => {
+        _ = async {} => {
             let mapped = result
-                .map(|spec| format!("🎯 Compiled GoalSpec '{}' with {} obligations.", spec.summary, spec.graph.nodes.len()))
+                .map(|(summary, count)| format!("🎯 Compiled GoalSpec '{}' with {} obligations.", summary, count))
                 .map_err(|error| error.to_string());
             let _ = tx.send(AppEvent::GoalResponse(mapped));
         }
         _ = cancel_rx => {
-            harness.cancel().await;
+            let _ = service.cancel().await;
             let _ = tx.send(AppEvent::GoalCancelled);
         }
     }
@@ -1244,7 +1255,7 @@ async fn run_cancellable_goal(
 
 impl TuiApp {
     pub fn new(
-        harness: Arc<HarnessCore>,
+        service: Arc<dyn RivetService>,
         dynamic_backend: Arc<rivet_model::DynamicModelBackend>,
         auth_store: AuthStore,
         active_config: ResolvedProviderConfig,
@@ -1260,7 +1271,7 @@ impl TuiApp {
         slash_list_state.select(Some(0));
 
         Self {
-            harness,
+            service,
             dynamic_backend,
             auth_store,
             active_config,
@@ -1341,7 +1352,7 @@ impl TuiApp {
     async fn cancel_processing(&mut self) {
         if let Some(cancel) = self.processing_cancel.take() {
             let _ = cancel.send(());
-            self.harness.cancel().await;
+            let _ = self.service.cancel().await;
             self.is_processing = false;
             self.processing_start = None;
             self.chat_messages
@@ -1389,9 +1400,44 @@ impl TuiApp {
             }
 
             // 4. Fetch current system state snapshots
-            let hard = self.harness.hard_state.lock().await.clone();
-            let soft = self.harness.soft_workspace.lock().await.clone();
-            let phase = self.harness.current_phase().await;
+            let state_dto =
+                self.service
+                    .get_state()
+                    .await
+                    .unwrap_or_else(|_| rivet_service::StateDto {
+                        revision: 0,
+                        phase: RunPhase::Idle,
+                        session_id: String::new(),
+                        task_id: String::new(),
+                        repository_id: String::new(),
+                        hard_state: rivet_service::HardStateSummary {
+                            revision: 0,
+                            open_obligations: vec![],
+                            closed_obligations: vec![],
+                            claims: vec![],
+                            contradictions: vec![],
+                            rejected_claims: vec![],
+                            recent_evidence: vec![],
+                            verification_receipts: vec![],
+                            completed_tasks: vec![],
+                        },
+                        soft_workspace: rivet_service::SoftWorkspaceSummary {
+                            workspace_id: String::new(),
+                            session_id: String::new(),
+                            base_hard_revision: 0,
+                            active_focus: vec![],
+                            hypotheses: vec![],
+                            unknowns: vec![],
+                            candidate_actions: vec![],
+                            item_count: 0,
+                            max_capacity: 0,
+                        },
+                        cognitive_view: None,
+                        model_invocation_count: 0,
+                    });
+            let phase = state_dto.phase;
+            let hard = state_dto.hard_state.to_hard_state();
+            let soft = state_dto.soft_workspace.to_soft_workspace();
 
             // 5. Render UI
             terminal.draw(|f| {
@@ -1502,6 +1548,12 @@ impl TuiApp {
     fn handle_app_event(&mut self, event: AppEvent) {
         match event {
             AppEvent::ModelStreamChunk(chunk) => {
+                // Filter literal JSON null spam that some models emit for greeting/no-op
+                // (keeps provenance, but don't render "null" as visible text)
+                let trimmed = chunk.trim();
+                if trimmed == "null" || trimmed == "\"null\"" {
+                    return;
+                }
                 self.is_processing = true;
                 self.streaming_prose.push_str(&chunk);
                 self.auto_scroll_to_bottom = true;
@@ -1602,13 +1654,17 @@ impl TuiApp {
     }
 
     fn trigger_background_diff(&self) {
-        let runtime = self.harness.runtime.clone();
+        let root = self.root_dir.clone();
         let tx = self.event_tx.clone();
         tokio::spawn(async move {
-            let res = runtime
-                .execute_command("git", &["diff", "HEAD"], 5)
+            let res = tokio::process::Command::new("git")
+                .args(["diff", "HEAD"])
+                .current_dir(&root)
+                .output()
                 .await
-                .map(|(_, stdout, stderr, _)| {
+                .map(|o| {
+                    let stdout = String::from_utf8_lossy(&o.stdout).to_string();
+                    let stderr = String::from_utf8_lossy(&o.stderr).to_string();
                     if stdout.trim().is_empty() && !stderr.trim().is_empty() {
                         stderr
                     } else if stdout.trim().is_empty() {
@@ -4038,14 +4094,14 @@ impl TuiApp {
                     self.is_processing = true;
                     self.processing_start = Some(Instant::now());
 
-                    let harness = self.harness.clone();
+                    let svc = self.service.clone();
                     let tx = self.event_tx.clone();
                     let prompt_clone = prompt.clone();
                     let goal_summary = format!("Session goal: {}", prompt_clone);
                     let (cancel_tx, cancel_rx) = oneshot::channel();
                     self.processing_cancel = Some(cancel_tx);
                     tokio::spawn(run_cancellable_model_step(
-                        harness,
+                        svc,
                         goal_summary,
                         prompt_clone,
                         tx,
@@ -4546,12 +4602,15 @@ impl TuiApp {
                 self.trigger_background_diff();
             }
             "undo" => {
-                let runtime = self.harness.runtime.clone();
+                let root = self.root_dir.clone();
                 let tx = self.event_tx.clone();
                 tokio::spawn(async move {
-                    let res = runtime
-                        .execute_command("git", &["checkout", "--", "."], 5)
-                        .await;
+                    let res = tokio::process::Command::new("git")
+                        .args(["checkout", "--", "."])
+                        .current_dir(&root)
+                        .output()
+                        .await
+                        .map(|_o| (0i32, String::new(), String::new(), 0u64));
                     if res.is_ok() {
                         let _ = tx.send(AppEvent::DiffResponse(Ok(
                             "✓ Reverted working tree changes to HEAD.".to_string(),
@@ -4657,11 +4716,11 @@ impl TuiApp {
                     self.is_processing = true;
                     self.processing_start = Some(Instant::now());
 
-                    let harness = self.harness.clone();
+                    let svc = self.service.clone();
                     let tx = self.event_tx.clone();
                     let (cancel_tx, cancel_rx) = oneshot::channel();
                     self.processing_cancel = Some(cancel_tx);
-                    tokio::spawn(run_cancellable_goal(harness, goal_prompt, tx, cancel_rx));
+                    tokio::spawn(run_cancellable_goal(svc, goal_prompt, tx, cancel_rx));
                 }
             }
             "census" => {
@@ -4673,17 +4732,19 @@ impl TuiApp {
             }
             "clear" => {
                 {
-                    self.harness.soft_workspace.lock().await.hypotheses.clear();
+                    let _ = self.service.clear_hypotheses().await;
                 }
                 let th_warn = self.theme().warning;
                 self.set_toast("Cleared hypotheses in Soft Workspace", th_warn);
             }
             "reframe" => {
                 {
-                    let mut soft = self.harness.soft_workspace.lock().await;
-                    soft.add_hypothesis(
-                        "[Manual Reframed] Exploring alternative architecture invariants",
-                    );
+                    let _ = self
+                        .service
+                        .add_hypothesis(
+                            "[Manual Reframed] Exploring alternative architecture invariants",
+                        )
+                        .await;
                 }
                 let th_prim = self.theme().primary;
                 self.set_toast("Triggered Hephaestus reframing", th_prim);
@@ -4940,14 +5001,15 @@ mod tests {
             api_key: None,
             base_url: None,
         };
-        let store: Arc<dyn rivet_store::HardStateStore> = Arc::new(rivet_store::MemoryStore::new());
-        let runtime = Arc::new(rivet_runtime::Runtime::new(&temp_dir));
+        let svc =
+            rivet_service::RivetServiceImpl::from_dir(&temp_dir, config.clone(), AuthStore::new())
+                .await
+                .unwrap();
         let model: Arc<dyn rivet_model::ModelBackend> =
             Arc::new(rivet_model_rig::RigBackend::from_resolved(&config));
         let dynamic_backend = Arc::new(rivet_model::DynamicModelBackend::new(model));
-        let harness = Arc::new(HarnessCore::new(store, dynamic_backend.clone(), runtime));
         let mut app = TuiApp::new(
-            harness.clone(),
+            svc.clone() as Arc<dyn RivetService>,
             dynamic_backend,
             AuthStore::new(),
             config,
@@ -4961,7 +5023,7 @@ mod tests {
             .await;
 
         assert!(cancel_rx.await.is_ok());
-        assert_eq!(harness.current_phase().await, RunPhase::Cancelled);
+        assert_eq!(svc.current_phase().await.unwrap(), RunPhase::Cancelled);
         assert!(!app.is_processing);
         let _ = std::fs::remove_dir_all(temp_dir);
     }

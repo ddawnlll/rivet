@@ -32,9 +32,20 @@ export interface Workspace { workspace_id: string; session_id: string; base_hard
 export interface State { revision: number; phase: RunPhase; session_id: string; task_id: string; repository_id: string; hard_state: HardState; soft_workspace: Workspace; cognitive_view?: unknown; model_invocation_count: number }
 export interface Census { total_files: number; total_bytes: number; deferred_count: number; directories: Array<{ relative_path: string; file_count: number; total_bytes: number; relevance: string; signals: string[] }> }
 export interface Project { id: string; name: string; path: string; branch?: string; revision?: string; dirty: boolean }
-export interface Provider { id: string; name: string; models: string[]; configured: boolean }
+export interface Provider { id: string; name: string; models: string[]; configured: boolean; masked_key?: string; base_url?: string }
 export interface ModelCatalog { active_provider: string; active_model: string; providers: Provider[] }
 export interface HistoryEntry { id: string; prompt: string; status: string; revision?: number; created_at: string }
 export interface Diff { status: string; text: string; files: string[] }
+export interface McpToolInfo { capability_id: string; tool_name: string; description: string; input_schema: unknown; is_verified_provider: boolean }
+export interface McpServerInfo { name: string; command: string; args: string[]; disabled: boolean; tools_count: number; tools: McpToolInfo[]; status: string }
+export interface SaveAuthPayload { provider: string; key: string; base_url?: string; default_model?: string; models: string[] }
 export interface Activity { id: string; kind: string; body: string; status: 'active' | 'done' | 'alert' | 'neutral'; timestamp: string; detail: Array<[string, string]>; authoritative?: boolean }
-export interface Message { id: string; role: 'you' | 'rivet' | 'system'; body: string; live?: boolean; attachments?: string[] }
+export interface Message {
+  id: string
+  role: 'you' | 'rivet' | 'system'
+  body: string
+  reasoning?: string
+  elapsedSeconds?: number
+  live?: boolean
+  attachments?: string[]
+}

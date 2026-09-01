@@ -1,0 +1,35 @@
+[package]
+name = "rivet-service"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "UI-agnostic Harness facade (RivetService) — shared contract for TUI/Web/Tauri"
+
+[dependencies]
+rivet-types = { workspace = true }
+rivet-core = { workspace = true }
+rivet-store = { workspace = true }
+rivet-runtime = { workspace = true }
+rivet-repository = { workspace = true }
+rivet-model = { workspace = true }
+noesis = { workspace = true }
+accp = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+chrono = { workspace = true }
+async-trait = { workspace = true }
+uuid = { workspace = true }
+bytes = { workspace = true }
+futures-util = { workspace = true }
+rivet-model-rig = { workspace = true }
+rivet-model-genai = { workspace = true }
+rivet-mcp = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

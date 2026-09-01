@@ -21,6 +21,16 @@ export const getModels = () => api<ModelCatalog>('models')
 export const getHistory = () => api<HistoryEntry[]>('history')
 export const getCensus = () => api<Census>('census')
 export const getDiff = () => api<Diff>('diff')
+export const getMcp = () => api<import('./types').McpServerInfo[]>('mcp')
+
+export const openProject = (path: string) =>
+  api<Project>('project/open', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ path }) })
+
+export const saveAuth = (payload: import('./types').SaveAuthPayload) =>
+  api<ModelCatalog>('auth/save', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) })
+
+export const removeAuth = (provider: string) =>
+  api<ModelCatalog>('auth/remove', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ provider }) })
 
 export function postRun(prompt: string, goal: string | undefined, attachments: Attachment[], steer: boolean, socket: WebSocket | null) {
   const payload = { type: steer ? 'steer' : 'step', prompt, goal, attachments }

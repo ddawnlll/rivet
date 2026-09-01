@@ -3,6 +3,14 @@
 //! Strict semantic protocol defining legal commitments, authority boundaries,
 //! and event transitions between Cognitive Controller and Authoritative Harness.
 
+pub mod controller_profile;
+pub use controller_profile::{
+    ALLOWED_CONTROLLER_MESSAGES, FORBIDDEN_CONTROLLER_FAMILIES,
+    PROFILE_VERSION as CONTROLLER_PROFILE_VERSION,
+    compile_reference_prompt as compile_controller_reference_prompt, is_allowed_controller_message,
+    is_forbidden_controller_message,
+};
+
 use chrono::{DateTime, Utc};
 use rivet_types::*;
 use serde::{Deserialize, Serialize};
@@ -35,10 +43,13 @@ pub enum MessageFamily {
 #[serde(rename_all = "snake_case")]
 pub enum ActionRisk {
     /// Read-only / inspection (zero side effects)
+    #[serde(alias = "Inspect", alias = "INSPECT")]
     Inspect,
     /// Targeted modification with git checkpoint / easily reversible
+    #[serde(alias = "Material", alias = "MATERIAL")]
     Material,
     /// Irreversible / global mutation (e.g. hard reset, force push, drop db)
+    #[serde(alias = "Destructive", alias = "DESTRUCTIVE")]
     Destructive,
 }
 
@@ -46,8 +57,11 @@ pub enum ActionRisk {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ActionDecisionVerdict {
+    #[serde(alias = "Allow", alias = "ALLOW")]
     Allow,
+    #[serde(alias = "Block", alias = "BLOCK")]
     Block,
+    #[serde(alias = "RequireHumanApproval", alias = "REQUIRE_HUMAN_APPROVAL")]
     RequireHumanApproval,
 }
 
@@ -59,6 +73,7 @@ pub struct ActionProposal {
     pub target: String,
     pub parameters: serde_json::Value,
     pub estimated_risk: ActionRisk,
+    #[serde(alias = "rationale")]
     pub intent: String,
     pub scope: Scope,
     /// Retries with the same identity must not repeat an authoritative side effect.
@@ -494,11 +509,14 @@ impl AccpSemanticGate {
                 "Action target or declared scope is outside Harness authority",
             );
         }
-        if !policy
-            .allowed_capabilities
-            .iter()
-            .any(|capability| capability == &proposal.capability)
-        {
+        if !policy.allowed_capabilities.iter().any(|capability| {
+            capability == &proposal.capability
+                || (capability.ends_with(".*")
+                    && proposal
+                        .capability
+                        .starts_with(&capability[..capability.len() - 1]))
+                || (capability == "mcp.*" && proposal.capability.starts_with("mcp."))
+        }) {
             return blocked(
                 ActionDecisionVerdict::Block,
                 "Requested capability is not exposed for this task",

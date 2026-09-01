@@ -29,5 +29,6 @@ target/
 # Scratch & Temporary
 tmp/
 scratch/
+node_modules/
 .rivet/
 .rivet-auth.json

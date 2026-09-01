@@ -14,6 +14,8 @@ members = [
     "crates/rivet-runtime",
     "crates/rivet-repository",
     "crates/rivet-core",
+    "crates/rivet-service",
+    "crates/rivet-api",
     "crates/rivet",
     "crates/rivet-eval",
     "crates/rivet-model-rig",
@@ -41,6 +43,8 @@ rivet-mcp = { path = "crates/rivet-mcp" }
 rivet-runtime = { path = "crates/rivet-runtime" }
 rivet-repository = { path = "crates/rivet-repository" }
 rivet-core = { path = "crates/rivet-core" }
+rivet-service = { path = "crates/rivet-service" }
+rivet-api = { path = "crates/rivet-api" }
 rivet-eval = { path = "crates/rivet-eval" }
 
 # Rig LLM Framework
@@ -56,6 +60,7 @@ anyhow = "1.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 futures-util = "0.3"
+http-body-util = "0.1"
 bytes = "1.10"
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1.15", features = ["v4", "serde"] }
@@ -105,6 +110,12 @@ rlimit = "0.11"
 windows = { version = "0.62", features = ["Win32_System_JobObjects", "Win32_System_Threading", "Win32_Security", "Win32_Foundation"] }
 landlock = "0.4"
 seccompiler = "0.5"
+
+# RivetService / Web transport
+axum = { version = "0.7", features = ["json", "ws"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors", "fs", "trace"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
 
 
 

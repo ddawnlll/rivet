@@ -170,3 +170,42 @@ for line in sys.stdin:
     assert_eq!(call_res.content[0].text.as_deref(), Some("cpu_load=0.15"));
     assert_eq!(call_res.is_error, Some(false));
 }
+
+#[tokio::test]
+async fn test_mcp_config_file_parsing_and_workspace_loading() {
+    use rivet_mcp::McpConfigFile;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let rivet_dir = tmp.path().join(".rivet");
+    std::fs::create_dir_all(&rivet_dir).unwrap();
+    let mcp_json = rivet_dir.join("mcp.json");
+
+    let content = r#"{
+        "mcpServers": {
+            "sqlite": {
+                "command": "uvx",
+                "args": ["mcp-server-sqlite", "--db-path", "test.db"],
+                "env": { "DEBUG": "1" }
+            },
+            "disabled_server": {
+                "command": "echo",
+                "disabled": true
+            }
+        }
+    }"#;
+    std::fs::write(&mcp_json, content).unwrap();
+
+    let config = McpConfigFile::load_from_workspace(tmp.path())
+        .unwrap()
+        .expect("config must be loaded");
+    assert_eq!(config.mcp_servers.len(), 2);
+    assert!(config.mcp_servers.contains_key("sqlite"));
+    assert_eq!(config.mcp_servers["sqlite"].command, "uvx");
+    assert_eq!(config.mcp_servers["sqlite"].env.get("DEBUG").unwrap(), "1");
+    assert!(config.mcp_servers["disabled_server"].disabled);
+
+    let bridges = config.instantiate_bridges(Some(tmp.path().to_path_buf()));
+    // Disabled server is skipped
+    assert_eq!(bridges.len(), 1);
+    assert_eq!(bridges[0].0, "sqlite");
+}

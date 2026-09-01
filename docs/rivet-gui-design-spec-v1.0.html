@@ -1,0 +1,1361 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<meta name="description" content="Rivet GUI Design Specification v1.0 — a calm, observable cognitive work environment for epistemically governed agent workflows." />
+<title>Rivet GUI Design Specification v1.0</title>
+
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wdth,wght@12..96,75..100,200..800&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+
+:root{
+  --bg:#050505;
+  --bg-raised:#090909;
+  --bg-soft:#0d0d0d;
+  --ink:#f1f0e9;
+  --ink-2:#cbc9c0;
+  --muted:#8b8981;
+  --muted-2:#62615b;
+  --line:rgba(255,255,255,.105);
+  --line-soft:rgba(255,255,255,.058);
+  --solid:#efeee8;
+  --good:#8aa68e;
+  --warn:#b89a66;
+  --bad:#ad7474;
+  --steel:#8997a1;
+
+  --font-ui:"Bricolage Grotesque",system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  --font-mono:"IBM Plex Mono","SFMono-Regular",Consolas,monospace;
+
+  --ui-wght:430;
+  --ui-wdth:98;
+  --ui-opsz:15;
+  --active-wght:570;
+  --title-wght:640;
+  --display-wght:690;
+
+  --r-sm:8px;
+  --r-md:12px;
+  --r-lg:18px;
+  --shadow:0 26px 90px rgba(0,0,0,.48);
+
+  --motion-instant:120ms;
+  --motion-fast:180ms;
+  --motion-ui:260ms;
+  --motion-panel:420ms;
+  --motion-scene:760ms;
+}
+*{box-sizing:border-box}
+html{background:var(--bg);scroll-behavior:smooth}
+body{
+  margin:0;
+  color:var(--ink);
+  background:
+    radial-gradient(1000px 620px at 72% -12%,rgba(255,255,255,.042),transparent 58%),
+    radial-gradient(760px 500px at 0% 38%,rgba(255,255,255,.02),transparent 63%),
+    var(--bg);
+  font-family:var(--font-ui);
+  font-variation-settings:"wght" var(--ui-wght),"wdth" var(--ui-wdth),"opsz" var(--ui-opsz);
+  font-size:15px;
+  line-height:1.58;
+  letter-spacing:-.007em;
+  text-rendering:optimizeLegibility;
+}
+body:before{
+  content:"";
+  position:fixed;inset:0;pointer-events:none;opacity:.13;
+  background-image:
+    linear-gradient(rgba(255,255,255,.017) 1px,transparent 1px),
+    linear-gradient(90deg,rgba(255,255,255,.014) 1px,transparent 1px);
+  background-size:56px 56px;
+  mask-image:linear-gradient(to bottom,rgba(0,0,0,.72),transparent 88%);
+}
+a{color:inherit;text-underline-offset:3px;text-decoration-color:#555}
+a:hover{text-decoration-color:#aaa}
+button,input,select{font:inherit}
+code,.mono,pre{font-family:var(--font-mono)}
+::selection{background:#eee;color:#111}
+
+.shell{max-width:1240px;margin:0 auto;padding:0 34px 100px}
+.top{
+  position:sticky;top:0;z-index:50;
+  margin:0 -34px;padding:0 34px;
+  border-bottom:1px solid var(--line-soft);
+  background:rgba(5,5,5,.83);
+  backdrop-filter:blur(18px);
+}
+.topin{max-width:1240px;margin:auto;height:54px;display:flex;align-items:center;justify-content:space-between;gap:18px}
+.brand{display:flex;align-items:center;gap:9px;font-variation-settings:"wght" 610,"wdth" 98,"opsz" 14}
+.mark{width:16px;height:16px;border:1px solid #ddd;border-radius:50%;position:relative;flex:0 0 auto}
+.mark:after{content:"";position:absolute;width:4px;height:4px;left:5px;top:5px;background:#e9e8e1;border-radius:50%}
+.meta{font:10px/1 var(--font-mono);letter-spacing:.07em;color:var(--muted)}
+.nav{display:flex;gap:16px;overflow:auto;white-space:nowrap;scrollbar-width:none}
+.nav::-webkit-scrollbar{display:none}
+.nav a{font:10px/1 var(--font-mono);text-decoration:none;color:#77756e}
+.nav a:hover{color:#ddd}
+
+.hero{padding:84px 0 64px;border-bottom:1px solid var(--line)}
+.kicker{
+  font:500 10px/1 var(--font-mono);
+  letter-spacing:.16em;text-transform:uppercase;color:#77756e;
+}
+h1,h2,h3,h4{margin:0;font-family:var(--font-ui);font-style:normal}
+.hero h1{
+  margin:20px 0 24px;
+  font-size:clamp(3.4rem,7.8vw,7.7rem);
+  line-height:.88;
+  letter-spacing:-.067em;
+  font-variation-settings:"wght" 690,"wdth" 96,"opsz" 92;
+  max-width:1030px;
+}
+.hero .sub{
+  max-width:880px;color:var(--ink-2);
+  font-size:clamp(1.05rem,2vw,1.38rem);
+  line-height:1.48;
+  font-variation-settings:"wght" 430,"wdth" 98,"opsz" 18;
+}
+.mantra{display:flex;gap:8px;flex-wrap:wrap;margin-top:30px}
+.mantra span{
+  border:1px solid var(--line);border-radius:999px;
+  padding:7px 10px;
+  font:500 9px/1 var(--font-mono);
+  color:#9c9a92;
+}
+.lock{
+  display:inline-flex;align-items:center;gap:7px;
+  padding:6px 9px;border:1px solid var(--line);border-radius:999px;
+  font:500 9px/1 var(--font-mono);letter-spacing:.09em;text-transform:uppercase;color:#a9a79f;
+}
+.lock:before{content:"";width:5px;height:5px;border-radius:50%;background:#b6b4ad}
+.provisional:before{background:var(--warn)}
+
+section{padding:64px 0;border-bottom:1px solid var(--line)}
+section h2{
+  font-size:clamp(2rem,4vw,3.6rem);
+  line-height:.98;letter-spacing:-.045em;
+  font-variation-settings:"wght" 640,"wdth" 97,"opsz" 54;
+  max-width:940px;
+}
+section h3{
+  margin-top:32px;font-size:1.16rem;letter-spacing:-.022em;
+  font-variation-settings:"wght" 590,"wdth" 98,"opsz" 22;
+}
+.lead{
+  max-width:880px;color:#c2c0b8;font-size:1.04rem;line-height:1.62;margin:16px 0 0;
+}
+.quote{
+  max-width:930px;margin:26px 0 0;
+  font-size:clamp(1.55rem,3.2vw,2.65rem);line-height:1.08;letter-spacing:-.04em;
+  font-variation-settings:"wght" 560,"wdth" 97,"opsz" 42;
+}
+.small{font-size:12px;color:var(--muted)}
+.note{
+  margin-top:20px;padding:14px 0 0;border-top:1px solid var(--line-soft);
+  max-width:900px;color:#99978f;font-size:12px;
+}
+.cols2{display:grid;grid-template-columns:1fr 1fr;gap:28px;margin-top:26px}
+.cols3{display:grid;grid-template-columns:repeat(3,1fr);gap:22px;margin-top:26px}
+.card{
+  border-top:1px solid var(--line);
+  padding:16px 2px 0;
+}
+.card h3{margin:0 0 7px}
+.card p,.card li{color:#adaba3}
+.card ul{padding-left:18px}
+.rulelist{margin-top:25px;border-top:1px solid var(--line)}
+.rule{
+  display:grid;grid-template-columns:52px minmax(0,1fr);gap:14px;
+  padding:16px 0;border-bottom:1px solid var(--line-soft);
+}
+.rule .n{font:500 9px/1.3 var(--font-mono);color:#66645f;padding-top:4px}
+.rule strong{display:block;font-variation-settings:"wght" 590,"wdth" 98,"opsz" 16}
+.rule span{display:block;color:#aaa8a0;margin-top:3px}
+table{width:100%;border-collapse:collapse;margin-top:24px}
+th,td{padding:12px 10px;border-bottom:1px solid var(--line-soft);text-align:left;vertical-align:top}
+th{font:500 9px/1.25 var(--font-mono);letter-spacing:.1em;text-transform:uppercase;color:#74726c}
+td{font-size:13px;color:#b8b6ae}
+td strong{color:#e2e1da}
+pre{
+  margin:20px 0 0;padding:18px 20px;
+  background:#080808;border:1px solid var(--line);border-radius:var(--r-md);
+  color:#c7c5bd;font-size:12px;line-height:1.58;overflow:auto;
+}
+
+/* Reference prototype */
+.prototype{
+  margin-top:30px;
+  min-height:720px;
+  border:1px solid rgba(255,255,255,.145);
+  border-radius:22px;overflow:hidden;background:#030303;box-shadow:var(--shadow);
+  position:relative;
+}
+.prototype:before{
+  content:"";position:absolute;inset:0;pointer-events:none;
+  background:
+    radial-gradient(650px 420px at 68% -12%,rgba(255,255,255,.04),transparent 60%),
+    radial-gradient(380px 380px at -4% 80%,rgba(255,255,255,.02),transparent 66%);
+}
+.pbar{
+  height:52px;border-bottom:1px solid var(--line-soft);
+  padding:0 15px;display:flex;align-items:center;justify-content:space-between;
+  position:relative;z-index:2;background:rgba(4,4,4,.73);backdrop-filter:blur(14px);
+}
+.pbrand{display:flex;align-items:center;gap:9px;font-variation-settings:"wght" 620,"wdth" 98,"opsz" 14}
+.pcontrols{display:flex;gap:7px;align-items:center;color:#777}
+.micro{
+  padding:5px 8px;border:1px solid var(--line);border-radius:999px;
+  font:500 9px/1 var(--font-mono);color:#86847d;
+}
+.pbody{
+  position:relative;z-index:1;
+  display:grid;grid-template-columns:52px minmax(0,1fr);
+  min-height:668px;
+}
+.edge{
+  border-right:1px solid var(--line-soft);
+  display:flex;flex-direction:column;align-items:center;gap:9px;padding:12px 0;
+}
+.edge span{width:32px;height:32px;border-radius:8px;position:relative}
+.edge span:after{content:"";position:absolute;inset:10px;border:1px solid #5d5c56;border-radius:4px}
+.edge span.on{background:#0d0d0d;border:1px solid var(--line)}
+.edge span.on:after{border-color:#d6d5ce}
+.stage{position:relative;overflow:hidden}
+.stageInner{max-width:830px;margin:0 auto;padding:46px 30px 150px}
+.turn{margin-bottom:38px}
+.role{font:500 9px/1 var(--font-mono);letter-spacing:.13em;color:#686761;text-transform:uppercase;margin-bottom:9px}
+.userPrompt{
+  max-width:690px;font-size:1.23rem;line-height:1.4;letter-spacing:-.025em;
+  font-variation-settings:"wght" 500,"wdth" 98,"opsz" 22;
+}
+.rivetIntro{color:#aaa89f;max-width:690px;margin-bottom:18px}
+.run{
+  margin-top:18px;
+  border-top:1px solid rgba(255,255,255,.13);
+  border-bottom:1px solid var(--line-soft);
+  padding:19px 0 16px;
+}
+.runhead{display:flex;align-items:center;justify-content:space-between;gap:14px}
+.runid{font:500 9px/1 var(--font-mono);letter-spacing:.11em;color:#706f68}
+.liveDot{
+  display:inline-block;width:6px;height:6px;border-radius:50%;background:#e7e6df;
+  margin-right:7px;box-shadow:0 0 0 5px rgba(255,255,255,.025);
+}
+
+.focusObject{
+  min-height:168px;position:relative;
+  transition:min-height var(--motion-panel) cubic-bezier(.2,.8,.2,1);
+}
+.phaseLabel{
+  font:500 9px/1 var(--font-mono);letter-spacing:.12em;text-transform:uppercase;color:#88867f;
+  margin-bottom:12px;
+}
+.focusTitle{
+  max-width:680px;
+  font-size:clamp(1.65rem,3vw,2.45rem);line-height:1.06;letter-spacing:-.038em;
+  font-variation-settings:"wght" 590,"wdth" 97,"opsz" 38;
+}
+.focusText{
+  max-width:650px;margin-top:12px;color:#aeadA5;font-size:14px;line-height:1.55;
+}
+.focusMeta{
+  display:flex;gap:8px;flex-wrap:wrap;margin-top:16px;
+  font:500 9px/1 var(--font-mono);color:#77756e;
+}
+.focusMeta span{padding:5px 7px;border:1px solid var(--line-soft);border-radius:7px}
+.apertureBtn{
+  margin-top:16px;border:0;background:transparent;color:#a3a198;padding:0;cursor:pointer;
+  font:500 9px/1 var(--font-mono);text-decoration:underline;text-underline-offset:4px;text-decoration-color:#484742;
+}
+.apertureBtn:hover{color:#eee;text-decoration-color:#aaa}
+.aperture{
+  max-height:0;opacity:0;overflow:hidden;
+  transition:max-height var(--motion-panel) cubic-bezier(.2,.8,.2,1),opacity var(--motion-ui) ease;
+}
+.aperture.open{max-height:220px;opacity:1}
+.apertureInner{
+  margin-top:17px;padding-top:15px;border-top:1px solid var(--line-soft);
+  display:grid;grid-template-columns:115px minmax(0,1fr);gap:8px 14px;
+  font-size:12px;
+}
+.apertureInner dt{font:500 9px/1.4 var(--font-mono);color:#65645e}
+.apertureInner dd{margin:0;color:#9f9d95}
+.peripheral{
+  display:flex;align-items:center;justify-content:space-between;gap:16px;
+  margin-top:24px;padding-top:13px;border-top:1px solid var(--line-soft);
+}
+.hardState{display:flex;gap:14px;align-items:center;min-width:0}
+.hsLabel{font:500 8px/1 var(--font-mono);letter-spacing:.1em;color:#5d5c56;white-space:nowrap}
+.hsItems{display:flex;gap:12px;min-width:0}
+.hsItem{font:500 9px/1 var(--font-mono);color:#75736c;white-space:nowrap}
+.hsItem strong{font-weight:500;color:#a3a198}
+.hsItem.changed strong{color:#b7c7b9}
+.praxisMini{font:500 9px/1 var(--font-mono);color:#73716a;white-space:nowrap}
+.praxisMini strong{font-weight:500;color:#a8a69f}
+
+.receipt{
+  display:none;border-top:1px solid var(--line);padding:16px 0 2px;
+}
+.receipt.show{display:block}
+.receiptMain{display:flex;align-items:flex-start;justify-content:space-between;gap:20px}
+.receiptTitle{font-variation-settings:"wght" 580,"wdth" 98,"opsz" 20}
+.receiptMeta{font:500 9px/1.6 var(--font-mono);color:#73716a;text-align:right}
+
+.demoControls{
+  position:absolute;left:50%;bottom:20px;transform:translateX(-50%);
+  width:min(760px,calc(100% - 90px));
+  border:1px solid rgba(255,255,255,.13);border-radius:15px;
+  background:rgba(10,10,10,.9);backdrop-filter:blur(15px);
+  padding:8px 10px;display:flex;align-items:center;justify-content:space-between;gap:12px;
+  box-shadow:0 14px 48px rgba(0,0,0,.42);
+}
+.demoControls .left{font:500 9px/1 var(--font-mono);color:#68665f}
+.demoControls .buttons{display:flex;gap:6px}
+.demoControls button{
+  background:#0b0b0b;color:#a6a49c;border:1px solid var(--line);border-radius:8px;
+  padding:7px 9px;cursor:pointer;font:500 9px/1 var(--font-mono);
+}
+.demoControls button:hover{color:#fff;border-color:rgba(255,255,255,.24)}
+.demoControls button.primary{background:#e8e7e0;color:#111;border-color:#e8e7e0}
+
+.stateLegend{display:grid;grid-template-columns:repeat(2,1fr);gap:12px;margin-top:24px}
+.stateDemo{padding:14px;border:1px solid var(--line);border-radius:12px;background:#080808}
+.stateDemo .tag{font:500 8px/1 var(--font-mono);letter-spacing:.1em;color:#666;margin-bottom:8px}
+.stateDemo .sample{font-size:14px}
+.stateDemo.hard{border-style:solid}
+.stateDemo.soft{border-style:dashed;opacity:.72}
+.stateDemo.verify .sample{color:#b7c7b9}
+.stateDemo.block .sample{color:#c6ab7d}
+
+.typographyShow{
+  margin-top:28px;padding:30px 0;border-top:1px solid var(--line);border-bottom:1px solid var(--line);
+}
+.typeHero{
+  font-size:clamp(3rem,7vw,7rem);line-height:.88;letter-spacing:-.065em;
+  font-variation-settings:"wght" 690,"wdth" 94,"opsz" 90;
+}
+.typeRows{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-top:28px}
+.typeRow{border-top:1px solid var(--line-soft);padding-top:10px}
+.typeRow b{display:block;margin-bottom:5px}
+.typeRow span{font:500 9px/1.45 var(--font-mono);color:#68665f}
+.noItalic{
+  margin-top:20px;color:#a7a59d;max-width:780px;
+  padding-left:14px;border-left:1px dashed #5f5e58;
+}
+.tokenGrid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-top:20px}
+.swatch{border-top:1px solid var(--line);padding-top:10px}
+.swatch i{display:block;width:100%;height:48px;border-radius:9px;border:1px solid var(--line);margin-bottom:8px}
+.swatch b{font:500 9px/1 var(--font-mono);color:#a3a198}
+.swatch small{display:block;margin-top:4px;color:#68665f;font:500 8px/1.4 var(--font-mono)}
+
+.refList{margin-top:20px;display:grid;gap:10px}
+.ref{
+  display:grid;grid-template-columns:140px 1fr;gap:14px;
+  padding:12px 0;border-bottom:1px solid var(--line-soft);
+}
+.ref b{font:500 9px/1.4 var(--font-mono);color:#77756e}
+.ref span{color:#aaa8a0;font-size:12px}
+.ref a{color:#d2d0c8}
+
+footer{padding:42px 0;color:#66645f;font:500 9px/1.6 var(--font-mono)}
+
+@media(max-width:900px){
+  .shell{padding:0 20px 70px}
+  .top{margin:0 -20px;padding:0 20px}
+  .nav{display:none}
+  .cols2,.cols3{grid-template-columns:1fr}
+  .typeRows,.tokenGrid{grid-template-columns:1fr 1fr}
+  .pbody{grid-template-columns:44px 1fr}
+  .stageInner{padding:38px 22px 145px}
+  .peripheral{align-items:flex-start;flex-direction:column}
+  .hsItems{flex-wrap:wrap}
+  .demoControls{width:calc(100% - 68px)}
+  .stateLegend{grid-template-columns:1fr}
+  .ref{grid-template-columns:1fr;gap:4px}
+}
+@media(max-width:620px){
+  .hero{padding-top:62px}
+  .pcontrols .micro:nth-child(1){display:none}
+  .edge{display:none}
+  .pbody{grid-template-columns:1fr}
+  .flowStep b{writing-mode:vertical-rl;height:46px}
+  .typeRows,.tokenGrid{grid-template-columns:1fr}
+  .demoControls{width:calc(100% - 30px)}
+}
+@media(prefers-reduced-motion:reduce){
+  html{scroll-behavior:auto}
+  *,*:before,*:after{animation:none!important;transition-duration:1ms!important;transition-delay:0ms!important}
+}
+
+/* v1.0 live-shell correction: prototype must look like the product, not a design-demo controller */
+.pbar{
+  height:54px;
+  padding:0 14px 0 16px;
+  display:grid;
+  grid-template-columns:minmax(0,1fr) auto;
+  gap:14px;
+}
+.projectCluster,.productControls,.composerTools,.composerRight{display:flex;align-items:center;gap:7px}
+.projectButton,.iconButton,.modelButton,.attachButton,.sendButton,.ghostButton{
+  border:1px solid var(--line);
+  background:#0a0a0a;
+  color:#aaa8a0;
+  height:30px;
+  border-radius:8px;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  cursor:pointer;
+}
+.projectButton{padding:0 10px;gap:8px;font-size:11px;font-variation-settings:"wght" 560,"wdth" 98,"opsz" 13}
+.projectButton .repo{color:#e2e1da}
+.projectButton .branch{font:500 9px/1 var(--font-mono);color:#77756e}
+.iconButton,.attachButton,.sendButton{width:30px;padding:0}
+.iconButton svg,.attachButton svg,.sendButton svg{width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:1.7}
+.modelButton{
+  padding:0 10px;
+  gap:7px;
+  font:500 9px/1 var(--font-mono);
+  color:#9a9891;
+}
+.modelButton strong{font-weight:500;color:#d3d1ca}
+.productStatus{
+  font:500 9px/1 var(--font-mono);
+  color:#77756e;
+  display:flex;align-items:center;gap:6px;
+}
+.productStatus .dot{width:5px;height:5px;border-radius:50%;background:#d7d6cf}
+.edge{
+  padding-top:10px;
+  gap:8px;
+}
+.edge span{cursor:pointer}
+.edge span:nth-child(2):before,.edge span:nth-child(3):before{
+  content:"";
+  position:absolute;left:15px;top:15px;width:2px;height:2px;background:#777;border-radius:50%;
+}
+.edge span:nth-child(2):after{border-radius:50%}
+.edge span:nth-child(3):after{border-radius:2px;transform:rotate(45deg)}
+.stageInner{padding-bottom:170px}
+.userPrompt{
+  white-space:pre-wrap;
+  font-size:1.19rem;
+  line-height:1.48;
+  font-variation-settings:"wght" 470,"wdth" 98,"opsz" 20;
+}
+.rivetLead{
+  color:#c4c2ba;
+  max-width:700px;
+  font-size:15px;
+  line-height:1.58;
+  margin:0 0 18px;
+}
+.liveRun{
+  border-top:1px solid var(--line);
+  padding-top:13px;
+}
+.liveRunHeader{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:16px;
+  margin-bottom:8px;
+}
+.liveRunHeader .name{
+  font:500 9px/1 var(--font-mono);
+  letter-spacing:.11em;
+  text-transform:uppercase;
+  color:#73716b;
+  display:flex;align-items:center;gap:7px;
+}
+.liveRunHeader .name .liveDot{margin:0}
+.runMeta{
+  display:flex;gap:10px;align-items:center;
+  font:500 8px/1 var(--font-mono);color:#5f5e58;
+}
+.activityStream{
+  position:relative;
+  margin-top:4px;
+}
+.activityStream:before{
+  content:"";
+  position:absolute;
+  left:5px;top:10px;bottom:11px;
+  width:1px;background:#24231f;
+}
+.activityRow{
+  position:relative;
+  display:grid;
+  grid-template-columns:12px 98px minmax(0,1fr) auto;
+  gap:10px;
+  align-items:baseline;
+  padding:7px 0;
+  min-height:30px;
+  transition:opacity var(--motion-ui) ease,transform var(--motion-ui) ease;
+}
+.activityRow .eventDot{
+  width:7px;height:7px;border-radius:50%;
+  margin-left:2px;position:relative;z-index:2;
+  background:#43423d;border:1px solid #55534d;
+}
+.activityRow .kind{
+  font:500 8px/1.35 var(--font-mono);
+  letter-spacing:.06em;
+  text-transform:uppercase;
+  color:#64635d;
+  white-space:nowrap;
+}
+.activityRow .eventBody{
+  color:#7e7c75;
+  min-width:0;
+  font-size:12.5px;
+  line-height:1.46;
+}
+.activityRow .eventBody code{
+  font:500 10px/1.4 var(--font-mono);
+  background:transparent;padding:0;color:#9b9991;
+}
+.activityRow .eventMeta{
+  font:500 8px/1 var(--font-mono);
+  color:#55544f;
+  white-space:nowrap;
+}
+.activityRow.active{
+  padding-top:11px;padding-bottom:11px;
+}
+.activityRow.active .eventDot{
+  background:#efeee8;border-color:#efeee8;
+  box-shadow:0 0 0 5px rgba(255,255,255,.032);
+}
+.activityRow.active .kind{color:#b8b6ae}
+.activityRow.active .eventBody{
+  color:#d2d0c8;
+  font-size:15px;
+  line-height:1.5;
+}
+.activityRow.active .eventMeta{color:#7c7a73}
+.activityRow.done .eventDot{background:#77756e;border-color:#77756e}
+.activityRow.tool .eventBody{
+  font-family:var(--font-mono);
+  font-size:10px;
+  color:#8e8c84;
+}
+.activityRow.tool.active .eventBody{
+  font-size:11px;
+  color:#bebcb4;
+}
+.activityRow.state .eventBody strong{color:#b8c7ba;font-weight:560}
+.activityRow.praxis .eventBody strong{color:#b8c7ba;font-weight:560}
+.activityRow.future{display:none}
+.activityInspect{
+  margin:8px 0 0 22px;
+  border:0;background:transparent;color:#77756e;padding:0;
+  font:500 8px/1 var(--font-mono);
+  cursor:pointer;text-decoration:underline;text-underline-offset:4px;text-decoration-color:#3f3e39;
+}
+.activityInspect:hover{color:#cccac2;text-decoration-color:#777}
+.runAperture{
+  margin:12px 0 0 22px;
+  max-height:0;overflow:hidden;opacity:0;
+  transition:max-height var(--motion-panel) cubic-bezier(.2,.8,.2,1),opacity var(--motion-ui) ease;
+}
+.runAperture.open{max-height:240px;opacity:1}
+.runAperture .apertureInner{margin-top:0}
+.composer{
+  position:absolute;
+  left:50%;
+  bottom:18px;
+  transform:translateX(-50%);
+  width:min(780px,calc(100% - 82px));
+  border:1px solid rgba(255,255,255,.15);
+  background:rgba(10,10,10,.94);
+  backdrop-filter:blur(18px);
+  border-radius:16px;
+  padding:9px 10px 8px;
+  box-shadow:0 18px 65px rgba(0,0,0,.5);
+}
+.composer textarea{
+  width:100%;
+  min-height:46px;
+  max-height:130px;
+  resize:none;
+  border:0;
+  outline:0;
+  background:transparent;
+  color:#e3e2db;
+  padding:6px 7px 8px;
+  font-family:var(--font-ui);
+  font-size:14px;
+  line-height:1.45;
+  font-variation-settings:"wght" 440,"wdth" 98,"opsz" 15;
+}
+.composer textarea::placeholder{color:#66645f}
+.composerBar{
+  display:flex;justify-content:space-between;align-items:center;gap:12px;
+  border-top:1px solid var(--line-soft);
+  padding-top:7px;
+}
+.attachButton{border-color:transparent;background:transparent}
+.attachButton:hover,.iconButton:hover{color:#eee;border-color:var(--line)}
+.contextChip{
+  height:26px;display:inline-flex;align-items:center;
+  padding:0 8px;border:1px solid var(--line-soft);border-radius:7px;
+  font:500 8px/1 var(--font-mono);color:#6c6a64;
+}
+.sendButton{
+  border-radius:50%;
+  background:#e9e8e1;color:#111;border-color:#e9e8e1;
+}
+.sendButton:hover{background:#fff;color:#111}
+.runReceipt{
+  margin-top:12px;padding-top:12px;border-top:1px solid var(--line-soft);
+  display:none;
+}
+.runReceipt.show{display:block}
+.runReceiptTitle{
+  font-size:14px;
+  font-variation-settings:"wght" 560,"wdth" 98,"opsz" 16;
+}
+.runReceiptMeta{margin-top:5px;font:500 8px/1.6 var(--font-mono);color:#6f6d66}
+.settingsPopover{
+  position:absolute;right:16px;top:46px;z-index:10;
+  width:230px;padding:10px;
+  border:1px solid var(--line);
+  border-radius:12px;background:#0a0a0a;box-shadow:0 20px 50px rgba(0,0,0,.45);
+  display:none;
+}
+.settingsPopover.open{display:block}
+.settingsRow{display:flex;justify-content:space-between;gap:12px;padding:8px 3px;border-bottom:1px solid var(--line-soft);font-size:11px;color:#9c9a92}
+.settingsRow:last-child{border-bottom:0}
+.settingsRow span:last-child{font:500 8px/1 var(--font-mono);color:#6e6c66}
+
+.modelPopover{
+  position:absolute;right:86px;top:46px;z-index:10;
+  width:250px;padding:9px;border:1px solid var(--line);border-radius:12px;
+  background:#0a0a0a;box-shadow:0 20px 50px rgba(0,0,0,.45);display:none
+}
+.modelPopover.open{display:block}
+.modelItem{padding:9px;border-radius:8px;font-size:11px;color:#aaa}
+.modelItem.active{background:#111;color:#e1e0d9}
+.modelItem:hover{background:#111}
+.modelItem small{display:block;margin-top:3px;font:500 8px/1 var(--font-mono);color:#64625d}
+
+.projectPopover{
+  position:absolute;left:14px;top:46px;z-index:10;
+  width:250px;padding:9px;border:1px solid var(--line);border-radius:12px;background:#0a0a0a;box-shadow:0 20px 50px rgba(0,0,0,.45);display:none
+}
+.projectPopover.open{display:block}
+.projectItem{padding:9px;border-radius:8px;font-size:11px;color:#aaa}
+.projectItem:hover{background:#111}
+.projectItem small{display:block;margin-top:3px;font:500 8px/1 var(--font-mono);color:#64625d}
+@media(max-width:760px){
+  .productControls .productStatus,.projectButton .branch{display:none}
+  .activityRow{grid-template-columns:12px 72px minmax(0,1fr)}
+  .activityRow .eventMeta{display:none}
+  .composer{width:calc(100% - 28px)}
+}
+
+</style>
+</head>
+
+<body>
+<div class="shell">
+
+<div class="top">
+  <div class="topin">
+    <div class="brand"><span class="mark"></span>Rivet <span class="meta">GUI SPEC 1.0</span></div>
+    <nav class="nav">
+      <a href="#thesis">Thesis</a>
+      <a href="#attention">Attention</a>
+      <a href="#prototype">Prototype</a>
+      <a href="#type">Type</a>
+      <a href="#spatial">Space</a>
+      <a href="#run">Live Run</a>
+      <a href="#state">State</a>
+      <a href="#motion">Motion</a>
+      <a href="#artifacts">Artifacts</a>
+      <a href="#implementation">Build</a>
+      <a href="#acceptance">Acceptance</a>
+    </nav>
+  </div>
+</div>
+
+<header class="hero">
+  <div class="kicker">Rivet Product Design · Normative GUI Constitution · 1 September 2026</div>
+  <h1>Calm surface.<br>Visible cognition.</h1>
+  <p class="sub">Rivet is not an IDE with an agent attached and not a dashboard of internal machinery. It is a cognitive work environment: the user gives intent, observes consequential reasoning and verification as they unfold, and can inspect epistemic depth without losing the primary task.</p>
+  <div class="mantra">
+    <span>ONE FOCAL PROCESS</span>
+    <span>PERIPHERAL STATE</span>
+    <span>DETAIL ON DEMAND</span>
+    <span>CODE IS SECONDARY</span>
+    <span>CERTAINTY REDUCES ENTROPY</span>
+    <span>BRICOLAGE GROTESQUE</span>
+  </div>
+</header>
+
+<section id="thesis">
+  <span class="lock">Locked</span>
+  <h2>1. Product thesis</h2>
+  <p class="lead">Rivet’s architecture is richer than a chat transcript, but the interface must not mirror every subsystem as a panel. The UI is a projection layer over Rivet state. Its job is to preserve user orientation while making the process observable.</p>
+  <p class="quote">Expose the flow of cognition without exposing the complexity of the machinery.</p>
+
+  <div class="rulelist">
+    <div class="rule"><div class="n">01</div><div><strong>The task owns the center.</strong><span>The primary visual locus is the user’s current objective and Rivet’s current consequential step — never a code diff, tool log, state dashboard or model token stream.</span></div></div>
+    <div class="rule"><div class="n">02</div><div><strong>Conversation is the surface; the active run is the instrument.</strong><span>At rest Rivet is spacious and conversational. During work, the active turn becomes a structured Live Run object. It does not open seven permanent panels.</span></div></div>
+    <div class="rule"><div class="n">03</div><div><strong>System architecture does not dictate screen architecture.</strong><span>Goal Compiler, Noesis, ACCP, Praxis and the Harness remain real subsystems; the UI composes their meaningful events into one attention hierarchy.</span></div></div>
+    <div class="rule"><div class="n">04</div><div><strong>Transparency is selective observability.</strong><span>Rivet exposes goals, hypotheses, commitments, contradictions, verification predicates, authority gates and state transitions — not private chain-of-thought or raw hidden prompts.</span></div></div>
+    <div class="rule"><div class="n">05</div><div><strong>Implementation is consequence, not identity.</strong><span>Files, patches and diffs are immediately inspectable but secondary. A run returns visually to Praxis and Hard State after an action.</span></div></div>
+    <div class="rule"><div class="n">06</div><div><strong>Persistent objects change in place.</strong><span>Goals, obligations, contradictions and verified claims retain identity across phases and revisions. Do not create message spam for state that can mutate in place.</span></div></div>
+  </div>
+</section>
+
+<section id="research">
+  <span class="lock provisional">Evidence-informed</span>
+  <h2>2. Research constraints</h2>
+  <p class="lead">These are design constraints inferred from HCI and typography research. They support the interaction strategy; they do not empirically validate Rivet’s exact layout.</p>
+  <table>
+    <thead><tr><th>Evidence</th><th>Design implication</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Visual complexity affects aesthetic judgment extremely quickly.</strong> Tuch et al. found complexity effects within tens of milliseconds.</td><td>Do not make the opening state information-dense. Complexity must unfold only when work creates a reason for it.</td></tr>
+      <tr><td><strong>HUD complexity can produce attentional tunneling.</strong> Higher visual complexity reduced peripheral target detection in an automotive HUD study.</td><td>A “cockpit” is not a wall of telemetry. The active step gets one dominant locus; status remains peripheral.</td></tr>
+      <tr><td><strong>Incremental transparency can become distracting.</strong> Users may prefer more transparency in theory but find continuous incremental feedback disruptive in use.</td><td>Show consequential transitions, not every internal event. Summarize noisy events into stable typed updates.</td></tr>
+      <tr><td><strong>Dynamic highlighting is attention-hungry under cognitive load.</strong></td><td>Only one region may carry high-salience motion at a time. Background state cannot pulse competitively.</td></tr>
+      <tr><td><strong>Motion is a powerful grouping cue.</strong> Common-fate research shows coordinated motion can communicate grouping strongly.</td><td>Use shared trajectories to communicate causal continuity: reasoning → verification → state commit.</td></tr>
+      <tr><td><strong>Thin weights reduce legibility; dark polarity has readability costs.</strong></td><td>Dark-first typography must carry enough ink. Body text begins around 425–475 equivalent weight; never “luxury thin.”</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section id="attention">
+  <span class="lock">Locked</span>
+  <h2>3. Attention constitution</h2>
+  <p class="lead">Attention is a finite product resource. Every contrast increase, movement, badge, border and live number spends it.</p>
+
+  <div class="rulelist">
+    <div class="rule"><div class="n">A1</div><div><strong>One dominant locus.</strong><span>At any moment the interface MUST have one visually dominant work object. If two things demand immediate reading, hierarchy has failed.</span></div></div>
+    <div class="rule"><div class="n">A2</div><div><strong>Past recedes; future whispers.</strong><span>Completed phases become low-contrast landmarks. Upcoming phases are visible only enough to preserve orientation. The current phase owns readable detail.</span></div></div>
+    <div class="rule"><div class="n">A3</div><div><strong>Peripheral state stays peripheral.</strong><span>Open obligations, verification progress and authoritative state remain glanceable, but may not visually outrank the focal process unless they block the user.</span></div></div>
+    <div class="rule"><div class="n">A4</div><div><strong>Motion spends attention.</strong><span>Only the focal event may use high-salience motion. A second animated region is allowed only when it is causally coupled to the first transition.</span></div></div>
+    <div class="rule"><div class="n">A5</div><div><strong>Detail follows intent.</strong><span>Evidence graphs, full Cognitive View, raw receipts and implementation artifacts remain closed until the user inspects the relevant object.</span></div></div>
+    <div class="rule"><div class="n">A6</div><div><strong>No false calm.</strong><span>Minimalism MUST NOT hide blockers, authority requests, contradictions or verification failure. Critical epistemic events may temporarily take focus because they change what work is valid.</span></div></div>
+  </div>
+</section>
+
+<section id="prototype">
+  <span class="lock">Product reference</span>
+  <h2>4. Live product shell</h2>
+  <p class="lead">This reference is the product surface itself — not a slideshow controller. The user writes a raw prompt, attaches context, chooses a model, sends, and watches Rivet’s real event stream. Goal compilation, reasoning summaries, tool calls, Praxis and Hard State mutations appear as live activity; the interface never asks the user to advance a phase manually.</p>
+
+  <div class="prototype" id="prototypeApp">
+    <div class="pbar">
+      <div class="projectCluster">
+        <button class="projectButton" id="projectButton" type="button" aria-label="Project selector">
+          <span class="repo">rivet</span>
+          <span class="branch">main · rev 412</span>
+          <span>⌄</span>
+        </button>
+        <div class="projectPopover" id="projectPopover">
+          <div class="projectItem">rivet <small>~/dev/rivet · main · rev 412</small></div>
+          <div class="projectItem">Open another project… <small>local workspace</small></div>
+          <div class="projectItem">Project settings <small>permissions · indexing · environment</small></div>
+        </div>
+      </div>
+
+      <div class="productControls">
+        <div class="productStatus"><span class="dot"></span><span id="runtimeStatus">live</span></div>
+        <button class="modelButton" id="modelButton" type="button" aria-label="Model selector"><strong>GPT-5.6</strong><span>OpenAI</span><span>⌄</span></button>
+        <div class="modelPopover" id="modelPopover">
+          <div class="modelItem active">GPT-5.6 <small>OpenAI · current model</small></div>
+          <div class="modelItem">Choose another model… <small>provider / model / reasoning profile</small></div>
+          <div class="modelItem">Model settings <small>defaults · routing · limits</small></div>
+        </div>
+        <button class="iconButton" id="settingsButton" type="button" aria-label="Project settings">
+          <svg viewBox="0 0 24 24"><path d="M12 8.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7Z"/><path d="M19 12a7.3 7.3 0 0 0-.1-1l2-1.6-2-3.4-2.4 1a8.3 8.3 0 0 0-1.8-1L14.4 3h-4.8l-.4 3a8.3 8.3 0 0 0-1.8 1L5 6 3 9.4 5.1 11a7.3 7.3 0 0 0 0 2L3 14.6 5 18l2.4-1a8.3 8.3 0 0 0 1.8 1l.4 3h4.8l.4-3a8.3 8.3 0 0 0 1.8-1l2.4 1 2-3.4-2.1-1.6a7.3 7.3 0 0 0 .1-1Z"/></svg>
+        </button>
+        <div class="settingsPopover" id="settingsPopover">
+          <div class="settingsRow"><span>Project trust</span><span>TRUSTED</span></div>
+          <div class="settingsRow"><span>Workspace writes</span><span>ASK ON RISK</span></div>
+          <div class="settingsRow"><span>Network</span><span>ALLOWED</span></div>
+          <div class="settingsRow"><span>Reasoning surface</span><span>TYPED SUMMARY</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="pbody">
+      <aside class="edge" aria-label="Primary navigation">
+        <span class="on" title="Conversation"></span>
+        <span title="State"></span>
+        <span title="History"></span>
+      </aside>
+
+      <main class="stage">
+        <div class="stageInner">
+          <div class="turn">
+            <div class="role">You</div>
+            <div class="userPrompt">Fix the auth refresh regression.
+Don’t widen scope beyond the current repository revision.</div>
+          </div>
+
+          <div class="turn">
+            <div class="role">Rivet</div>
+            <p class="rivetLead">I’ll reproduce the failure, bind the acceptance boundary, and keep implementation secondary until the cause survives verification.</p>
+
+            <div class="liveRun" id="liveRun" aria-live="polite">
+              <div class="liveRunHeader">
+                <div class="name"><span class="liveDot"></span><span id="runLabel">live run</span></div>
+                <div class="runMeta"><span>8F2A</span><span id="elapsed">00:02</span></div>
+              </div>
+
+              <div class="activityStream" id="activityStream"></div>
+
+              <button class="activityInspect" id="activityInspect" type="button">inspect active event</button>
+              <div class="runAperture" id="runAperture">
+                <dl class="apertureInner" id="runApertureInner"></dl>
+              </div>
+
+              <div class="runReceipt" id="runReceipt">
+                <div class="runReceiptTitle">Authentication regression verified.</div>
+                <div class="runReceiptMeta">Praxis 3/3 · O4 OPEN → VERIFIED · C17 PROVISIONAL → VERIFIED · 2 files changed · implementation available on inspect</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="composer">
+          <textarea id="composerInput" placeholder="Message Rivet…">Check the exact-expiry edge case too.</textarea>
+          <div class="composerBar">
+            <div class="composerTools">
+              <button class="attachButton" id="attachButton" type="button" aria-label="Attach files">
+                <svg viewBox="0 0 24 24"><path d="m8.5 12.5 6-6a3 3 0 0 1 4.2 4.2l-8 8a5 5 0 1 1-7.1-7.1l8.1-8.1"/><path d="m6.7 14.3 7.2-7.2"/></svg>
+              </button>
+              <span class="contextChip">repo:rivet</span>
+              <span class="contextChip">rev:412</span>
+            </div>
+            <div class="composerRight">
+              <span class="meta" id="composerMode">steer run</span>
+              <button class="sendButton" id="sendButton" type="button" aria-label="Send">
+                <svg viewBox="0 0 24 24"><path d="M12 19V5"/><path d="m6.5 10.5 5.5-5.5 5.5 5.5"/></svg>
+              </button>
+            </div>
+          </div>
+        </div>
+      </main>
+    </div>
+  </div>
+
+  <p class="note"><b>Product rule:</b> the raw user prompt is never replaced by Rivet’s interpretation. Interpretation belongs to the run. “Reasoning” is a typed, user-facing commitment/summary surface — selected hypothesis, unknown, contradiction, decision boundary — never private chain-of-thought.</p>
+</section>
+
+<section id="type">
+  <span class="lock">Typeface locked</span>
+  <h2>5. Typography — Bricolage Grotesque</h2>
+  <p class="lead">Bricolage Grotesque is Rivet’s primary voice. Its variable weight, width and optical-size axes let one family move from quiet small UI to highly distinctive display without introducing a second brand personality. Technical identifiers and receipts use IBM Plex Mono.</p>
+
+  <div class="typographyShow">
+    <div class="typeHero">Cognition<br>has depth.</div>
+    <div class="typeRows">
+      <div class="typeRow"><b style="font-variation-settings:'wght' 430,'wdth' 98,'opsz' 14">Body / reasoning</b><span>430 · wdth 98 · opsz 14–18<br>14–16 px · 1.5–1.62 line-height</span></div>
+      <div class="typeRow"><b style="font-variation-settings:'wght' 570,'wdth' 98,'opsz' 18">Active state</b><span>560–590 · wdth 98<br>phase / focal subhead</span></div>
+      <div class="typeRow"><b style="font-variation-settings:'wght' 640,'wdth' 97,'opsz' 48">Section / object title</b><span>620–660 · wdth 96–98<br>24–58 px</span></div>
+      <div class="typeRow"><b style="font-variation-settings:'wght' 690,'wdth' 94,'opsz' 92">Display / brand moment</b><span>670–720 · wdth 92–97<br>48 px+</span></div>
+    </div>
+    <div class="noItalic"><b>No synthetic italic.</b> Bricolage Grotesque’s locked role is upright. Soft Workspace and provisional cognition are distinguished through lower contrast, lighter border authority, measured weight reduction and subtle motion — not fake oblique text.</div>
+  </div>
+
+  <table>
+    <thead><tr><th>Role</th><th>Typeface</th><th>Rule</th></tr></thead>
+    <tbody>
+      <tr><td>Conversation / reasoning summary</td><td><strong>Bricolage Grotesque</strong></td><td>430–470; small optical size; generous leading. Long text must remain calm.</td></tr>
+      <tr><td>Current phase / focal object</td><td><strong>Bricolage Grotesque</strong></td><td>560–610; visual emphasis by weight first, not color.</td></tr>
+      <tr><td>Display / section identity</td><td><strong>Bricolage Grotesque</strong></td><td>640–720; larger optical size; width may tighten modestly.</td></tr>
+      <tr><td>IDs / revision / receipts / measurements</td><td><strong>IBM Plex Mono</strong></td><td>400–600. Never use mono for paragraphs simply to look technical.</td></tr>
+      <tr><td>Provisional / soft cognition</td><td><strong>Bricolage Grotesque upright</strong></td><td>No italic. Reduce salience via tone, weight, border style and spatial depth.</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section id="spatial">
+  <span class="lock">Locked</span>
+  <h2>6. Spatial architecture</h2>
+  <p class="lead">Rivet has four spatial states, not four permanent panels. The shell remains a real application at every state: project/model controls, settings, raw composer, attachments and steering never disappear merely because a run is active.</p>
+  <table>
+    <thead><tr><th>State</th><th>Primary geometry</th><th>What is visible</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Idle</strong></td><td>Conversation Stage + quiet Project Edge + composer</td><td>Project identity, recent durable work, user input. No cognition dashboard.</td></tr>
+      <tr><td><strong>Active Run</strong></td><td>Active turn unfolds vertically in place</td><td>Live activity spine: consequential cognitive events, tool calls, Praxis updates and state mutations. Only the newest meaningful event has high salience.</td></tr>
+      <tr><td><strong>Inspect</strong></td><td>Selected object expands from its current location</td><td>Cognitive Aperture: evidence, counter-signals, scope, provenance, relevant receipts.</td></tr>
+      <tr><td><strong>Complete</strong></td><td>Active Run collapses to a durable receipt</td><td>Outcome, verification scope, authoritative mutations, implementation summary.</td></tr>
+    </tbody>
+  </table>
+
+  <pre>Project Edge        Conversation / Work Stage
+   52 px             ┌─────────────────────────────────────┐
+                     │ user intent                         │
+                     │                                     │
+                     │ Rivet conclusion / active run       │
+                     │   live activity spine               │
+                     │   [ ACTIVE EVENT ]                  │
+                     │   tool · praxis · state deltas      │
+                     │                                     │
+                     │ composer                            │
+                     └─────────────────────────────────────┘
+
+No permanent diff column.
+No permanent Noesis panel.
+No permanent "reasoning dashboard".
+Depth appears when the user asks for depth.</pre>
+</section>
+
+<section id="run">
+  <span class="lock">Signature primitive</span>
+  <h2>7. Live Run — event stream, not phase UI</h2>
+  <p class="lead">Prompt, Goal Compiler, Noesis, tools, ACCP, Praxis and Hard State are runtime concepts. They are not forced into equal-width tabs or a manually advanced wizard. The product renders a chronological stream of <em>consequential events</em>; the newest meaningful event becomes the focal row while older events compress into quiet history.</p>
+
+  <table>
+    <thead><tr><th>Event class</th><th>What the user sees live</th><th>What remains hidden / collapsed</th></tr></thead>
+    <tbody>
+      <tr><td><strong>User prompt</strong></td><td>The exact text the user sent, preserving line breaks and attachments.</td><td>No rewritten “intent” substituted in its place.</td></tr>
+      <tr><td><strong>Goal compile</strong></td><td>Objective / obligation delta when it materially affects the run.</td><td>Internal bookkeeping noise and giant goal trees.</td></tr>
+      <tr><td><strong>Reasoning summary</strong></td><td>Selected hypothesis, contradiction, unknown, decision boundary or scope decision.</td><td>Private chain-of-thought and token-by-token narration.</td></tr>
+      <tr><td><strong>Tool call</strong></td><td>Tool identity, useful target and concise result: <span class="mono">search · auth refresh · 5 matches</span>, <span class="mono">cargo test · auth_refresh · PASS</span>.</td><td>Raw stdout/stderr unless inspected.</td></tr>
+      <tr><td><strong>Action</strong></td><td>What changed and scope: “2 files modified · narrow repair”.</td><td>Full diff unless requested.</td></tr>
+      <tr><td><strong>Praxis</strong></td><td>Verification predicate, progress and result, scoped to what it actually proves.</td><td>Generic “tests passed” claims.</td></tr>
+      <tr><td><strong>Hard State mutation</strong></td><td>Authoritative delta: <span class="mono">O4 OPEN → VERIFIED</span>.</td><td>No silent mutation.</td></tr>
+      <tr><td><strong>Authority / blocker</strong></td><td>Moves to focus immediately when user input is required.</td><td>Cannot remain buried in history.</td></tr>
+    </tbody>
+  </table>
+
+  <h3>Event compression</h3>
+  <p class="lead">Do not render every low-level operation. Repeated reads/searches may collapse under one expandable tool event. The rule is not “show everything”; it is “never hide a meaningful change in what Rivet believes, does, verifies or is authorized to claim.”</p>
+</section>
+
+<section id="state">
+  <span class="lock">Locked semantics</span>
+  <h2>8. Epistemic visual grammar</h2>
+  <p class="lead">Authority is communicated with stability and structure, not saturation. Hard State and Soft Workspace must be visually distinguishable before the user reads their labels.</p>
+
+  <div class="stateLegend">
+    <div class="stateDemo hard"><div class="tag">HARD / AUTHORITATIVE</div><div class="sample">O4 · authentication invariant · VERIFIED</div></div>
+    <div class="stateDemo soft"><div class="tag">SOFT / PROVISIONAL</div><div class="sample">H3 · boundary comparison likely primary cause · 0.81</div></div>
+    <div class="stateDemo verify"><div class="tag">VERIFICATION</div><div class="sample">V3 · exact-expiry adversarial case · PASS</div></div>
+    <div class="stateDemo block"><div class="tag">BLOCKER / AUTHORITY</div><div class="sample">User authority required · supported clock-skew behavior</div></div>
+  </div>
+
+  <table>
+    <thead><tr><th>Semantic class</th><th>Visual treatment</th><th>Motion</th></tr></thead>
+    <tbody>
+      <tr><td>Hard / authoritative</td><td>Solid edge, stable placement, crisp text, explicit revision/scope when inspected.</td><td>None after commit.</td></tr>
+      <tr><td>Soft / provisional</td><td>Lower contrast or dashed boundary; upright type; confidence only when calibrated/meaningful.</td><td>Very low-amplitude breathing allowed while active.</td></tr>
+      <tr><td>Unknown</td><td>Neutral unresolved marker, never warning-yellow by default.</td><td>None.</td></tr>
+      <tr><td>Contradiction</td><td>Small red semantic cue; competing claims visually separated.</td><td>One brief interruption, then still.</td></tr>
+      <tr><td>Praxis running</td><td>Predicate-scoped progress with one moving indicator.</td><td>Directional / settling motion only in the active verification object.</td></tr>
+      <tr><td>Blocked / authority required</td><td>Amber perimeter/label, moves into focal position only when user input is required.</td><td>Ambient motion dampens.</td></tr>
+      <tr><td>Completed</td><td>Compact receipt, less geometry than the active run.</td><td>Settles to stillness.</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section id="aperture">
+  <span class="lock">Signature primitive</span>
+  <h2>9. Cognitive Aperture — depth on intent</h2>
+  <p class="lead">Any consequential claim, decision, obligation or state transition can be inspected in place. The Aperture is not a generic right sidebar; it is the selected object revealing its epistemic depth.</p>
+  <pre>VISIBLE OBJECT
+"Boundary comparison is primary cause"
+          │ inspect
+          ▼
+Cognitive Aperture
+  status ............ PROVISIONAL
+  supports .......... E12, E14, E15
+  counter-signal .... E16
+  unknown ........... exact fixture behavior
+  scope ............. auth/refresh @ rev 412
+  obligation ........ O4
+  verification ...... V3 pending
+  provenance ........ run 8F2A
+
+Esc / click-away → returns to the same object and the same spatial location.</pre>
+  <p class="note">Aperture content is a projection of typed commitments, evidence and state — never a claim that the UI exposes hidden model cognition.</p>
+</section>
+
+<section id="motion">
+  <span class="lock">Locked principles</span>
+  <h2>10. Motion — causality, not decoration</h2>
+  <p class="quote">When certainty increases, visual entropy should decrease.</p>
+  <table>
+    <thead><tr><th>Transition</th><th>Behavior</th><th>Duration target</th></tr></thead>
+    <tbody>
+      <tr><td>Hover / press</td><td>Minimal tactile response; no bounce.</td><td>120–180 ms</td></tr>
+      <tr><td>Focus content change</td><td>Old content recedes; new content settles in the same locus.</td><td>180–300 ms</td></tr>
+      <tr><td>Aperture open</td><td>Selected object gains depth in place; siblings dim slightly.</td><td>320–460 ms</td></tr>
+      <tr><td>Reason → Praxis</td><td>Shared trajectory / continuity cue communicates causal handoff.</td><td>420–700 ms</td></tr>
+      <tr><td>Praxis → Hard State</td><td>Verification result settles; authoritative delta appears once.</td><td>420–700 ms</td></tr>
+      <tr><td>Complete</td><td>Geometry collapses; motion ceases.</td><td>500–850 ms</td></tr>
+    </tbody>
+  </table>
+  <p class="lead">Ambient Rivet Field is optional and extremely low salience. It may react to global runtime state, but it MUST NOT become a screensaver. Reduced-motion mode removes spatial animation and preserves meaning through instantaneous state change, opacity and text.</p>
+</section>
+
+<section id="color">
+  <span class="lock">Locked palette</span>
+  <h2>11. Color — black is the material</h2>
+  <p class="lead">Most hierarchy is created by typography, spacing, geometry and motion. Semantic colors occupy small areas and never become decorative branding gradients.</p>
+  <div class="tokenGrid">
+    <div class="swatch"><i style="background:#050505"></i><b>#050505</b><small>foundation</small></div>
+    <div class="swatch"><i style="background:#0d0d0d"></i><b>#0D0D0D</b><small>raised / active surface</small></div>
+    <div class="swatch"><i style="background:#f1f0e9"></i><b>#F1F0E9</b><small>warm primary ink</small></div>
+    <div class="swatch"><i style="background:#8b8981"></i><b>#8B8981</b><small>secondary / peripheral</small></div>
+    <div class="swatch"><i style="background:#8aa68e"></i><b>#8AA68E</b><small>verified / pass</small></div>
+    <div class="swatch"><i style="background:#b89a66"></i><b>#B89A66</b><small>blocked / authority</small></div>
+    <div class="swatch"><i style="background:#ad7474"></i><b>#AD7474</b><small>contradiction / fail</small></div>
+    <div class="swatch"><i style="background:#8997a1"></i><b>#8997A1</b><small>informational / environment</small></div>
+  </div>
+</section>
+
+<section id="artifacts">
+  <span class="lock">Locked hierarchy</span>
+  <h2>12. Code and artifacts — one layer deeper</h2>
+  <p class="lead">Rivet may produce code, but code-writing is not the product thesis. The Stage communicates intent, diagnosis, action scope, verification and resulting state. Implementation detail is available immediately without occupying the main visual hierarchy.</p>
+  <div class="cols3">
+    <div class="card"><h3>Action summary</h3><p>Main Stage: “Applied a narrow repair to refresh validation · 2 files.” This is enough unless implementation detail is the current user task.</p></div>
+    <div class="card"><h3>Implementation Studio</h3><p>On inspect: diff, file history, semantic patch, raw tool output, rollback, generated artifacts and provenance.</p></div>
+    <div class="card"><h3>Return path</h3><p>Closing Implementation Studio returns to the exact Live Run object and phase. Attention then continues toward Praxis, not toward the diff.</p></div>
+  </div>
+</section>
+
+<section id="controls">
+  <span class="lock">Interaction</span>
+  <h2>13. Controls and steering</h2>
+  <table>
+    <thead><tr><th>Control</th><th>Behavior</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Composer</strong></td><td>Quiet while idle. During a run it becomes “Steer Rivet…” rather than disappearing. The user can redirect, add evidence or cancel.</td></tr>
+      <tr><td><strong>⌘K</strong></td><td>Universal palette: project, session, model/provider, state inspection, artifacts, settings, receipts, history.</td></tr>
+      <tr><td><strong>Model capsule</strong></td><td>One compact control. Provider/model/reasoning mode one layer deep. No parameter cockpit in the header.</td></tr>
+      <tr><td><strong>Cancel</strong></td><td>Always immediate and keyboard-accessible. Cancellation state must reflect actual harness atomicity; UI cannot pretend rollback happened.</td></tr>
+      <tr><td><strong>History</strong></td><td>Revision/state evolution, not only chat transcript. The user can inspect what was authoritative at a prior revision.</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section id="accessibility">
+  <span class="lock">Required</span>
+  <h2>14. Accessibility and robustness</h2>
+  <div class="cols2">
+    <div class="card"><h3>Typography & contrast</h3><p>Do not use Thin/Light UI text. Verify WCAG contrast for primary and secondary text on actual dark surfaces. UI must survive text scaling without hiding state or controls.</p></div>
+    <div class="card"><h3>Motion</h3><p>Respect <span class="mono">prefers-reduced-motion</span>. No meaning may depend solely on spatial animation. Motion-triggered interfaces must remain fully understandable when transitions become instantaneous.</p></div>
+    <div class="card"><h3>Keyboard</h3><p>Every inspectable epistemic object is focusable. Aperture, run navigation, cancel, history, palette and implementation inspection must work without a pointer.</p></div>
+    <div class="card"><h3>Color independence</h3><p>Verified, provisional, blocked and contradictory states must differ through text, geometry or border treatment in addition to color.</p></div>
+  </div>
+</section>
+
+<section id="implementation">
+  <span class="lock">Agent contract</span>
+  <h2>15. Implementation contract</h2>
+  <p class="lead">The frontend is a replaceable projection substrate. Visual truth must derive from authoritative RivetService / Harness events. The view never invents epistemic status.</p>
+
+  <pre>Rivet Harness / RivetService
+        │
+        ├── UserIntentReceived
+        ├── GoalCompiled
+        ├── ObligationChanged
+        ├── RunPhaseChanged
+        ├── CognitiveProjectionUpdated
+        ├── ContradictionChanged
+        ├── ActionStarted / ActionCompleted
+        ├── PraxisVerificationUpdate
+        ├── HardStateDelta
+        ├── AuthorityPrompt
+        ├── Cancelled
+        └── Completed
+                │
+                ▼
+        UI Projection Store
+                │
+        ┌───────┴────────────────┐
+        ▼                        ▼
+  semantic view state      Motion Orchestrator
+                                │
+                                ▼
+                     causally-scoped transitions</pre>
+
+  <h3>Frontend stack</h3>
+  <table>
+    <thead><tr><th>Layer</th><th>Decision</th><th>Constraint</th></tr></thead>
+    <tbody>
+      <tr><td>Desktop shell</td><td><strong>Tauri</strong></td><td>Thin wrapper; Harness remains Rust authority.</td></tr>
+      <tr><td>View</td><td><strong>React + TypeScript</strong></td><td>No architectural truth in components.</td></tr>
+      <tr><td>Build</td><td><strong>Vite</strong></td><td>Small, direct, desktop-friendly.</td></tr>
+      <tr><td>Styling</td><td><strong>CSS variables + Tailwind utilities if useful</strong></td><td>Tailwind/shadcn visual defaults are forbidden.</td></tr>
+      <tr><td>Behavior primitives</td><td><strong>Radix / Base UI / source primitives</strong></td><td>Borrow accessibility behavior, not visual identity.</td></tr>
+      <tr><td>Motion</td><td><strong>GSAP</strong></td><td>One orchestrator; timelines driven by UiEvent/state transitions.</td></tr>
+      <tr><td>Projection state</td><td><strong>Zustand or equivalent small store</strong></td><td>State store mirrors projection, never authority.</td></tr>
+      <tr><td>Code rendering</td><td><strong>Shiki</strong></td><td>Implementation Studio only unless code is explicitly the user’s focal object.</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section id="responsive">
+  <span class="lock">Behavioral</span>
+  <h2>16. Responsive rules</h2>
+  <p class="lead">Do not preserve desktop panel geometry by crushing it. Preserve the attention model.</p>
+  <table>
+    <thead><tr><th>Width</th><th>Rule</th></tr></thead>
+    <tbody>
+      <tr><td>≥ 1180 px</td><td>Full Stage, Project Edge, Live Run peripheral strip, contextual Aperture expansion.</td></tr>
+      <tr><td>820–1179 px</td><td>Project Edge narrows; peripheral status may wrap below focus. Same focal hierarchy.</td></tr>
+      <tr><td>&lt; 820 px</td><td>Project Edge can disappear behind command palette. Phase rail may become horizontally scrollable or compressed. Aperture expands vertically in place.</td></tr>
+      <tr><td>&lt; 560 px</td><td>Optimize for inspection and steering, not dense implementation review. Implementation Studio may become separate full-screen surface.</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section id="antipatterns">
+  <span class="lock">Automatic rejection</span>
+  <h2>17. Anti-patterns</h2>
+  <div class="cols2">
+    <div class="card"><h3>Information pornography</h3><p>Goal Compiler card + Noesis card + Reasoning card + Praxis card + Hard State card all visible at once. This mirrors architecture instead of designing an interface.</p></div>
+    <div class="card"><h3>Generic agent shell</h3><p>Permanent project sidebar + chat + diff panel, with “Thinking…” spinner and code dominating every active turn.</p></div>
+    <div class="card"><h3>AI visual clichés</h3><p>Neon violet/cyan gradients, particle brains, excessive glass, floating pill forests, glowing borders, decorative waveform cognition.</p></div>
+    <div class="card"><h3>False transparency</h3><p>Token-by-token hidden reasoning theatre, fake confidence, frontend-invented states or raw traces presented as epistemic truth.</p></div>
+    <div class="card"><h3>False minimalism</h3><p>Hiding verification failure, blockers or state changes to preserve an empty black screen. Calmness does not outrank correctness.</p></div>
+    <div class="card"><h3>Motion spam</h3><p>Multiple pulsing regions, decorative ambient animation during critical work, or transitions that delay input/cancel/verification visibility.</p></div>
+  </div>
+</section>
+
+<section id="acceptance">
+  <span class="lock">Ship gate</span>
+  <h2>18. Design acceptance criteria</h2>
+
+  <h3>Ten-second test</h3>
+  <p class="lead">A new user looking at an active run for ten seconds should be able to answer:</p>
+  <div class="rulelist">
+    <div class="rule"><div class="n">01</div><div><strong>What is Rivet trying to accomplish?</strong></div></div>
+    <div class="rule"><div class="n">02</div><div><strong>What phase of work is active now?</strong></div></div>
+    <div class="rule"><div class="n">03</div><div><strong>What is the single most important current finding / action / verification?</strong></div></div>
+    <div class="rule"><div class="n">04</div><div><strong>Is completion blocked, and if so by what?</strong></div></div>
+    <div class="rule"><div class="n">05</div><div><strong>Has authoritative state actually changed yet?</strong></div></div>
+  </div>
+
+  <h3>Prototype MUST include</h3>
+  <pre>01  Bricolage Grotesque + IBM Plex Mono typography system
+02  black-first Stage with restrained Project Edge
+03  idle conversation state with low visual complexity
+04  one Live Run object that changes in place
+05  raw user prompt preserved exactly as sent
+06  real composer controls: attach, send/steer, model selector, project context and project settings
+07  chronological live event stream: goal compile, reasoning summary, tool calls, actions, Praxis and Hard State mutations
+08  only the newest consequential event receives high visual salience
+09  selected typed reasoning commitments — never raw private chain-of-thought
+10  visible tool calls with concise target/result; raw output on inspect
+11  visible authoritative state mutation when it actually commits
+12  Cognitive Aperture that expands from the inspected event
+13  code/diff hidden behind implementation inspection by default
+14  completed run collapses into a compact reopenable receipt
+15  keyboard navigation, immediate cancel, reduced-motion fallback and all state derived from real RivetService / UiEvent contracts</pre>
+
+  <h3>Failure conditions</h3>
+  <p class="lead">Reject the implementation if the eye does not know where to look; if the user’s raw prompt is replaced by an interpreted card; if the shell loses basic product controls such as project/model/settings/attachments/send; if code occupies the center by default; if meaningful tool calls are invisible; if the user must scan multiple simultaneous subsystem panels to understand progress; if Hard/Soft authority is visually ambiguous; if “done” can appear before required Praxis obligations close; or if removing animation removes meaning.</p>
+</section>
+
+<section id="sources">
+  <span class="lock provisional">Research basis</span>
+  <h2>19. References used for v1.0</h2>
+  <div class="refList">
+    <div class="ref"><b>Bricolage Grotesque</b><span>Atelier Triay — expressive variable grotesk with weight, width and optical-size axes; smaller optical sizes become more neutral. <a href="https://github.com/ateliertriay/bricolage" target="_blank" rel="noreferrer">Source ↗</a></span></div>
+    <div class="ref"><b>Visual complexity</b><span>Tuch et al., 2012 — visual complexity and prototypicality affect aesthetic first impressions at very short exposure durations. <a href="https://doi.org/10.1016/j.ijhcs.2012.06.003" target="_blank" rel="noreferrer">DOI ↗</a></span></div>
+    <div class="ref"><b>HUD attention</b><span>Lee et al., Human Factors — visual complexity of automotive HUDs modulates attentional tunneling. <a href="https://pubmed.ncbi.nlm.nih.gov/37287261/" target="_blank" rel="noreferrer">PubMed ↗</a></span></div>
+    <div class="ref"><b>Progressive disclosure</b><span>Springer & Whittaker — incremental transparency can become distracting; motivates progressive disclosure for intelligent systems. <a href="https://arxiv.org/abs/1811.02164" target="_blank" rel="noreferrer">arXiv ↗</a></span></div>
+    <div class="ref"><b>Attention highlighting</b><span>Das et al., HCEye — dynamic highlighting remains attention-grabbing under cognitive load. <a href="https://arxiv.org/abs/2404.14232" target="_blank" rel="noreferrer">arXiv ↗</a></span></div>
+    <div class="ref"><b>Common fate</b><span>Chalbi et al. — coordinated motion is a strong visual grouping cue in animated transitions. <a href="https://arxiv.org/abs/1908.00661" target="_blank" rel="noreferrer">arXiv ↗</a></span></div>
+    <div class="ref"><b>Typeface grade</b><span>CHI 2023 — variable-font grade can adjust darkness without text reflow; study also reports light/dark polarity readability effects. <a href="https://doi.org/10.1145/3544548.3581552" target="_blank" rel="noreferrer">DOI ↗</a></span></div>
+    <div class="ref"><b>Typography</b><span>Apple HIG — avoid light weights for small UI text; minimize unnecessary typeface mixing. <a href="https://developer.apple.com/design/human-interface-guidelines/typography" target="_blank" rel="noreferrer">HIG ↗</a></span></div>
+    <div class="ref"><b>Reduced motion</b><span>W3C WCAG 2.2 guidance — motion animation triggered by interaction needs a disable path when nonessential. <a href="https://www.w3.org/WAI/WCAG22/Understanding/animation-from-interactions.html" target="_blank" rel="noreferrer">W3C ↗</a></span></div>
+  </div>
+  <p class="note">The exact Rivet spatial system and component geometry remain product design hypotheses. The cited work constrains attention, motion, typography and disclosure choices; it does not directly validate this specific agent interface.</p>
+</section>
+
+<section>
+  <span class="lock">Final position</span>
+  <h2>20. Rivet should feel like a precision cognitive machine.</h2>
+  <p class="quote">Not empty. Not noisy. Powerful enough to inspect, calm enough to think.</p>
+  <p class="lead">The signature is not a gradient, a sidebar or a diff viewer. It is the interaction grammar: one stable work locus, visible consequential cognition, peripheral epistemic awareness, evidence on demand, verification that closes the loop, and authoritative state that becomes quieter as it becomes more certain.</p>
+</section>
+
+<footer>Rivet GUI Design Specification · v1.0 · normative design constitution · 1 September 2026</footer>
+
+</div>
+
+<script>
+const events = [
+  {
+    kind:"goal", label:"Goal compile",
+    body:"Bound scope to rev 412 and opened obligation O4: reproduce + verify the refresh regression.",
+    meta:"00:03",
+    detail:[["OBJECTIVE","restore refresh-token boundary behavior"],["SCOPE","current repository revision"],["OBLIGATION","O4 · reproduce + verify"],["NON-GOAL","auth architecture rewrite"]]
+  },
+  {
+    kind:"tool", label:"Tool",
+    body:"search · refresh token expiry validation · 5 relevant matches",
+    meta:"00:05",
+    detail:[["TOOL","repository search"],["TARGET","refresh token expiry validation"],["RESULT","5 relevant matches"],["RAW OUTPUT","available on inspect"]]
+  },
+  {
+    kind:"reason", label:"Reasoning",
+    body:"The failing path localizes around exact-expiry comparison; clock skew remains a counter-signal.",
+    meta:"00:08",
+    detail:[["STATUS","PROVISIONAL"],["HYPOTHESIS","exact-expiry comparison is primary cause"],["SUPPORT","3 observations"],["COUNTER-SIGNAL","clock fixture behavior"]]
+  },
+  {
+    kind:"tool", label:"Tool",
+    body:"read · src/auth/refresh.rs + regression fixture · boundary semantics compared",
+    meta:"00:11",
+    detail:[["TOOL","file read"],["FILES","src/auth/refresh.rs · auth_refresh_regression"],["RESULT","boundary mismatch confirmed"],["SCOPE","auth refresh path"]]
+  },
+  {
+    kind:"action", label:"Action",
+    body:"Applied a narrow repair to refresh validation · 2 files changed · diff collapsed",
+    meta:"00:14",
+    detail:[["ACTION","semantic patch"],["FILES","2"],["REVERSIBLE","yes"],["IMPLEMENTATION","open on inspect"]]
+  },
+  {
+    kind:"tool", label:"Tool",
+    body:"cargo test · auth_refresh · 18/18 pass",
+    meta:"00:19",
+    detail:[["TOOL","cargo test"],["SUITE","auth_refresh"],["RESULT","18 / 18 PASS"],["PROVES","targeted regression predicate V1"]]
+  },
+  {
+    kind:"praxis", label:"Praxis",
+    body:"V1 PASS · V2 PASS · V3 exact-expiry adversarial case running",
+    meta:"00:22",
+    detail:[["V1","targeted regression · PASS"],["V2","workspace integrity · PASS"],["V3","exact-expiry adversarial · RUNNING"],["COMPLETION","blocked until V3 closes"]]
+  },
+  {
+    kind:"tool", label:"Tool",
+    body:"cargo test · exact_expiry_boundary · pass",
+    meta:"00:25",
+    detail:[["TOOL","cargo test"],["CASE","exact_expiry_boundary"],["RESULT","PASS"],["PREDICATE","V3 closed"]]
+  },
+  {
+    kind:"state", label:"Hard State",
+    body:"O4 <strong>OPEN → VERIFIED</strong> · C17 <strong>PROVISIONAL → VERIFIED</strong>",
+    meta:"00:26",
+    detail:[["O4","OPEN → VERIFIED"],["C17","PROVISIONAL → VERIFIED"],["SCOPE","auth refresh · rev 412"],["RECEIPT","run 8F2A"]]
+  }
+];
+
+let visible = 0;
+let timer = null;
+let sentSteer = false;
+const activityStream = document.getElementById("activityStream");
+const runAperture = document.getElementById("runAperture");
+const runApertureInner = document.getElementById("runApertureInner");
+const activityInspect = document.getElementById("activityInspect");
+const runReceipt = document.getElementById("runReceipt");
+const runLabel = document.getElementById("runLabel");
+const runtimeStatus = document.getElementById("runtimeStatus");
+const composerMode = document.getElementById("composerMode");
+const composerInput = document.getElementById("composerInput");
+const sendButton = document.getElementById("sendButton");
+const attachButton = document.getElementById("attachButton");
+const projectButton = document.getElementById("projectButton");
+const projectPopover = document.getElementById("projectPopover");
+const settingsButton = document.getElementById("settingsButton");
+const settingsPopover = document.getElementById("settingsPopover");
+const modelButton = document.getElementById("modelButton");
+const modelPopover = document.getElementById("modelPopover");
+
+function renderEvents(){
+  activityStream.innerHTML = events.map((e,i)=>{
+    const cls = i < visible-1 ? "done" : i === visible-1 ? "active" : "future";
+    return `<div class="activityRow ${e.kind} ${cls}" data-index="${i}">
+      <span class="eventDot"></span>
+      <span class="kind">${e.label}</span>
+      <span class="eventBody">${e.body}</span>
+      <span class="eventMeta">${e.meta}</span>
+    </div>`;
+  }).join("");
+  if(visible>0){
+    const e=events[visible-1];
+    runApertureInner.innerHTML=e.detail.map(([k,v])=>`<dt>${k}</dt><dd>${v}</dd>`).join("");
+  }
+}
+function setAperture(open){
+  runAperture.classList.toggle("open",open);
+  activityInspect.textContent=open ? "close inspection" : "inspect active event";
+}
+function advance(){
+  if(visible < events.length){
+    visible++;
+    setAperture(false);
+    renderEvents();
+    if(visible===events.length){
+      clearInterval(timer);
+      runtimeStatus.textContent="verified";
+      runLabel.textContent="run complete";
+      composerMode.textContent="message";
+      setTimeout(()=>runReceipt.classList.add("show"),500);
+    }
+  }
+}
+function startLive(){
+  visible=0;
+  runReceipt.classList.remove("show");
+  runtimeStatus.textContent="live";
+  runLabel.textContent="live run";
+  composerMode.textContent="steer run";
+  renderEvents();
+  advance();
+  clearInterval(timer);
+  timer=setInterval(advance,1700);
+}
+activityInspect.onclick=()=>setAperture(!runAperture.classList.contains("open"));
+sendButton.onclick=()=>{
+  const text=composerInput.value.trim();
+  if(!text) return;
+  sentSteer=true;
+  composerInput.value="";
+  composerInput.placeholder="Steer Rivet…";
+  const steer = document.createElement("div");
+  steer.className="activityRow active";
+  steer.innerHTML=`<span class="eventDot"></span><span class="kind">User steer</span><span class="eventBody">${text.replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]))}</span><span class="eventMeta">now</span>`;
+  [...activityStream.querySelectorAll(".activityRow.active")].forEach(x=>x.classList.remove("active"));
+  activityStream.appendChild(steer);
+  setTimeout(()=>{ steer.classList.remove("active"); steer.classList.add("done"); },1200);
+};
+attachButton.onclick=()=>{
+  const chip=document.createElement("span");
+  chip.className="contextChip";
+  chip.textContent="auth_trace.log";
+  attachButton.parentElement.appendChild(chip);
+};
+projectButton.onclick=()=>{
+  projectPopover.classList.toggle("open");
+  settingsPopover.classList.remove("open");
+};
+settingsButton.onclick=()=>{
+  settingsPopover.classList.toggle("open");
+  projectPopover.classList.remove("open");
+};
+modelButton.onclick=()=>{
+  modelPopover.classList.toggle("open");
+  projectPopover.classList.remove("open");
+  settingsPopover.classList.remove("open");
+};
+document.addEventListener("click",e=>{
+  if(!projectButton.contains(e.target) && !projectPopover.contains(e.target)) projectPopover.classList.remove("open");
+  if(!settingsButton.contains(e.target) && !settingsPopover.contains(e.target)) settingsPopover.classList.remove("open");
+  if(!modelButton.contains(e.target) && !modelPopover.contains(e.target)) modelPopover.classList.remove("open");
+});
+document.addEventListener("keydown",e=>{
+  if(e.key==="Escape"){
+    setAperture(false);
+    projectPopover.classList.remove("open");
+    settingsPopover.classList.remove("open");
+    modelPopover.classList.remove("open");
+  }
+});
+startLive();
+</script>
+</body>
+</html>

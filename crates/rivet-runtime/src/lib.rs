@@ -33,6 +33,8 @@ pub struct Runtime {
     executed_actions: Arc<Mutex<HashMap<String, CachedAction>>>,
     execution_lock: Arc<Mutex<()>>,
     command_output_limit: usize,
+    mcp_bridges: Arc<Mutex<HashMap<String, Arc<rivet_mcp::McpCapabilityBridge>>>>,
+    rollback_snapshots: Arc<Mutex<HashMap<PathBuf, Option<String>>>>,
 }
 
 #[derive(Clone)]
@@ -48,6 +50,8 @@ impl Runtime {
             executed_actions: Arc::new(Mutex::new(HashMap::new())),
             execution_lock: Arc::new(Mutex::new(())),
             command_output_limit: DEFAULT_MAX_COMMAND_OUTPUT_BYTES,
+            mcp_bridges: Arc::new(Mutex::new(HashMap::new())),
+            rollback_snapshots: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -58,6 +62,54 @@ impl Runtime {
     pub fn with_command_output_limit(mut self, limit: usize) -> Self {
         self.command_output_limit = limit.max(1);
         self
+    }
+
+    pub async fn register_mcp_bridge(
+        &self,
+        server_name: impl Into<String>,
+        bridge: Arc<rivet_mcp::McpCapabilityBridge>,
+    ) {
+        self.mcp_bridges
+            .lock()
+            .await
+            .insert(server_name.into(), bridge);
+    }
+
+    pub async fn record_snapshot_for(&self, path: &Path) {
+        let mut snapshots = self.rollback_snapshots.lock().await;
+        if snapshots.contains_key(path) {
+            return;
+        }
+        if path.exists() {
+            if let Ok(content) = tokio::fs::read_to_string(path).await {
+                snapshots.insert(path.to_path_buf(), Some(content));
+            }
+        } else {
+            snapshots.insert(path.to_path_buf(), None);
+        }
+    }
+
+    pub async fn rollback_all(&self) -> RivetResult<Vec<String>> {
+        let mut snapshots = self.rollback_snapshots.lock().await;
+        let mut restored = Vec::new();
+        for (path, original) in snapshots.drain() {
+            match original {
+                Some(content) => {
+                    if let Some(parent) = path.parent() {
+                        let _ = tokio::fs::create_dir_all(parent).await;
+                    }
+                    if tokio::fs::write(&path, content).await.is_ok() {
+                        restored.push(format!("restored: {}", path.display()));
+                    }
+                }
+                None => {
+                    if path.exists() && tokio::fs::remove_file(&path).await.is_ok() {
+                        restored.push(format!("deleted new file: {}", path.display()));
+                    }
+                }
+            }
+        }
+        Ok(restored)
     }
 
     /// Execute a command in the environment with a bounded wall-clock time.
@@ -147,6 +199,45 @@ impl Runtime {
         }
 
         let start = Instant::now();
+
+        // Check for external MCP capability bridge delegation
+        if proposal.capability.starts_with("mcp.") {
+            let parts: Vec<&str> = proposal.capability.splitn(3, '.').collect();
+            let server_name = if parts.len() >= 2 {
+                parts[1]
+            } else {
+                "default"
+            };
+            let bridge_opt = self.mcp_bridges.lock().await.get(server_name).cloned();
+            if let Some(bridge) = bridge_opt {
+                match bridge.execute_mcp_action(proposal).await {
+                    Ok((receipt, _obs)) => {
+                        self.executed_actions.lock().await.insert(
+                            identity,
+                            CachedAction {
+                                fingerprint,
+                                receipt: receipt.clone(),
+                            },
+                        );
+                        return Ok(receipt);
+                    }
+                    Err(e) => {
+                        return self
+                            .failed_receipt(proposal, start, format!("MCP execution failed: {e}"))
+                            .await;
+                    }
+                }
+            } else {
+                return self
+                    .failed_receipt(
+                        proposal,
+                        start,
+                        format!("MCP server '{server_name}' is not registered"),
+                    )
+                    .await;
+            }
+        }
+
         let result = match proposal.capability.as_str() {
             "file.read" => {
                 let path = match self.resolve_target(&proposal.target).await {
@@ -159,28 +250,77 @@ impl Runtime {
                 };
                 match tokio::fs::read_to_string(&path).await {
                     Ok(content) => {
-                        let truncated = content.len() > MAX_OBSERVATION_BYTES;
+                        let start_line = proposal
+                            .parameters
+                            .get("start_line")
+                            .and_then(|v| v.as_u64())
+                            .map(|v| v as usize);
+                        let end_line = proposal
+                            .parameters
+                            .get("end_line")
+                            .and_then(|v| v.as_u64())
+                            .map(|v| v as usize);
+
+                        let lines: Vec<&str> = content.lines().collect();
+                        let total_lines = lines.len();
+
+                        let (observed_text, s_line, e_line, is_sliced) = if let Some(s) = start_line
+                        {
+                            let s_idx = s.saturating_sub(1).min(total_lines);
+                            let e_idx = end_line.unwrap_or(total_lines).min(total_lines);
+                            if s_idx < e_idx && s_idx < total_lines {
+                                (lines[s_idx..e_idx].join("\n"), s_idx + 1, e_idx, true)
+                            } else {
+                                (String::new(), s, e_idx, true)
+                            }
+                        } else if let Some(e) = end_line {
+                            let e_idx = e.min(total_lines);
+                            (lines[0..e_idx].join("\n"), 1, e_idx, true)
+                        } else {
+                            (content.clone(), 1, total_lines, false)
+                        };
+
+                        let truncated = observed_text.len() > MAX_OBSERVATION_BYTES;
                         let observed = if truncated {
                             let mut end = MAX_OBSERVATION_BYTES;
-                            while !content.is_char_boundary(end) {
+                            while !observed_text.is_char_boundary(end) {
                                 end -= 1;
                             }
-                            content[..end].to_string()
+                            observed_text[..end].to_string()
                         } else {
-                            content.clone()
+                            observed_text
                         };
+
+                        let summary = if is_sliced {
+                            format!(
+                                "Read lines {}-{} of {} lines in {}{}",
+                                s_line,
+                                e_line,
+                                total_lines,
+                                proposal.target,
+                                if truncated { " (truncated)" } else { "" }
+                            )
+                        } else {
+                            format!(
+                                "Read {} bytes ({} lines) in {}{}",
+                                content.len(),
+                                total_lines,
+                                proposal.target,
+                                if truncated { " (truncated)" } else { "" }
+                            )
+                        };
+
                         (
                             true,
                             Some(0),
-                            format!(
-                                "Read {} bytes{}",
-                                content.len(),
-                                if truncated { " (truncated)" } else { "" }
-                            ),
+                            summary,
                             serde_json::json!({
                                 "kind": "file.read",
                                 "target": proposal.target,
                                 "content": observed,
+                                "start_line": s_line,
+                                "end_line": e_line,
+                                "total_lines": total_lines,
                                 "truncated": truncated,
                             }),
                         )
@@ -202,6 +342,7 @@ impl Runtime {
                             .await;
                     }
                 };
+                self.record_snapshot_for(&path).await;
                 let Some(content) = proposal.parameters.get("content").and_then(|v| v.as_str())
                 else {
                     return self
@@ -264,6 +405,9 @@ impl Runtime {
                 }
             }
             "semantic.patch" => {
+                if let Ok(resolved) = self.resolve_target(&proposal.target).await {
+                    self.record_snapshot_for(&resolved).await;
+                }
                 let operation = match proposal
                     .parameters
                     .get("operation")
@@ -324,6 +468,112 @@ impl Runtime {
                     ),
                 }
             }
+            "code.search" => {
+                let query = proposal
+                    .parameters
+                    .get("query")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(&proposal.target);
+                let is_regex = proposal
+                    .parameters
+                    .get("is_regex")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                let path_filter = proposal
+                    .parameters
+                    .get("path_filter")
+                    .and_then(|v| v.as_str());
+                let max_results = proposal
+                    .parameters
+                    .get("max_results")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(50) as usize;
+
+                let (matches, total, truncated) = self
+                    .perform_code_search(query, is_regex, path_filter, max_results)
+                    .await;
+                (
+                    true,
+                    Some(0),
+                    format!(
+                        "Found {} matches for '{}'{}",
+                        total,
+                        query,
+                        if truncated { " (truncated)" } else { "" }
+                    ),
+                    serde_json::json!({
+                        "kind": "code.search",
+                        "query": query,
+                        "matches": matches,
+                        "total_matches": total,
+                        "truncated": truncated,
+                    }),
+                )
+            }
+            "dir.list" => {
+                let target = proposal.target.trim();
+                let dir_path = if target.is_empty() || target == "." {
+                    self.working_dir.clone()
+                } else {
+                    match self.resolve_target(target).await {
+                        Ok(p) => p,
+                        Err(e) => {
+                            return self.failed_receipt(proposal, start, e.to_string()).await;
+                        }
+                    }
+                };
+                let max_entries = proposal
+                    .parameters
+                    .get("max_entries")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(100) as usize;
+
+                match self.perform_dir_list(&dir_path, max_entries).await {
+                    Ok((entries, total, truncated)) => (
+                        true,
+                        Some(0),
+                        format!(
+                            "Listed {} entries in '{}'{}",
+                            total,
+                            proposal.target,
+                            if truncated { " (truncated)" } else { "" }
+                        ),
+                        serde_json::json!({
+                            "kind": "dir.list",
+                            "target": proposal.target,
+                            "entries": entries,
+                            "total_entries": total,
+                            "truncated": truncated,
+                        }),
+                    ),
+                    Err(e) => (
+                        false,
+                        Some(1),
+                        format!("Directory listing failed: {e}"),
+                        serde_json::json!({ "kind": "dir.list.failed", "error": e.to_string() }),
+                    ),
+                }
+            }
+            "workspace.rollback" => match self.rollback_all().await {
+                Ok(restored) => (
+                    true,
+                    Some(0),
+                    format!("Rollback complete: {} items restored", restored.len()),
+                    serde_json::json!({
+                        "kind": "workspace.rollback",
+                        "restored_items": restored,
+                    }),
+                ),
+                Err(e) => (
+                    false,
+                    Some(1),
+                    format!("Rollback failed: {e}"),
+                    serde_json::json!({
+                        "kind": "workspace.rollback.failed",
+                        "error": e.to_string()
+                    }),
+                ),
+            },
             _ => (
                 false,
                 Some(1),
@@ -439,6 +689,137 @@ impl Runtime {
             return Err(RivetError::InvalidPath(target.into()));
         }
         Ok(candidate)
+    }
+
+    async fn perform_code_search(
+        &self,
+        query: &str,
+        is_regex: bool,
+        path_filter: Option<&str>,
+        max_results: usize,
+    ) -> (Vec<serde_json::Value>, usize, bool) {
+        let mut matches = Vec::new();
+        let mut total_matches = 0;
+        let mut truncated = false;
+
+        let re_pattern = if is_regex {
+            regex::Regex::new(query).ok()
+        } else {
+            None
+        };
+
+        let mut stack = vec![self.working_dir.clone()];
+        while let Some(dir) = stack.pop() {
+            let Ok(mut entries) = tokio::fs::read_dir(&dir).await else {
+                continue;
+            };
+            while let Ok(Some(entry)) = entries.next_entry().await {
+                let path = entry.path();
+                let file_name = entry.file_name().to_string_lossy().to_string();
+
+                // Skip hidden, build, and vendor directories
+                if file_name.starts_with('.')
+                    || file_name == "target"
+                    || file_name == "node_modules"
+                    || file_name == "vendor"
+                {
+                    continue;
+                }
+
+                if let Ok(file_type) = entry.file_type().await {
+                    if file_type.is_dir() {
+                        stack.push(path);
+                    } else if file_type.is_file() {
+                        let Ok(rel_path) = path.strip_prefix(&self.working_dir) else {
+                            continue;
+                        };
+                        let rel_str = rel_path.to_string_lossy().replace('\\', "/");
+
+                        if let Some(filter) = path_filter
+                            && !rel_str.contains(filter)
+                        {
+                            continue;
+                        }
+
+                        // Read and search file if size is reasonable (< 1 MB)
+                        if let Ok(metadata) = entry.metadata().await
+                            && metadata.len() > 1024 * 1024
+                        {
+                            continue;
+                        }
+
+                        if let Ok(content) = tokio::fs::read_to_string(&path).await {
+                            for (line_idx, line) in content.lines().enumerate() {
+                                let is_match = if let Some(ref re) = re_pattern {
+                                    re.is_match(line)
+                                } else {
+                                    line.contains(query)
+                                };
+
+                                if is_match {
+                                    total_matches += 1;
+                                    if matches.len() < max_results {
+                                        matches.push(serde_json::json!({
+                                            "file": rel_str,
+                                            "line": line_idx + 1,
+                                            "content": line.trim(),
+                                        }));
+                                    } else {
+                                        truncated = true;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        (matches, total_matches, truncated)
+    }
+
+    async fn perform_dir_list(
+        &self,
+        dir_path: &Path,
+        max_entries: usize,
+    ) -> RivetResult<(Vec<serde_json::Value>, usize, bool)> {
+        let mut entries = Vec::new();
+        let mut read_dir = tokio::fs::read_dir(dir_path).await.map_err(|e| {
+            RivetError::Runtime(format!(
+                "Cannot read directory '{}': {e}",
+                dir_path.display()
+            ))
+        })?;
+
+        let mut collected = Vec::new();
+        while let Ok(Some(entry)) = read_dir.next_entry().await {
+            let file_name = entry.file_name().to_string_lossy().to_string();
+            if file_name.starts_with('.') && file_name != ".gitignore" && file_name != ".rivet" {
+                continue;
+            }
+            let is_dir = entry.file_type().await.map(|t| t.is_dir()).unwrap_or(false);
+            let size = entry.metadata().await.map(|m| m.len()).unwrap_or(0);
+            collected.push((file_name, is_dir, size));
+        }
+
+        // Sort: directories first, then alphabetical
+        collected.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+
+        let total_count = collected.len();
+        let mut truncated = false;
+        for (name, is_dir, size_bytes) in collected {
+            if entries.len() < max_entries {
+                entries.push(serde_json::json!({
+                    "name": name,
+                    "is_dir": is_dir,
+                    "size_bytes": size_bytes,
+                }));
+            } else {
+                truncated = true;
+            }
+        }
+
+        Ok((entries, total_count, truncated))
     }
 }
 

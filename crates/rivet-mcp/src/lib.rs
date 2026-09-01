@@ -5,9 +5,11 @@
 //! executions into non-authoritative Observations and EvidenceRecords.
 
 pub mod bridge;
+pub mod config;
 pub mod schema;
 pub mod stdio;
 
 pub use bridge::{McpCapabilityBridge, McpCapabilityRegistration, McpObservation, McpTransport};
+pub use config::{McpConfigFile, McpServerConfig, McpServerStatusDto};
 pub use schema::{McpCallToolResult, McpContent, McpTool, McpToolsListResult};
 pub use stdio::StdioProcessTransport;

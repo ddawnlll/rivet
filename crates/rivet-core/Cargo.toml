@@ -28,4 +28,5 @@ async-trait = { workspace = true }
 [dev-dependencies]
 tempfile = { workspace = true }
 rivet-model-genai = { workspace = true }
+rivet-model-rig = { workspace = true }
 rivet-eval = { workspace = true }

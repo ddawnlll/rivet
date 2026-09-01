@@ -12,6 +12,7 @@ pub struct GenAiBackend {
     client: Client,
     endpoint: String,
     api_key_env: String,
+    api_key: Option<String>,
 }
 
 impl Default for GenAiBackend {
@@ -40,6 +41,16 @@ impl GenAiBackend {
             client: Client::new(),
             endpoint: endpoint.into(),
             api_key_env: api_key_env.into(),
+            api_key: None,
+        }
+    }
+
+    pub fn with_config(endpoint: impl Into<String>, api_key: Option<String>) -> Self {
+        Self {
+            client: Client::new(),
+            endpoint: endpoint.into(),
+            api_key_env: "OPENCODE_API_KEY".into(),
+            api_key,
         }
     }
 
@@ -48,6 +59,9 @@ impl GenAiBackend {
     }
 
     fn api_key(&self) -> RivetResult<String> {
+        if let Some(key) = &self.api_key {
+            return Ok(key.clone());
+        }
         std::env::var(&self.api_key_env).map_err(|_| {
             RivetError::Model(format!(
                 "missing OpenCode API key in environment variable {}",
@@ -58,12 +72,17 @@ impl GenAiBackend {
 
     fn request_builder(&self, request: &ModelRequest, stream: bool) -> RivetResult<RequestBuilder> {
         let user_content = format!(
-            "{}\n\nUser Request: {}",
+            "<workspace_context>\n{}\n</workspace_context>\n\nUser Request: {}\n(Instruction: Answer the user naturally and conversationally in Markdown. Do not recite raw internal IDs like oblg_... or rN in chat.)",
             request.cognitive_view.format_prompt_block(),
             request.user_prompt
         );
+        let model_name = if request.model_id.is_empty() || request.model_id == "default" {
+            std::env::var("OPENCODE_MODEL").unwrap_or_else(|_| "mimo-v2.5".into())
+        } else {
+            request.model_id.clone()
+        };
         let mut body = json!({
-            "model": request.model_id,
+            "model": model_name,
             "messages": [
                 {"role": "system", "content": request.system_prompt.to_string()},
                 {"role": "user", "content": user_content},
@@ -81,22 +100,64 @@ impl GenAiBackend {
             .client
             .post(&self.endpoint)
             .bearer_auth(self.api_key()?)
+            .header(reqwest::header::USER_AGENT, "Rivet/0.3.0 (OpenCode-Client)")
             .header(reqwest::header::CONTENT_TYPE, "application/json")
             .json(&body))
     }
 
     async fn send(&self, request: &ModelRequest, stream: bool) -> RivetResult<Response> {
-        let response = self
-            .request_builder(request, stream)?
-            .send()
-            .await
-            .map_err(|error| RivetError::Model(format!("OpenCode HTTP request failed: {error}")))?;
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            return Err(RivetError::Model(format!("OpenCode HTTP {status}: {body}")));
+        let max_retries = 3;
+        let mut delay = 500u64;
+        let mut attempts = 0;
+
+        loop {
+            attempts += 1;
+            let response_res = self.request_builder(request, stream)?.send().await;
+            match response_res {
+                Ok(response) => {
+                    let status = response.status();
+                    if status.is_success() {
+                        return Ok(response);
+                    }
+                    let is_transient = status.as_u16() == 429
+                        || status.as_u16() == 500
+                        || status.as_u16() == 502
+                        || status.as_u16() == 503
+                        || status.as_u16() == 504;
+                    let body = response.text().await.unwrap_or_default();
+                    if is_transient && attempts <= max_retries {
+                        tracing::warn!(
+                            attempt = attempts,
+                            max_retries,
+                            delay_ms = delay,
+                            status = %status,
+                            "Retrying OpenCode HTTP request"
+                        );
+                        tokio::time::sleep(tokio::time::Duration::from_millis(delay)).await;
+                        delay = (delay * 2).min(10_000);
+                        continue;
+                    }
+                    return Err(RivetError::Model(format!("OpenCode HTTP {status}: {body}")));
+                }
+                Err(error) => {
+                    if attempts <= max_retries {
+                        tracing::warn!(
+                            attempt = attempts,
+                            max_retries,
+                            delay_ms = delay,
+                            error = %error,
+                            "Retrying OpenCode network request"
+                        );
+                        tokio::time::sleep(tokio::time::Duration::from_millis(delay)).await;
+                        delay = (delay * 2).min(10_000);
+                        continue;
+                    }
+                    return Err(RivetError::Model(format!(
+                        "OpenCode HTTP request failed: {error}"
+                    )));
+                }
+            }
         }
-        Ok(response)
     }
 }
 
@@ -149,6 +210,14 @@ impl ModelBackend for GenAiBackend {
 }
 
 fn response_content(body: &Value) -> Option<String> {
+    if let Some(reasoning) = body
+        .pointer("/choices/0/delta/reasoning_content")
+        .or_else(|| body.pointer("/choices/0/delta/reasoning"))
+        .and_then(content_value)
+    {
+        return Some(format!("<think>{}</think>", reasoning));
+    }
+
     body.pointer("/choices/0/message/content")
         .and_then(content_value)
         .or_else(|| {
@@ -157,27 +226,36 @@ fn response_content(body: &Value) -> Option<String> {
         })
         .or_else(|| {
             body.pointer("/choices/0/delta/tool_calls")
+                .filter(|v| !v.is_null() && !v.as_array().is_some_and(|a| a.is_empty()))
                 .map(|v| v.to_string())
         })
         .or_else(|| {
             body.pointer("/choices/0/message/tool_calls")
+                .filter(|v| !v.is_null() && !v.as_array().is_some_and(|a| a.is_empty()))
                 .map(|v| v.to_string())
         })
 }
 
 fn content_value(value: &Value) -> Option<String> {
+    if value.is_null() {
+        return None;
+    }
     if let Some(content) = value.as_str() {
+        if content.is_empty() {
+            return None;
+        }
         return Some(content.to_string());
     }
-    value.as_array().map(|parts| {
-        parts
+    value.as_array().and_then(|parts| {
+        let text: String = parts
             .iter()
             .filter_map(|part| {
                 part.get("text")
                     .or_else(|| part.get("content"))
                     .and_then(Value::as_str)
             })
-            .collect::<String>()
+            .collect();
+        if text.is_empty() { None } else { Some(text) }
     })
 }
 

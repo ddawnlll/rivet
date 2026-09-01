@@ -488,7 +488,7 @@ impl CognitiveView {
         }
 
         if !self.open_obligations.is_empty() {
-            out.push_str("### OPEN OBLIGATIONS TO VERIFY:\n");
+            out.push_str("### OPEN OBLIGATIONS TO VERIFY (Use internal ID only when proposing verification):\n");
             for o in &self.open_obligations {
                 out.push_str(&format!("- [ ] {}\n", o));
             }

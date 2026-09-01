@@ -19,6 +19,7 @@ reqwest = { workspace = true }
 keyring = { workspace = true }
 secrecy = { workspace = true }
 zeroize = { workspace = true }
+serde-saphyr = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

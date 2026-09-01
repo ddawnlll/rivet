@@ -36,6 +36,8 @@ pub enum RigProvider {
         base_url: String,
         api_key: Option<String>,
     },
+    /// Mock provider for testing and deterministic offline evaluation
+    Mock,
 }
 
 pub struct RigBackend {
@@ -54,6 +56,7 @@ impl RigBackend {
     /// Construct backend from a resolved OpenCode-style ProviderConfig
     pub fn from_resolved(config: &ResolvedProviderConfig) -> Self {
         let provider = match config.provider.to_lowercase().as_str() {
+            "mock" => RigProvider::Mock,
             "anthropic" | "claude" => RigProvider::Anthropic {
                 api_key: config.api_key.clone(),
             },
@@ -150,145 +153,148 @@ impl ModelBackend for RigBackend {
 
         // Construct full prompt from cognitive view and instructions
         let prompt_payload = format!(
-            "--- SYSTEM INSTRUCTIONS ---\n{}\n\n--- COGNITIVE VIEW (r{}) ---\n{}\n\n--- USER REQUEST ---\n{}",
-            request.system_prompt,
-            request.cognitive_view.hard_revision.0,
-            serde_json::to_string_pretty(&*request.cognitive_view).unwrap_or_else(|_| "{}".into()),
+            "<workspace_context>\n{}\n</workspace_context>\n\nUser Request: {}\n(Instruction: Answer the user naturally and conversationally in Markdown. Do not recite raw internal IDs like oblg_... or rN in chat.)",
+            request.cognitive_view.format_prompt_block(),
             request.user_prompt
         );
 
-        let response_text = match &self.provider {
-            RigProvider::OpenAI { api_key, base_url } => {
-                let client = if let Some(base) = base_url {
-                    let key = api_key.clone().unwrap_or_else(|| "none".into());
-                    openai::Client::builder()
-                        .api_key(key)
-                        .base_url(base.clone())
-                        .build()
-                        .map_err(|e| RivetError::Model(e.to_string()))?
-                } else if let Some(key) = api_key {
-                    openai::Client::new(key).map_err(|e| RivetError::Model(e.to_string()))?
-                } else {
-                    openai::Client::from_env().map_err(|e| RivetError::Model(e.to_string()))?
-                };
-                let model = client.completion_model(model_name);
-                let req = model
-                    .completion_request(&prompt_payload)
-                    .preamble(request.system_prompt.to_string())
-                    .build();
+        let provider = self.provider.clone();
+        let sys_prompt = request.system_prompt.to_string();
+        let prompt = prompt_payload.clone();
+        let m_name = model_name.to_string();
 
-                let resp = model
-                    .completion(req)
-                    .await
-                    .map_err(|e| RivetError::Model(e.to_string()))?;
-                extract_text(resp.choice)
+        let response_text = retry_call(3, 500, || {
+            let p = provider.clone();
+            let sys = sys_prompt.clone();
+            let p_load = prompt.clone();
+            let m = m_name.clone();
+            async move {
+                match &p {
+                    RigProvider::OpenAI { api_key, base_url } => {
+                        let client = if let Some(base) = base_url {
+                            let key = api_key.clone().unwrap_or_else(|| "none".into());
+                            openai::Client::builder()
+                                .api_key(key)
+                                .base_url(base.clone())
+                                .build()
+                                .map_err(|e| RivetError::Model(e.to_string()))?
+                        } else if let Some(key) = api_key {
+                            openai::Client::new(key)
+                                .map_err(|e| RivetError::Model(e.to_string()))?
+                        } else {
+                            openai::Client::from_env()
+                                .map_err(|e| RivetError::Model(e.to_string()))?
+                        };
+                        let model = client.completion_model(&m);
+                        let req = model.completion_request(&p_load).preamble(sys).build();
+
+                        let resp = model
+                            .completion(req)
+                            .await
+                            .map_err(|e| RivetError::Model(e.to_string()))?;
+                        Ok(extract_text(resp.choice))
+                    }
+                    RigProvider::DeepSeek { api_key } => {
+                        let key = api_key
+                            .clone()
+                            .or_else(|| std::env::var("DEEPSEEK_API_KEY").ok())
+                            .unwrap_or_default();
+                        let client = openai::Client::builder()
+                            .api_key(key)
+                            .base_url("https://api.deepseek.com/v1")
+                            .build()
+                            .map_err(|e| RivetError::Model(e.to_string()))?;
+                        let model = client.completion_model(&m);
+                        let req = model.completion_request(&p_load).preamble(sys).build();
+
+                        let resp = model
+                            .completion(req)
+                            .await
+                            .map_err(|e| RivetError::Model(e.to_string()))?;
+                        Ok(extract_text(resp.choice))
+                    }
+                    RigProvider::OpenRouter { api_key } => {
+                        let key = api_key
+                            .clone()
+                            .or_else(|| std::env::var("OPENROUTER_API_KEY").ok())
+                            .unwrap_or_default();
+                        let client = openai::Client::builder()
+                            .api_key(key)
+                            .base_url("https://openrouter.ai/api/v1")
+                            .build()
+                            .map_err(|e| RivetError::Model(e.to_string()))?;
+                        let model = client.completion_model(&m);
+                        let req = model.completion_request(&p_load).preamble(sys).build();
+
+                        let resp = model
+                            .completion(req)
+                            .await
+                            .map_err(|e| RivetError::Model(e.to_string()))?;
+                        Ok(extract_text(resp.choice))
+                    }
+                    RigProvider::Gemini { api_key } => {
+                        let key = api_key
+                            .clone()
+                            .or_else(|| std::env::var("GEMINI_API_KEY").ok())
+                            .or_else(|| std::env::var("GOOGLE_API_KEY").ok())
+                            .unwrap_or_default();
+                        let client = openai::Client::builder()
+                            .api_key(key)
+                            .base_url("https://generativelanguage.googleapis.com/v1beta/openai")
+                            .build()
+                            .map_err(|e| RivetError::Model(e.to_string()))?;
+                        let model = client.completion_model(&m);
+                        let req = model.completion_request(&p_load).preamble(sys).build();
+
+                        let resp = model
+                            .completion(req)
+                            .await
+                            .map_err(|e| RivetError::Model(e.to_string()))?;
+                        Ok(extract_text(resp.choice))
+                    }
+                    RigProvider::Local { base_url, api_key } => {
+                        let key = api_key.clone().unwrap_or_else(|| "local".into());
+                        let client = openai::Client::builder()
+                            .api_key(key)
+                            .base_url(base_url.clone())
+                            .build()
+                            .map_err(|e| RivetError::Model(e.to_string()))?;
+
+                        let model = client.completion_model(&m);
+                        let req = model.completion_request(&p_load).preamble(sys).build();
+
+                        let resp = model
+                            .completion(req)
+                            .await
+                            .map_err(|e| RivetError::Model(e.to_string()))?;
+                        Ok(extract_text(resp.choice))
+                    }
+                    RigProvider::Anthropic { api_key } => {
+                        let client = if let Some(key) = api_key {
+                            anthropic::Client::new(key.clone())
+                                .map_err(|e| RivetError::Model(e.to_string()))?
+                        } else {
+                            anthropic::Client::from_env()
+                                .map_err(|e| RivetError::Model(e.to_string()))?
+                        };
+                        let model = client.completion_model(&m);
+                        let req = model
+                            .completion_request(&p_load)
+                            .preamble(sys)
+                            .max_tokens(2048)
+                            .build();
+
+                        let resp = model
+                            .completion(req)
+                            .await
+                            .map_err(|e| RivetError::Model(e.to_string()))?;
+                        Ok(extract_text(resp.choice))
+                    }
+                    RigProvider::Mock => Ok("Step completed successfully".to_string()),
+                }
             }
-            RigProvider::DeepSeek { api_key } => {
-                let key = api_key
-                    .clone()
-                    .or_else(|| std::env::var("DEEPSEEK_API_KEY").ok())
-                    .unwrap_or_default();
-                let client = openai::Client::builder()
-                    .api_key(key)
-                    .base_url("https://api.deepseek.com/v1")
-                    .build()
-                    .map_err(|e| RivetError::Model(e.to_string()))?;
-                let model = client.completion_model(model_name);
-                let req = model
-                    .completion_request(&prompt_payload)
-                    .preamble(request.system_prompt.to_string())
-                    .build();
-
-                let resp = model
-                    .completion(req)
-                    .await
-                    .map_err(|e| RivetError::Model(e.to_string()))?;
-                extract_text(resp.choice)
-            }
-            RigProvider::OpenRouter { api_key } => {
-                let key = api_key
-                    .clone()
-                    .or_else(|| std::env::var("OPENROUTER_API_KEY").ok())
-                    .unwrap_or_default();
-                let client = openai::Client::builder()
-                    .api_key(key)
-                    .base_url("https://openrouter.ai/api/v1")
-                    .build()
-                    .map_err(|e| RivetError::Model(e.to_string()))?;
-                let model = client.completion_model(model_name);
-                let req = model
-                    .completion_request(&prompt_payload)
-                    .preamble(request.system_prompt.to_string())
-                    .build();
-
-                let resp = model
-                    .completion(req)
-                    .await
-                    .map_err(|e| RivetError::Model(e.to_string()))?;
-                extract_text(resp.choice)
-            }
-            RigProvider::Gemini { api_key } => {
-                let key = api_key
-                    .clone()
-                    .or_else(|| std::env::var("GEMINI_API_KEY").ok())
-                    .or_else(|| std::env::var("GOOGLE_API_KEY").ok())
-                    .unwrap_or_default();
-                let client = openai::Client::builder()
-                    .api_key(key)
-                    .base_url("https://generativelanguage.googleapis.com/v1beta/openai")
-                    .build()
-                    .map_err(|e| RivetError::Model(e.to_string()))?;
-                let model = client.completion_model(model_name);
-                let req = model
-                    .completion_request(&prompt_payload)
-                    .preamble(request.system_prompt.to_string())
-                    .build();
-
-                let resp = model
-                    .completion(req)
-                    .await
-                    .map_err(|e| RivetError::Model(e.to_string()))?;
-                extract_text(resp.choice)
-            }
-            RigProvider::Local { base_url, api_key } => {
-                let key = api_key.clone().unwrap_or_else(|| "local".into());
-                let client = openai::Client::builder()
-                    .api_key(key)
-                    .base_url(base_url.clone())
-                    .build()
-                    .map_err(|e| RivetError::Model(e.to_string()))?;
-
-                let model = client.completion_model(model_name);
-                let req = model
-                    .completion_request(&prompt_payload)
-                    .preamble(request.system_prompt.to_string())
-                    .build();
-
-                let resp = model
-                    .completion(req)
-                    .await
-                    .map_err(|e| RivetError::Model(e.to_string()))?;
-                extract_text(resp.choice)
-            }
-            RigProvider::Anthropic { api_key } => {
-                let client = if let Some(key) = api_key {
-                    anthropic::Client::new(key).map_err(|e| RivetError::Model(e.to_string()))?
-                } else {
-                    anthropic::Client::from_env().map_err(|e| RivetError::Model(e.to_string()))?
-                };
-                let model = client.completion_model(model_name);
-                let req = model
-                    .completion_request(&prompt_payload)
-                    .preamble(request.system_prompt.to_string())
-                    .build();
-
-                let resp = model
-                    .completion(req)
-                    .await
-                    .map_err(|e| RivetError::Model(e.to_string()))?;
-                extract_text(resp.choice)
-            }
-        };
+        })
+        .await?;
 
         // Decode cognitive actions from model response (proposals only)
         let actions = CognitiveAction::parse_text(&response_text);
@@ -306,6 +312,51 @@ impl ModelBackend for RigBackend {
                 cached_tokens: None,
             },
         })
+    }
+}
+
+async fn retry_call<F, Fut, T>(
+    max_retries: usize,
+    initial_delay_ms: u64,
+    mut op: F,
+) -> RivetResult<T>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = RivetResult<T>>,
+{
+    let mut delay = initial_delay_ms;
+    let mut attempts = 0;
+    loop {
+        attempts += 1;
+        match op().await {
+            Ok(v) => return Ok(v),
+            Err(e) => {
+                let err_str = e.to_string();
+                let is_transient = err_str.contains("429")
+                    || err_str.contains("rate limit")
+                    || err_str.contains("RateLimit")
+                    || err_str.contains("500")
+                    || err_str.contains("502")
+                    || err_str.contains("503")
+                    || err_str.contains("504")
+                    || err_str.contains("overloaded")
+                    || err_str.contains("timeout")
+                    || err_str.contains("connection reset");
+                if is_transient && attempts <= max_retries {
+                    tracing::warn!(
+                        attempt = attempts,
+                        max_retries,
+                        delay_ms = delay,
+                        error = %err_str,
+                        "Retrying LLM invocation"
+                    );
+                    tokio::time::sleep(tokio::time::Duration::from_millis(delay)).await;
+                    delay = (delay * 2).min(10_000);
+                } else {
+                    return Err(e);
+                }
+            }
+        }
     }
 }
 

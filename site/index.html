@@ -60,7 +60,7 @@ footer{border-top:3px double #333;margin-top:60px;padding-top:18px;color:var(--m
 <li class="toc-h1"><a href="#arastrma-sorusu">Araştırma sorusu</a></li>
 <li class="toc-h1"><a href="#ontolojik-audit-tam-olarak-ne-insa-ediyoruz">Ontolojik audit: Tam olarak ne inşa ediyoruz?</a></li>
 <li class="toc-h2"><a href="#active-cognitive-controller">Active cognitive controller</a></li>
-<li class="toc-h1"><a href="#rivet-constitution-v02">Rivet Constitution v0.2</a></li>
+<li class="toc-h1"><a href="#rivet-constitution-v03">Rivet Constitution v0.3</a></li>
 <li class="toc-h1"><a href="#system-thesis-transient-cognitiondan-persistent-state-coupled-agencyye">System thesis: transient cognition’dan persistent state-coupled agency’ye</a></li>
 <li class="toc-h1"><a href="#nihai-yuksek-seviye-mimari">Nihai yüksek seviye mimari</a></li>
 <li class="toc-h1"><a href="#interaction-model-chat-only-surface">Interaction Model: Chat-Only Surface</a></li>
@@ -442,6 +442,7 @@ footer{border-top:3px double #333;margin-top:60px;padding-top:18px;color:var(--m
 <li class="toc-h2"><a href="#model-adapters">Model adapters</a></li>
 <li class="toc-h2"><a href="#external-capability-adapters">External capability adapters</a></li>
 <li class="toc-h2"><a href="#persistence-adapters">Persistence adapters</a></li>
+<li class="toc-h2"><a href="#rivetservice-ui-agnostic-harness-facade-v03-phase-8">RivetService — UI-agnostic Harness Facade (v0.3 Phase 8)</a></li>
 <li class="toc-h1"><a href="#decision-register">Decision Register</a></li>
 <li class="toc-h1"><a href="#open-questions">Open Questions</a></li>
 <li class="toc-h2"><a href="#v02-staterepresentation-questions">v0.2 state/representation questions</a></li>
@@ -580,7 +581,7 @@ LLM ∈ Rivet
 Rivet ≠ LLM
 </code></pre>
 <p>Runtime'ın modeli sınırladığı alan semantik düşünme değil, <strong>persistence, authority, verification status ve irreversible side effects</strong>'tir. Bir modelin aynı önermeyi tekrar etmesi evidence authority'yi artırmaz; bir action'ı istemesi onu yetkili hale getirmez; “done” demesi completion değildir.</p>
-<h1 id="rivet-constitution-v02">Rivet Constitution v0.2<a class="anchor" href="#rivet-constitution-v02">¶</a></h1>
+<h1 id="rivet-constitution-v03">Rivet Constitution v0.3<a class="anchor" href="#rivet-constitution-v03">¶</a></h1>
 <p>Aşağıdaki maddeler implementasyon ayrıntısı değil, araştırma geçerliliğini ve control-plane güvenilirliğini korumak için önerilen anayasal kurallardır. Değiştirilebilirler; ancak değişiklikler versioned decision record ve benchmark sonucu gerektirmelidir.</p>
 <ol>
 <li><strong>Agent ≠ Model, but Model Is the Primary Semantic Engine.</strong> Foundation model Rivet'in persistent kimliği değildir; invocation sırasında active cognitive controller olarak semantik interpretation, hypothesis formation, architecture ve code reasoning'in ana motorudur.</li>
@@ -631,6 +632,10 @@ Rivet ≠ LLM
 <li><strong>Novelty Is Audited, Not Assumed.</strong> Graph, state machine, compiler, retrieval, semantic editing, evidence ledger ve uncertainty routing tek başına Rivet novelty'si olarak sunulamaz.</li>
 <li><strong>Every Performance Claim Needs a Baseline.</strong> “Daha hızlı/ucuz” ancak aynı model, aynı task, aynı tool access ve aynı verification standardıyla karşılaştırıldığında anlamlıdır.</li>
 <li><strong>Failure Is an Acceptable Research Outcome.</strong> If Hard State + Soft Workspace + Cognitive View + Hierarchical Relevance do not produce measurable reliability, continuity, representation-quality, or efficiency gains over an equivalent context-centric baseline, the state-architecture thesis is rejected or narrowed. Failure to reduce model calls alone does not falsify v0.2; model-sparse behavior is a secondary outcome.</li>
+<li><strong>Robust Wire Protocol &amp; Resilient Boundary Parsing.</strong> Model çıktısı deterministik bir derleyici çıktısı değildir; karma metin (prose), markdown blokları ve gömülü JSON taşıyabilir. ACCP ayrıştırıcısı, biçimsel küçük sapmalarda (casing, backtick, embedded brackets) protokol anlambilimini kaybetmeden tip-güvenli eylemleri ayıklar; ayrıştırılamayan metin ise yetkisiz nesir (unauthorized prose) olarak kalır.</li>
+<li><strong>Closed-Loop Steering &amp; Self-Correction Feedback.</strong> Model bozuk şema, bilinmeyen kabiliyet veya geçersiz parametre ürettiğinde sistem sessizce başarısız olmaz veya çökmez; Harness derhal Soft Workspace içine düzeltici, sınırlı bir yönlendirme hipotezi (corrective steering hypothesis) enjekte ederek modelin bir sonraki turda kendini hizalamasını zorunlu kılar.</li>
+<li><strong>Agent-Centric Evaluation ≠ Model Capability Benchmark.</strong> Agent harness'ı değerlendirmek, temel LLM'in ham kodlama zekasını ölçmekten epistemik olarak ayrıdır. Rivet değerlendirme paketleri (Gauntlet), modelin zekasını değil; anayasa korumasını, hile engellemeyi (anti-cheating), patinaj kırmayı (stagnation breaking), bağlam sıkıştırma etkinliğini ve çökme-kurtarma determinizmini ölçmelidir.</li>
+<li><strong>Adversarial Model Containment &amp; Non-Cooperative Defense.</strong> Model niyetinden bağımsız olarak (karışık, halüsinatif veya kural dışına çıkan yönlendirmelerde), yetki yükseltme (privilege escalation), dizin dışına kaçış (path traversal), test silme (test tampering) ve sahte makbuz basma (receipt forgery) girişimleri prompt ricası ile değil, çalışma zamanı anlamsal kapıları (enforceable semantic gates) ile mekanik olarak engellenir.</li>
 </ol>
 <h1 id="system-thesis-transient-cognitiondan-persistent-state-coupled-agencyye">System thesis: transient cognition’dan persistent state-coupled agency’ye<a class="anchor" href="#system-thesis-transient-cognitiondan-persistent-state-coupled-agencyye">¶</a></h1>
 <p>v0.1 Rivet'i ağırlıklı olarak “LLM loop'tan persistent deterministic runtime'a geçiş” olarak çerçeveliyordu. v0.2 bu çerçeveyi daraltır. <strong>Asıl karşıtlık model vs runtime değildir; transient cognition vs persistent project reality'dir.</strong></p>
@@ -4473,13 +4478,13 @@ deny:
 </tr>
 <tr>
 <td>UI</td>
-<td>CLI/TUI first: <code>clap</code> + Ratatui/Crossterm; desktop deferred</td>
-<td>LOCKED_FOR_SLICE</td>
+<td>Chat-only surface via <code>RivetService</code> facade; projections: TUI (in-process) / Web (<code>axum</code> SSE) / Tauri (<code>tauri::command</code> IPC) — <code>INTERACTION_MODEL.md</code> uyumlu</td>
+<td>PROVISIONAL</td>
 </tr>
 <tr>
 <td>Desktop candidate</td>
-<td>Tauri if polished web UI wins; egui/eframe if pure-Rust direct-call UI wins</td>
-<td>DEFERRED</td>
+<td>Tauri wrapping shared <code>web/dist</code> (Vite + React + shadcn); egui/eframe deferred</td>
+<td>PROVISIONAL</td>
 </tr>
 <tr>
 <td>Internal serialization</td>
@@ -5025,17 +5030,31 @@ CognitiveView
 <p>Default chat semantic summaries gösterir. <code>--trace</code>, debug command veya “neden?” sorusu mechanical lineage'i projection olarak açabilir. <code>tracing</code> spans ile Noesis receipts aynı şey değildir: tracing operational telemetry, evidence/receipts epistemic/audit semantics'tir.</p>
 <p>Secrets, model hidden reasoning ve sensitive raw content default telemetry'ye yazılmaz. Receipt externally relevant decisions/state transitions içerir.</p>
 <h2 id="ui-strategy">UI strategy<a class="anchor" href="#ui-strategy">¶</a></h2>
-<p><span class="badge provisional">PROVISIONAL_DECISION</span> İlk surface CLI/TUI'dir. Bunun nedeni TUI'nin “nihai UX” olması değil, cognitive runtime'ı UI architecture'ından ayırıp chat-only product thesis'ini en hızlı test etmesidir.</p>
-<pre><code class="language-text">v0.3 vertical slice
-  clap commands
-  + Ratatui/Crossterm chat stream
-  + status line
-  + interrupt
-  + scrollback
-  + optional trace view
+<p><span class="badge provisional">PROVISIONAL_DECISION</span> v0.3'te UI, cognitive runtime'dan tamamen ayrılmıştır. <code>INTERACTION_MODEL.md</code>'deki chat-only thesis korunur: tek authoritative surface chat'tir; Obligations/Workspace/Census/Receipts projection'dır, mode değil. Bu ayrımı somutlaştıran katman <code>RivetService</code> facade'dir.</p>
+<pre><code class="language-text">RivetService facade (crates/rivet-service)
+  trait RivetService { step, stream_step, initialize_goal, get_state, get_census, current_phase }
+  UiEvent broadcast: AssistantDelta / Status / AuthorityPrompt / VerificationUpdate / Completed
+      ↑
+┌─────┼─────┐
+TUI   Web   Tauri
+(in-process) (axum SSE/WS) (webview IPC - same web/dist)
 </code></pre>
-<p>Tauri bugün Rust core + OS WebView + frontend message-passing/IPC modeli kullanır. Bu production desktop polish için güçlü olabilir; fakat v0.3'te no-internal-IPC ve direct in-process state hedefi nedeniyle erken complexity'dir. egui/eframe pure-Rust native/web UI alternatifi olarak daha doğrudan olabilir; fakat product design ihtiyacı ortaya çıkmadan UI framework kararı kilitlenmez.</p>
-<p>Core frontend'i bilmez:</p>
+<pre><code class="language-text">v0.3 vertical slice (Phase 8)
+  RivetService facade
+  + TUI: Ratatui/Crossterm chat stream (in-process Arc&lt;RivetService&gt;)
+  + Web: axum REST + SSE (`rivet serve` → localhost:3000, Vite + React + shadcn)
+  + Tauri: same web/dist wrapped via tauri::command invoke
+  + status line / interrupt / scrollback / trace view (shared)
+</code></pre>
+<ul>
+<li><strong>TUI</strong> <code>RivetService</code>'i in-process doğrudan çağırır. F1-F5 mode tab yerine chat + projection drawer kullanılır. <code>tui.rs</code> (215K) kademeli olarak facade'e taşınır, feature-freeze edilir.</li>
+<li><strong>Web</strong> <code>rivet-api</code> (<code>axum</code>) üzerinden <code>POST /api/step</code>, <code>WS /api/ws</code> (WebSocket, primary, zero-latency), <code>GET /api/stream</code> (SSE fallback), <code>GET /api/state</code>, <code>GET /api/census</code> expose eder. WS tek persistent TCP (TCP_NODELAY), <code>try_send</code> non-blocking, per-token <code>AssistantDelta</code> broadcast; bu core subsystem'ler arası IPC değildir; single-process local projection'dır.</li>
+<li><strong>Tauri</strong> aynı <code>web/dist</code>'i <code>invoke("step")</code> ↔ <code>RivetService::step</code> ile saran thin shell'dir. Web ve Desktop %100 aynı React codebase'i paylaşır.</li>
+<li><strong>Chat-only invariant:</strong> <code>agent ≠ frontend</code>, <code>chat = projection of persistent Rivet state</code>. Drawer'lardaki kartlar mode değil, Hard/Soft state'in read-only projection'ıdır.</li>
+<li><strong>Display priority (drawer):</strong> Tier 1 her zaman açık — Open Obligations + Verification + Contradictions (Hard State); Tier 2 collapsed — Soft Workspace hypotheses/focus + Cognitive View sent to model; Tier 3 on-demand — Recent Evidence/Receipts, Census Frontier, Full HardState explorer. Hard = solid kart, Soft = dashed/soluk (non-authoritative).</li>
+<li>Tauri bugün Rust core + OS WebView + frontend message-passing/IPC modeli kullanır; <code>RivetService</code> ile bu artık product complexity değil, local projection transport'udur. egui/eframe pure-Rust alternatifi deferred kalır; product design ihtiyacı ortaya çıkmadan framework kilitlenmez.</li>
+</ul>
+<p>Core frontend'i bilmez, sadece <code>UiEvent</code> basar:</p>
 <pre><code class="language-rust">pub enum UiEvent {
     AssistantDelta(std::sync::Arc&lt;str&gt;),
     Status(RunStatus),
@@ -5044,7 +5063,7 @@ CognitiveView
     Completed(CompletionSummary),
 }
 </code></pre>
-<p>CLI, Tauri veya egui aynı event/query contracts'ını kullanabilir. Agent identity frontend'de yaşamaz.</p>
+<p>CLI, TUI, Web ve Tauri aynı <code>RivetService</code>/<code>UiEvent</code> contract'ını kullanır. Agent identity frontend'de yaşamaz; frontend kapanıp yeniden açılsa bile <code>HARD_STATE</code> ve <code>SoftWorkspace</code> continuity korunur.</p>
 <h2 id="testing-and-replay-strategy">Testing and replay strategy<a class="anchor" href="#testing-and-replay-strategy">¶</a></h2>
 <p>Rivet'in first production discipline'i model benchmark'tan önce deterministic core'u agresif test etmektir.</p>
 <table>
@@ -5311,6 +5330,25 @@ Own:
 <p>Native filesystem/process/git capability'leri first-class'tır. MCP external ecosystem bridge olarak desteklenir. MCP tool schemas core semantic capability ontology'si değildir; external tool result observation'a çevrilir ve raw result evidence ref olarak tutulur.</p>
 <h2 id="persistence-adapters">Persistence adapters<a class="anchor" href="#persistence-adapters">¶</a></h2>
 <p><code>HardStateStore</code> backend abstraction mevcut olmalıdır fakat first slice yalnız bir backend'i production path olarak destekler. Multiple database support uğruna early generic abstraction growth yapılmaz. Backend swap testleri event replay compatibility üzerinden yürür.</p>
+<h2 id="rivetservice-ui-agnostic-harness-facade-v03-phase-8">RivetService — UI-agnostic Harness Facade (v0.3 Phase 8)<a class="anchor" href="#rivetservice-ui-agnostic-harness-facade-v03-phase-8">¶</a></h2>
+<p>Frontend'ler replaceable substrate'tır; fakat lifecycle ve epistemic semantics Rivet Harness Core'a aittir. Bu ayrımı somutlaştırmak için <code>rivet-service</code> crate'i bir <strong>facade</strong> sağlar:</p>
+<pre><code class="language-text">HarnessCore (owner: lifecycle, revision, Noesis, ACCP, Praxis)
+      ↑
+RivetService (facade: step, stream_step, initialize_goal, get_state, get_census)
+      ↑
+┌─────┼─────┐
+TUI   Web   Tauri
+(in-process) (axum SSE/WS) (tauri::command IPC)
+</code></pre>
+<ul>
+<li><strong>RivetService trait:</strong> <code>step</code>, <code>stream_step</code>, <code>initialize_goal</code>, <code>get_obligations</code>, <code>get_census</code>, <code>current_phase</code> ve <code>UiEvent</code> broadcast (<code>AssistantDelta</code>, <code>Status</code>, <code>AuthorityPrompt</code>, <code>VerificationUpdate</code>, <code>Completed</code>).</li>
+<li><strong>TUI:</strong> <code>RivetService</code>'i in-process <code>Arc</code> ile doğrudan çağırır. <code>tui.rs</code> içindeki direkt <code>HarnessCore</code> erişimleri facade'e taşınır; F1-F5 mode tab yerine chat + projection drawer kullanılır (<code>INTERACTION_MODEL.md</code> chat-only uyumu).</li>
+<li><strong>Web:</strong> <code>rivet-api</code> (<code>axum</code>) aynı <code>RivetService</code>'i <code>POST /api/step</code>, <code>GET /api/stream</code> (SSE), <code>GET /api/state</code>, <code>GET /api/census</code> üzerinden expose eder. Bu, core subsystem'ler arası IPC değildir; single-process local projection'dır.</li>
+<li><strong>Tauri:</strong> Aynı <code>web/dist</code> (Vite + React + shadcn) build'ini <code>invoke("step")</code> ↔ <code>RivetService::step</code> ile saran thin shell. Web ve Desktop %100 aynı React codebase.</li>
+<li><strong>Chat-only invariant korunur:</strong> <code>agent ≠ frontend</code>, <code>chat = projection of persistent Rivet state</code>. Drawer'lardaki Obligations/Workspace/Census kartları mode değil, Hard/Soft state'in read-only projection'ıdır; frontend kapanıp açılsa agent identity değişmez.</li>
+<li><strong>Display priority (drawer):</strong> Tier 1 her zaman açık — Open Obligations + Verification + Contradictions (Hard State); Tier 2 collapsed — Soft Workspace hypotheses/focus + Cognitive View; Tier 3 on-demand — Recent Evidence/Receipts, Census Frontier, Full HardState explorer. Hard = solid kart, Soft = dashed/soluk.</li>
+</ul>
+<p>Bu facade <code>TECHNICAL_ARCHITECTURE_V03.md</code>'deki <code>UiEvent</code> contract'ını somutlaştırır ve <code>IMPLEMENTATION.md</code> Phase 8'in teknik kaynağıdır.</p>
 <h1 id="decision-register">Decision Register<a class="anchor" href="#decision-register">¶</a></h1>
 <table>
 <thead>

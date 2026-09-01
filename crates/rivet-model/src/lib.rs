@@ -42,41 +42,81 @@ impl CognitiveAction {
     /// Decode only typed proposal forms from model output. Unknown or malformed
     /// JSON remains prose and therefore cannot silently gain authority.
     pub fn parse_text(text: &str) -> Vec<Self> {
+        let mut results = Vec::new();
         let trimmed = text.trim();
-        let json_str = if let Some(start) = trimmed.find("```json") {
-            let after = &trimmed[start + 7..];
-            if let Some(end) = after.find("```") {
-                after[..end].trim()
-            } else {
-                after.trim()
-            }
-        } else if let Some(start) = trimmed.find("```") {
-            let after = &trimmed[start + 3..];
-            if let Some(end) = after.find("```") {
-                after[..end].trim()
-            } else {
-                after.trim()
-            }
-        } else {
-            trimmed
-        };
 
-        let Ok(value) = serde_json::from_str::<serde_json::Value>(json_str) else {
-            return Vec::new();
-        };
+        // 1. Scan for all markdown code blocks (```json ... ``` or ``` ... ```)
+        let mut cursor = 0;
+        while let Some(open_idx) = trimmed[cursor..].find("```") {
+            let start = cursor + open_idx;
+            let content_start = if let Some(newline) = trimmed[start..].find('\n') {
+                start + newline + 1
+            } else if trimmed[start..].starts_with("```json") {
+                start + 7
+            } else {
+                start + 3
+            };
+            if let Some(close_idx) = trimmed[content_start..].find("```") {
+                let end = content_start + close_idx;
+                let json_slice = trimmed[content_start..end].trim();
+                Self::extract_actions_from_str(json_slice, &mut results);
+                cursor = end + 3;
+            } else {
+                let json_slice = trimmed[content_start..].trim();
+                Self::extract_actions_from_str(json_slice, &mut results);
+                break;
+            }
+        }
 
-        let values = value
-            .get("actions")
-            .and_then(serde_json::Value::as_array)
-            .cloned()
-            .unwrap_or_else(|| vec![value]);
-        values
-            .into_iter()
-            .filter_map(|value| Self::from_value(&value).ok())
-            .collect()
+        // 2. If no actions found from markdown blocks, attempt parsing the full or embedded text
+        if results.is_empty() {
+            Self::extract_actions_from_str(trimmed, &mut results);
+        }
+
+        // 3. If still empty, attempt to find first '{' to last '}'
+        if results.is_empty()
+            && let (Some(first_brace), Some(last_brace)) = (trimmed.find('{'), trimmed.rfind('}'))
+            && first_brace < last_brace
+        {
+            let candidate = &trimmed[first_brace..=last_brace];
+            Self::extract_actions_from_str(candidate, &mut results);
+        }
+
+        results
+    }
+
+    fn extract_actions_from_str(text_str: &str, results: &mut Vec<Self>) {
+        if text_str.is_empty() {
+            return;
+        }
+        let parsed_value: Option<serde_json::Value> = serde_json::from_str(text_str)
+            .ok()
+            .or_else(|| serde_saphyr::from_str(text_str).ok());
+
+        if let Some(value) = parsed_value {
+            let values = value
+                .get("actions")
+                .and_then(serde_json::Value::as_array)
+                .cloned()
+                .unwrap_or_else(|| vec![value]);
+            for val in values {
+                if let Ok(action) = Self::from_value(&val) {
+                    results.push(action);
+                }
+            }
+        }
     }
 
     fn from_value(value: &serde_json::Value) -> RivetResult<Self> {
+        // 0. Canonical ACCP envelope (single wire contract) — preferred path.
+        //    Maps PROPOSAL/* and QUERY/* envelopes to CognitiveAction.
+        //    This keeps controller output aligned with ACCP SPEC §9 and Controller Profile.
+        if (value.get("accp_version").is_some() || value.get("family").is_some())
+            && let Some(canonical) = Self::try_parse_canonical_envelope(value)
+        {
+            return Ok(canonical);
+        }
+        // If envelope fields present but parse failed, fall through to legacy error
         let action_type = value
             .get("action_type")
             .and_then(serde_json::Value::as_str)
@@ -97,9 +137,109 @@ impl CognitiveAction {
                         .map_err(|error| RivetError::Serialization(error.to_string()))
                 }
             }
-            "tool_call" => serde_json::from_value(payload)
-                .map(Self::ToolCall)
-                .map_err(|error| RivetError::Serialization(error.to_string())),
+            "tool_call" => {
+                if let Ok(proposal) =
+                    serde_json::from_value::<accp::ActionProposal>(payload.clone())
+                {
+                    Ok(Self::ToolCall(proposal))
+                } else if let Some(tool_name) = payload
+                    .get("tool_name")
+                    .or_else(|| payload.get("tool"))
+                    .or_else(|| payload.get("name"))
+                    .or_else(|| payload.get("capability"))
+                    .and_then(|v| v.as_str())
+                {
+                    // Shorthand normalization for various model representations
+                    let capability = match tool_name {
+                        "grep" | "search" | "find_in_files" => "code.search",
+                        "read" | "cat" | "view" | "open" => "file.read",
+                        "write" | "edit" | "save" => "file.write",
+                        "list" | "ls" | "dir" => "dir.list",
+                        other => other,
+                    }
+                    .to_string();
+
+                    let args = payload
+                        .get("tool_arguments")
+                        .or_else(|| payload.get("arguments"))
+                        .or_else(|| payload.get("parameters"))
+                        .cloned()
+                        .unwrap_or_else(|| serde_json::json!({}));
+
+                    let target = payload
+                        .get("target")
+                        .or_else(|| payload.get("file_path"))
+                        .or_else(|| payload.get("path"))
+                        .or_else(|| payload.get("file"))
+                        .or_else(|| args.get("target"))
+                        .or_else(|| args.get("file_path"))
+                        .or_else(|| args.get("path"))
+                        .or_else(|| args.get("file"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or(".")
+                        .to_string();
+
+                    let mut parameters = if args.is_object() {
+                        args.clone()
+                    } else {
+                        serde_json::json!({})
+                    };
+
+                    if capability == "code.search" {
+                        if let Some(pattern) = payload
+                            .get("pattern")
+                            .or_else(|| payload.get("query"))
+                            .or_else(|| args.get("pattern"))
+                            .or_else(|| args.get("query"))
+                        {
+                            parameters["query"] = pattern.clone();
+                        }
+                    } else if capability == "file.write"
+                        && let Some(content) = payload
+                            .get("content")
+                            .or_else(|| payload.get("body"))
+                            .or_else(|| args.get("content"))
+                            .or_else(|| args.get("body"))
+                    {
+                        parameters["content"] = content.clone();
+                    }
+
+                    let risk = if capability == "file.write" || capability == "semantic.patch" {
+                        accp::ActionRisk::Material
+                    } else {
+                        accp::ActionRisk::Inspect
+                    };
+
+                    let intent = payload
+                        .get("intent")
+                        .or_else(|| payload.get("rationale"))
+                        .or_else(|| payload.get("description"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("Execute tool")
+                        .to_string();
+
+                    let scope = payload
+                        .get("scope")
+                        .and_then(|v| serde_json::from_value::<Scope>(v.clone()).ok())
+                        .unwrap_or_else(|| Scope::global("rivet", Revision(0)));
+
+                    Ok(Self::ToolCall(accp::ActionProposal {
+                        action_id: ActionId::new(),
+                        capability,
+                        target,
+                        parameters,
+                        estimated_risk: risk,
+                        intent,
+                        scope,
+                        idempotency_key: None,
+                        timestamp: chrono::Utc::now(),
+                    }))
+                } else {
+                    serde_json::from_value(payload)
+                        .map(Self::ToolCall)
+                        .map_err(|error| RivetError::Serialization(error.to_string()))
+                }
+            }
             "hypothesis_delta" => serde_json::from_value::<HypothesisDeltaPayload>(payload)
                 .map(|payload| Self::HypothesisDelta {
                     add: payload.add,
@@ -123,6 +263,186 @@ impl CognitiveAction {
             _ => Err(RivetError::SemanticViolation(format!(
                 "unsupported cognitive action type '{action_type}'"
             ))),
+        }
+    }
+
+    /// Try canonical ACCP envelope: {accp_version, sender, family, kind, revision, scope, payload}
+    /// Maps directly to CognitiveAction without the legacy action_type mini-DSL.
+    fn try_parse_canonical_envelope(value: &serde_json::Value) -> Option<Self> {
+        let family = value
+            .get("family")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_uppercase())?;
+        let kind = value
+            .get("kind")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_uppercase())?;
+        let payload = value
+            .get("payload")
+            .cloned()
+            .unwrap_or(serde_json::json!({}));
+        // Merge top-level revision/scope into payload when inner payload lacks them
+        // (canonical spec puts revision/scope at envelope level; inner types also carry scope)
+        let enrich_payload = |mut inner: serde_json::Value| -> serde_json::Value {
+            if inner.is_object() {
+                if let Some(rev) = value.get("revision")
+                    && inner.get("revision").is_none()
+                    && inner.get("base_revision").is_none()
+                {
+                    inner["revision"] = rev.clone();
+                }
+                if let Some(scope) = value.get("scope")
+                    && inner.get("scope").is_none()
+                    && inner.get("target_scope").is_none()
+                {
+                    inner["scope"] = scope.clone();
+                }
+            }
+            inner
+        };
+        match (family.as_str(), kind.as_str()) {
+            ("PROPOSAL", "ACTION") => {
+                let mut p = enrich_payload(payload.clone());
+                // Normalize common LLM hallucinations for canonical ACTION payload
+                // e.g. {"action":"file.read", "reason":"..."} vs spec {"capability","intent"}
+                if p.get("capability").is_none()
+                    && let Some(v) = p
+                        .get("action")
+                        .or_else(|| p.get("tool"))
+                        .or_else(|| p.get("name"))
+                        .cloned()
+                {
+                    p["capability"] = v;
+                }
+                if p.get("intent").is_none()
+                    && let Some(v) = p
+                        .get("reason")
+                        .or_else(|| p.get("rationale"))
+                        .or_else(|| p.get("description"))
+                        .cloned()
+                {
+                    p["intent"] = v;
+                }
+                if p.get("target").is_none()
+                    && let Some(v) = p
+                        .get("path")
+                        .or_else(|| p.get("file"))
+                        .or_else(|| p.get("file_path"))
+                        .cloned()
+                {
+                    p["target"] = v;
+                }
+                // Inject defaults for required ActionProposal fields if LLM omitted them
+                if p.get("action_id").is_none() {
+                    p["action_id"] =
+                        serde_json::json!(format!("act_{}", rivet_types::ActionId::new()));
+                }
+                if p.get("parameters").is_none() {
+                    p["parameters"] = serde_json::json!({});
+                }
+                if p.get("estimated_risk").is_none() {
+                    let cap = p.get("capability").and_then(|v| v.as_str()).unwrap_or("");
+                    let risk = if cap == "file.write" || cap == "semantic.patch" {
+                        "material"
+                    } else {
+                        "inspect"
+                    };
+                    p["estimated_risk"] = serde_json::json!(risk);
+                }
+                if p.get("timestamp").is_none() {
+                    p["timestamp"] = serde_json::json!(chrono::Utc::now().to_rfc3339());
+                }
+                // Normalize envelope-level scope/revision aliases: "r0" string, "path" vs "path_pattern"
+                let mut scope_val = value
+                    .get("scope")
+                    .cloned()
+                    .or_else(|| p.get("scope").cloned());
+                if let Some(scope_obj) = scope_val.as_mut().and_then(|v| v.as_object_mut()) {
+                    if scope_obj.get("path_pattern").is_none()
+                        && let Some(v) = scope_obj.remove("path")
+                    {
+                        scope_obj.insert("path_pattern".into(), v);
+                    }
+                    // revision may be "r0" string or number; normalize to integer
+                    if let Some(rev) = scope_obj.get("revision")
+                        && let Some(s) = rev.as_str()
+                        && let Some(num) = s.strip_prefix('r').and_then(|n| n.parse::<u64>().ok())
+                    {
+                        scope_obj.insert("revision".into(), serde_json::json!(num));
+                    }
+                    p["scope"] = serde_json::Value::Object(scope_obj.clone());
+                }
+                if p.get("scope").is_none() {
+                    // Fallback to legacy revision field at envelope top-level
+                    if let Some(rev) = value.get("revision") {
+                        let rev_num = if let Some(n) = rev.as_u64() {
+                            n
+                        } else if let Some(s) = rev.as_str() {
+                            s.strip_prefix('r')
+                                .and_then(|n| n.parse().ok())
+                                .unwrap_or(0)
+                        } else {
+                            0
+                        };
+                        p["scope"] = serde_json::json!({"repository":"rivet","revision": rev_num});
+                    }
+                }
+                serde_json::from_value::<accp::ActionProposal>(p.clone())
+                    .ok()
+                    .map(Self::ToolCall)
+                    .or_else(|| {
+                        // Also support raw capability form inside canonical envelope via legacy path
+                        Self::from_value(
+                            &serde_json::json!({"action_type":"tool_call","payload":p}),
+                        )
+                        .ok()
+                    })
+            }
+            ("PROPOSAL", "CLAIM") => {
+                serde_json::from_value::<ClaimProposal>(enrich_payload(payload))
+                    .ok()
+                    .map(Self::ClaimProposal)
+            }
+            ("PROPOSAL", "WORKSPACE_DELTA") => {
+                serde_json::from_value::<HypothesisDeltaPayload>(payload)
+                    .ok()
+                    .map(|payload| Self::HypothesisDelta {
+                        add: payload.add,
+                        remove: payload.remove,
+                    })
+            }
+            ("PROPOSAL", "VERIFICATION") => {
+                serde_json::from_value::<VerificationRequest>(enrich_payload(payload))
+                    .ok()
+                    .map(Self::VerificationRequest)
+            }
+            ("PROPOSAL", "STATE_TRANSITION") => {
+                serde_json::from_value::<StateTransitionProposal>(enrich_payload(payload))
+                    .ok()
+                    .map(Self::StateTransitionProposal)
+            }
+            ("PROPOSAL", "COMPLETION") => {
+                // payload may be {summary} or directly string
+                if let Some(s) = payload.get("summary").and_then(|v| v.as_str()) {
+                    Some(Self::CompletionRequest {
+                        summary: s.to_string(),
+                    })
+                } else if let Some(s) = payload.as_str() {
+                    Some(Self::CompletionRequest {
+                        summary: s.to_string(),
+                    })
+                } else {
+                    serde_json::from_value::<CompletionPayload>(payload)
+                        .ok()
+                        .map(|p| Self::CompletionRequest { summary: p.summary })
+                }
+            }
+            ("QUERY", _) => {
+                // Queries are not yet a distinct CognitiveAction; surface as Thought with provenance
+                let q = format!("QUERY/{kind}: {}", payload);
+                Some(Self::Thought(q))
+            }
+            _ => None,
         }
     }
 }
@@ -169,7 +489,16 @@ impl ModelResponse {
         let text_content = text_content.into();
         let mut actions = CognitiveAction::parse_text(&text_content);
         if actions.is_empty() {
-            actions.push(CognitiveAction::Thought(text_content.clone()));
+            // If LLM returned literal JSON null or empty, treat as empty Thought (no hardcode)
+            // Let the Harness / TUI decide how to render; do not inject fake greeting.
+            // Text content stays as original so provenance is preserved, but TUI will filter "null" display.
+            let is_null = text_content.trim() == "null" || text_content.trim() == "\"null\"";
+            if is_null || text_content.trim().is_empty() {
+                // Keep text_content as empty, push empty Thought so it doesn't become "null" spam
+                actions.push(CognitiveAction::Thought(String::new()));
+            } else {
+                actions.push(CognitiveAction::Thought(text_content.clone()));
+            }
         }
         Self {
             text_content,

@@ -20,6 +20,7 @@ use rivet_repository::{InductionEngine, RepoFrontier, RepositoryCensus};
 use rivet_runtime::Runtime;
 use rivet_store::HardStateStore;
 use rivet_types::*;
+use rivet_view::{CognitiveViewCompiler, CompilationContext, RepresentationMode};
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::Mutex;
@@ -44,6 +45,54 @@ pub enum RunPhase {
     Failed,
 }
 
+/// Authoritative lifecycle signals emitted by the Harness for UI projections.
+/// These are intentionally typed summaries: raw model chain-of-thought never
+/// crosses this boundary.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub enum HarnessEvent {
+    Phase {
+        phase: RunPhase,
+        message: String,
+    },
+    CognitiveState {
+        focus: String,
+        hypothesis: Option<String>,
+        status: String,
+        evidence_count: usize,
+        counter_signal: Option<String>,
+    },
+    ToolCall {
+        action_id: String,
+        capability: String,
+        target: String,
+        status: String,
+        summary: String,
+        output_summary: Option<String>,
+    },
+    Observation {
+        source: String,
+        summary: String,
+        evidence_id: Option<String>,
+    },
+    Praxis {
+        obligation_id: String,
+        predicate: String,
+        status: String,
+        scope: String,
+        diagnostics: Option<String>,
+        receipt_id: Option<String>,
+    },
+    HardStateMutation {
+        revision: u64,
+        mutation: String,
+        entity_id: Option<String>,
+        from: Option<String>,
+        to: Option<String>,
+    },
+}
+
+pub type HarnessEventSink = Arc<dyn Fn(HarnessEvent) + Send + Sync>;
+
 pub struct HarnessCore {
     pub session_id: SessionId,
     pub task_id: TaskId,
@@ -60,6 +109,8 @@ pub struct HarnessCore {
     repository_signals: Arc<Mutex<Vec<String>>>,
     cycle_lock: Arc<Mutex<()>>,
     phase: Arc<Mutex<RunPhase>>,
+    pending_steers: Arc<Mutex<Vec<String>>>,
+    event_sink: Arc<std::sync::RwLock<Option<HarnessEventSink>>>,
 }
 
 impl HarnessCore {
@@ -101,41 +152,68 @@ impl HarnessCore {
         ))
     }
 
-    fn from_state(
+    pub fn from_state(
         store: Arc<dyn HardStateStore>,
         model: Arc<dyn ModelBackend>,
         runtime: Arc<Runtime>,
         session_id: SessionId,
         task_id: TaskId,
-        mut hard_state: HardState,
+        mut hard: HardState,
     ) -> Self {
-        let task_id = hard_state
-            .active_task_id
-            .clone()
-            .unwrap_or_else(|| task_id.clone());
-        hard_state.active_task_id = Some(task_id.clone());
-        let base_revision = hard_state.revision;
+        let base_revision = hard.revision;
+        let task_id = hard.active_task_id.clone().unwrap_or(task_id);
+        hard.active_task_id = Some(task_id.clone());
         Self {
             session_id: session_id.clone(),
             task_id,
-            hard_state: Arc::new(Mutex::new(hard_state)),
+            hard_state: Arc::new(Mutex::new(hard)),
             soft_workspace: Arc::new(Mutex::new(SoftWorkspace::new(session_id, base_revision))),
             store,
             model,
             runtime,
             goal_spec: Arc::new(Mutex::new(None)),
             failure_tracker: Arc::new(Mutex::new(FailureClusterTracker::new())),
-            hephaestus: Arc::new(HephaestusEngine::disabled()),
-            repository_id: std::env::var("RIVET_REPOSITORY_ID").unwrap_or_else(|_| "rivet".into()),
+            hephaestus: Arc::new(HephaestusEngine::new(3)),
+            repository_id: "rivet".into(),
             relevant_files: Arc::new(Mutex::new(Vec::new())),
             repository_signals: Arc::new(Mutex::new(Vec::new())),
             cycle_lock: Arc::new(Mutex::new(())),
             phase: Arc::new(Mutex::new(RunPhase::Idle)),
+            pending_steers: Arc::new(Mutex::new(Vec::new())),
+            event_sink: Arc::new(std::sync::RwLock::new(None)),
         }
     }
 
-    pub fn with_hephaestus(mut self, engine: HephaestusEngine) -> Self {
-        self.hephaestus = Arc::new(engine);
+    /// Enqueue a non-blocking steering directive into the Harness without acquiring cycle lock.
+    /// Injects into provisional SoftWorkspace focus and the upcoming cognitive turn.
+    pub async fn steer(&self, prompt: impl Into<String>) {
+        let prompt = prompt.into();
+        self.pending_steers.lock().await.push(prompt.clone());
+        let mut soft = self.soft_workspace.lock().await;
+        soft.hypotheses
+            .push(format!("Steering directive: {}", prompt));
+        soft.active_focus.push(prompt);
+    }
+
+    /// Attach a non-blocking observer used by local UI adapters.
+    pub fn with_event_sink(self, sink: HarnessEventSink) -> Self {
+        if let Ok(mut slot) = self.event_sink.write() {
+            *slot = Some(sink);
+        }
+        self
+    }
+
+    fn emit_event(&self, event: HarnessEvent) {
+        if let Ok(slot) = self.event_sink.read()
+            && let Some(sink) = slot.as_ref()
+        {
+            sink(event);
+        }
+    }
+
+    /// Explicitly bind an external Hephaestus engine configuration to this Harness.
+    pub fn with_hephaestus(mut self, hephaestus: HephaestusEngine) -> Self {
+        self.hephaestus = Arc::new(hephaestus);
         self
     }
 
@@ -143,8 +221,7 @@ impl HarnessCore {
         self.hephaestus = Arc::new(HephaestusEngine::enabled(threshold));
     }
 
-    /// Compile a user prompt into a formal GoalSpec, materialize its obligations
-    /// into HardState, and set it as the active goal.
+    /// Materialize goal obligations into Noesis Hard State through GoalCompiler.
     pub async fn initialize_goal(&self, user_prompt: &str) -> RivetResult<GoalSpec> {
         let current_revision = self.hard_state.lock().await.revision;
         let spec = GoalCompiler::compile(user_prompt, &self.repository_id, current_revision);
@@ -160,6 +237,7 @@ impl HarnessCore {
         }
 
         *self.goal_spec.lock().await = Some(spec.clone());
+        self.set_phase(RunPhase::Idle).await;
         Ok(spec)
     }
 
@@ -209,6 +287,10 @@ impl HarnessCore {
         self
     }
 
+    pub fn repository_id(&self) -> &str {
+        &self.repository_id
+    }
+
     pub async fn current_phase(&self) -> RunPhase {
         *self.phase.lock().await
     }
@@ -219,60 +301,64 @@ impl HarnessCore {
 
     async fn set_phase(&self, phase: RunPhase) {
         *self.phase.lock().await = phase;
+        self.emit_event(HarnessEvent::Phase {
+            phase,
+            message: format!("phase: {phase:?}"),
+        });
     }
 
-    /// Compile a bounded, deterministic task-conditioned Cognitive View.
+    /// Compile a bounded, deterministic task-conditioned Cognitive View using rivet-view.
     pub async fn compile_view(&self, goal: &str) -> CognitiveView {
         let hard = self.hard_state.lock().await;
         let soft = self.soft_workspace.lock().await;
         let relevant_files = self.relevant_files.lock().await.clone();
         let repository_signals = self.repository_signals.lock().await.clone();
 
-        let mut active_claims: Vec<_> = hard.claims.values().cloned().collect();
-        active_claims.sort_by(|left, right| left.id.cmp(&right.id));
-        let mut open_obligations: Vec<_> = hard
-            .obligations
-            .iter()
-            .map(|(id, description)| format!("{id}: {description}"))
-            .collect();
-        open_obligations.sort();
-        let mut recent_evidence: Vec<_> = hard
-            .evidence
-            .iter()
-            .map(|(id, summary)| format!("{id}: {summary}"))
-            .collect();
-        recent_evidence.sort();
-        recent_evidence.truncate(32);
+        let ctx = CompilationContext {
+            hard_state: &hard,
+            soft_workspace: &soft,
+            goal_description: goal,
+            repository_id: &self.repository_id,
+            relevant_files: &relevant_files,
+            repository_signals: &repository_signals,
+            token_budget: 4096,
+            mode: RepresentationMode::Hybrid,
+            deferred_trees_count: 0,
+        };
 
-        let mut contradictions: Vec<_> = hard
-            .contradictions
-            .values()
-            .map(|c| format!("{}: {}", c.claim_id, c.reason))
-            .collect();
-        contradictions.sort();
-
-        let mut rejected_claims: Vec<_> = hard
-            .rejected_claims
-            .values()
-            .map(|r| format!("{}: {}", r.claim_id, r.reason))
-            .collect();
-        rejected_claims.sort();
+        let compiled = CognitiveViewCompiler::compile(&ctx);
 
         CognitiveView {
-            hard_revision: hard.revision,
-            repository_id: self.repository_id.clone(),
-            goal_description: goal.to_string(),
-            active_claims,
-            contradictions,
-            rejected_claims,
-            open_obligations,
-            recent_evidence,
-            repository_signals,
-            unknowns: soft.unknowns.clone(),
-            active_hypotheses: soft.hypotheses.clone(),
-            active_focus: soft.active_focus.clone(),
-            relevant_files,
-            token_budget_hint: 4096,
+            hard_revision: compiled.hard_revision,
+            repository_id: compiled.repository_id,
+            goal_description: compiled.goal_description,
+            active_claims: compiled.active_claims,
+            contradictions: compiled
+                .contradictions
+                .into_iter()
+                .map(|c| format!("{}: {}", c.claim_id, c.reason))
+                .collect(),
+            rejected_claims: compiled
+                .rejected_claims
+                .into_iter()
+                .map(|r| format!("{}: {}", r.claim_id, r.reason))
+                .collect(),
+            open_obligations: compiled
+                .open_obligations
+                .into_iter()
+                .map(|(id, desc, _scope)| format!("{}: {}", id, desc))
+                .collect(),
+            recent_evidence: compiled
+                .recent_evidence
+                .into_iter()
+                .map(|(id, src, sum)| format!("{}: [{}] {}", id, src, sum))
+                .collect(),
+            repository_signals: compiled.repository_signals,
+            unknowns: compiled.unknowns,
+            active_hypotheses: compiled.hypotheses,
+            active_focus: compiled.active_focus,
+            relevant_files: compiled.relevant_files,
+            token_budget_hint: compiled.omitted_summary.token_budget,
             model_invocation_count: hard.model_invocations.len(),
         }
     }
@@ -293,6 +379,13 @@ impl HarnessCore {
     async fn step_inner(&self, goal: &str, user_prompt: &str) -> RivetResult<String> {
         self.set_phase(RunPhase::PreparingView).await;
         let view = self.compile_view(goal).await;
+        self.emit_event(HarnessEvent::CognitiveState {
+            focus: goal.to_string(),
+            hypothesis: view.active_hypotheses.first().cloned(),
+            status: "provisional".into(),
+            evidence_count: view.recent_evidence.len(),
+            counter_signal: view.contradictions.first().cloned(),
+        });
         let view_message = AccpMessage::View(accp::ViewMessage {
             kind: "COGNITIVE".into(),
             payload: serde_json::to_value(&view)
@@ -305,15 +398,28 @@ impl HarnessCore {
         )?
         .validate_direction()?;
         self.set_phase(RunPhase::InvokingModel).await;
+        let pending = {
+            let mut steers = self.pending_steers.lock().await;
+            std::mem::take(&mut *steers)
+        };
+        let effective_user_prompt = if pending.is_empty() {
+            user_prompt.to_string()
+        } else {
+            let steer_block = pending
+                .iter()
+                .map(|s| format!("[Steering Directive]: {}", s))
+                .collect::<Vec<_>>()
+                .join("\n");
+            format!("{}\n\n{}", user_prompt, steer_block)
+        };
+
         let model_id = std::env::var("RIVET_MODEL_ID").unwrap_or_default();
         let view_revision = view.hard_revision;
         let model_req = ModelRequest {
             model_id: model_id.clone(),
-            system_prompt: Arc::from(
-                "You are Rivet's cognitive controller. The Harness owns authority, observations, verification, persistence, and completion. Use prose only for analysis, or return one typed proposal JSON object with action_type and payload. Allowed action_type values are tool_call, hypothesis_delta, claim_proposal, state_transition_proposal, verification_request, and completion_request. A proposal is not execution, an observation, verification, or completion. Never emit execution_receipt, verification_receipt, or completion_decision JSON. Keep paths relative and use the repository identity and revision shown in the Cognitive View.",
-            ),
+            system_prompt: Arc::from(accp::compile_controller_reference_prompt()),
             cognitive_view: Arc::new(view),
-            user_prompt: user_prompt.to_string(),
+            user_prompt: effective_user_prompt,
             temperature: Some(0.2),
             max_tokens: Some(2048),
         };
@@ -339,12 +445,21 @@ impl HarnessCore {
         .await?;
 
         self.set_phase(RunPhase::DecodingActions).await;
+        let has_actions = !response.actions.is_empty();
         for action in response.actions {
             match action {
                 CognitiveAction::Thought(thought) => {
                     tracing::info!("Model thought: {}", thought);
                 }
                 CognitiveAction::ToolCall(proposal) => {
+                    self.emit_event(HarnessEvent::ToolCall {
+                        action_id: proposal.action_id.to_string(),
+                        capability: proposal.capability.clone(),
+                        target: proposal.target.clone(),
+                        status: "proposed".into(),
+                        summary: proposal.intent.clone(),
+                        output_summary: None,
+                    });
                     self.set_phase(RunPhase::Authorizing).await;
                     let proposal_message = AccpMessage::ActionProposal(proposal.clone());
                     AccpEnvelope::from_message(
@@ -387,7 +502,15 @@ impl HarnessCore {
                         repository: self.repository_id.clone(),
                         current_revision,
                         allowed_scope: Scope::global(&self.repository_id, current_revision),
-                        allowed_capabilities: vec!["file.read".into(), "file.write".into()],
+                        allowed_capabilities: vec![
+                            "file.read".into(),
+                            "file.write".into(),
+                            "semantic.patch".into(),
+                            "code.search".into(),
+                            "dir.list".into(),
+                            "workspace.rollback".into(),
+                            "mcp.*".into(),
+                        ],
                         allow_material: true,
                         human_approved: false,
                     };
@@ -402,8 +525,47 @@ impl HarnessCore {
                     AccpSemanticGate::ensure_execution_authorized(&decision)?;
 
                     self.set_phase(RunPhase::Executing).await;
-                    let receipt = self.runtime.execute_action(&proposal).await?;
+                    self.emit_event(HarnessEvent::ToolCall {
+                        action_id: proposal.action_id.to_string(),
+                        capability: proposal.capability.clone(),
+                        target: proposal.target.clone(),
+                        status: "executing".into(),
+                        summary: proposal.intent.clone(),
+                        output_summary: None,
+                    });
+                    let receipt = match self.runtime.execute_action(&proposal).await {
+                        Ok(receipt) => receipt,
+                        Err(error) => {
+                            self.emit_event(HarnessEvent::ToolCall {
+                                action_id: proposal.action_id.to_string(),
+                                capability: proposal.capability.clone(),
+                                target: proposal.target.clone(),
+                                status: "failed".into(),
+                                summary: proposal.intent.clone(),
+                                output_summary: Some(error.to_string()),
+                            });
+                            return Err(error);
+                        }
+                    };
+                    self.emit_event(HarnessEvent::ToolCall {
+                        action_id: proposal.action_id.to_string(),
+                        capability: proposal.capability.clone(),
+                        target: proposal.target.clone(),
+                        status: if receipt.success {
+                            "completed"
+                        } else {
+                            "failed"
+                        }
+                        .into(),
+                        summary: proposal.intent.clone(),
+                        output_summary: Some(receipt.output_summary.clone()),
+                    });
                     self.set_phase(RunPhase::Observing).await;
+                    self.emit_event(HarnessEvent::Observation {
+                        source: proposal.capability.clone(),
+                        summary: receipt.output_summary.clone(),
+                        evidence_id: Some(receipt.evidence_id.to_string()),
+                    });
                     let receipt_message = AccpMessage::ExecutionReceipt(receipt.clone());
                     AccpEnvelope::from_message(
                         receipt.receipt_id.to_string(),
@@ -434,6 +596,14 @@ impl HarnessCore {
                     }
                 }
                 CognitiveAction::VerificationRequest(request) => {
+                    self.emit_event(HarnessEvent::Praxis {
+                        obligation_id: request.obligation_id.to_string(),
+                        predicate: request.predicate.clone(),
+                        status: "running".into(),
+                        scope: format!("{:?}", request.target_scope),
+                        diagnostics: None,
+                        receipt_id: None,
+                    });
                     self.set_phase(RunPhase::Verifying).await;
                     let proposal_message = AccpMessage::VerificationRequest(request.clone());
                     AccpEnvelope::from_message(
@@ -546,6 +716,17 @@ impl HarnessCore {
                     return Ok(format!("Task completed: {summary}"));
                 }
             }
+        }
+
+        if !has_actions
+            && (response.text_content.contains("\"action_type\"")
+                || response.text_content.contains("tool_call")
+                || response.text_content.contains("completion_request"))
+        {
+            let mut soft = self.soft_workspace.lock().await;
+            soft.add_hypothesis(
+                "Corrective Guidance: Model output attempted an action proposal but the JSON payload was malformed. Please output valid JSON matching: {\"action_type\": \"tool_call\" | \"completion_request\" | ..., \"payload\": {...}}.",
+            );
         }
 
         self.set_phase(RunPhase::Responding).await;
@@ -671,6 +852,14 @@ impl HarnessCore {
             timestamp: chrono::Utc::now(),
         })
         .await?;
+        self.emit_event(HarnessEvent::Praxis {
+            obligation_id: receipt.obligation_id.to_string(),
+            predicate: request.predicate.clone(),
+            status: if receipt.passed { "pass" } else { "fail" }.into(),
+            scope: format!("{:?}", receipt.verified_scope),
+            diagnostics: receipt.diagnostics.clone(),
+            receipt_id: Some(receipt.receipt_id.to_string()),
+        });
         if passed
             && self
                 .hard_state
@@ -718,7 +907,15 @@ impl HarnessCore {
             ));
         };
         let args: Vec<_> = parts.collect();
-        if !is_allowed_verification_program(program) {
+        self.emit_event(HarnessEvent::Praxis {
+            obligation_id: request.obligation_id.to_string(),
+            predicate: request.predicate.clone(),
+            status: "running".into(),
+            scope: format!("{:?}", request.target_scope),
+            diagnostics: None,
+            receipt_id: None,
+        });
+        if !is_allowed_verification_program(program, self.runtime.working_dir()) {
             return Err(RivetError::AuthorityDenied(format!(
                 "verification program '{program}' is not exposed by the Harness"
             )));
@@ -765,6 +962,14 @@ impl HarnessCore {
             timestamp: chrono::Utc::now(),
         })
         .await?;
+        self.emit_event(HarnessEvent::Praxis {
+            obligation_id: receipt.obligation_id.to_string(),
+            predicate: request.predicate.clone(),
+            status: if receipt.passed { "pass" } else { "fail" }.into(),
+            scope: format!("{:?}", receipt.verified_scope),
+            diagnostics: receipt.diagnostics.clone(),
+            receipt_id: Some(receipt.receipt_id.to_string()),
+        });
         if receipt.passed {
             self.failure_tracker.lock().await.record_success();
             let is_open = self
@@ -925,6 +1130,51 @@ impl HarnessCore {
             }
             _ => {}
         }
+        let (mutation, entity_id, from, to) = match &event {
+            NoesisEvent::ObligationCreated { obligation_id, .. } => (
+                "obligation created",
+                Some(obligation_id.to_string()),
+                Some("ABSENT".into()),
+                Some("OPEN".into()),
+            ),
+            NoesisEvent::ObligationClosed { obligation_id, .. } => (
+                "obligation closed",
+                Some(obligation_id.to_string()),
+                Some("OPEN".into()),
+                Some("VERIFIED".into()),
+            ),
+            NoesisEvent::ObligationReopened { obligation_id, .. } => (
+                "obligation reopened",
+                Some(obligation_id.to_string()),
+                Some("VERIFIED".into()),
+                Some("OPEN".into()),
+            ),
+            NoesisEvent::VerificationRecorded { receipt, .. } => (
+                "verification receipt recorded",
+                Some(receipt.obligation_id.to_string()),
+                Some("RUNNING".into()),
+                Some(if receipt.passed { "PASS" } else { "FAIL" }.into()),
+            ),
+            NoesisEvent::ClaimContradicted { claim_id, .. } => (
+                "claim contradicted",
+                Some(claim_id.to_string()),
+                Some("PROVISIONAL".into()),
+                Some("CONTRADICTED".into()),
+            ),
+            NoesisEvent::ClaimRejected { claim_id, .. } => (
+                "claim rejected",
+                Some(claim_id.to_string()),
+                Some("PROVISIONAL".into()),
+                Some("REJECTED".into()),
+            ),
+            NoesisEvent::CompletionAccepted { task_id, .. } => (
+                "task completed",
+                Some(task_id.to_string()),
+                Some("ACTIVE".into()),
+                Some("COMPLETED".into()),
+            ),
+            _ => ("hard state mutation", None, None, None),
+        };
         let expected_revision = hard.revision;
         let revision = self.store.append_event(expected_revision, &event).await?;
         if revision != expected_revision.next() {
@@ -936,15 +1186,74 @@ impl HarnessCore {
         }
         hard.apply(&event);
         self.store.save_checkpoint(&hard).await?;
+        self.emit_event(HarnessEvent::HardStateMutation {
+            revision: revision.0,
+            mutation: mutation.into(),
+            entity_id,
+            from,
+            to,
+        });
         Ok(revision)
     }
 }
 
-fn is_allowed_verification_program(program: &str) -> bool {
-    matches!(
+fn is_allowed_verification_program(program: &str, working_dir: &std::path::Path) -> bool {
+    // 1. Built-in known test runners and build frameworks
+    if matches!(
         program,
-        "cargo" | "pytest" | "go" | "npm" | "pnpm" | "yarn" | "jest" | "vitest"
-    )
+        "cargo"
+            | "pytest"
+            | "python"
+            | "python3"
+            | "go"
+            | "npm"
+            | "pnpm"
+            | "yarn"
+            | "npx"
+            | "jest"
+            | "vitest"
+            | "make"
+            | "ctest"
+            | "cmake"
+            | "ninja"
+            | "mvn"
+            | "gradle"
+            | "mix"
+            | "dotnet"
+            | "deno"
+            | "bun"
+            | "ruby"
+            | "rake"
+            | "rspec"
+            | "uv"
+    ) {
+        return true;
+    }
+
+    // 2. Project manifest based discovery
+    if program == "make" && working_dir.join("Makefile").exists() {
+        return true;
+    }
+    if (program == "mvn" || program == "./mvnw") && working_dir.join("pom.xml").exists() {
+        return true;
+    }
+    if (program == "gradle" || program == "./gradlew")
+        && (working_dir.join("build.gradle").exists()
+            || working_dir.join("build.gradle.kts").exists())
+    {
+        return true;
+    }
+
+    // 3. Project configuration file (.rivet/config.toml)
+    let config_path = working_dir.join(".rivet/config.toml");
+    if config_path.exists()
+        && let Ok(content) = std::fs::read_to_string(config_path)
+        && content.contains(program)
+    {
+        return true;
+    }
+
+    false
 }
 
 fn scope_contains_at_revision(outer: &Scope, inner: &Scope) -> bool {

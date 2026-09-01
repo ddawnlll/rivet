@@ -11,6 +11,16 @@ use std::sync::{Arc, Mutex};
 
 const EVENTS_TABLE: TableDefinition<u64, &[u8]> = TableDefinition::new("noesis_events");
 const STATE_TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("noesis_materialized");
+const SESSIONS_TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("session_history");
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct StoredSessionEntry {
+    pub id: String,
+    pub prompt: String,
+    pub status: String,
+    pub revision: Option<u64>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
 
 #[async_trait]
 pub trait HardStateStore: Send + Sync {
@@ -22,12 +32,15 @@ pub trait HardStateStore: Send + Sync {
     async fn read_events(&self, from_revision: Revision) -> RivetResult<Vec<NoesisEvent>>;
     async fn save_checkpoint(&self, state: &HardState) -> RivetResult<()>;
     async fn load_checkpoint(&self) -> RivetResult<Option<HardState>>;
+    async fn save_session_entry(&self, entry: &StoredSessionEntry) -> RivetResult<()>;
+    async fn list_session_entries(&self) -> RivetResult<Vec<StoredSessionEntry>>;
 }
 
 /// In-memory HardStateStore for fast tests and ephemeral sessions
 pub struct MemoryStore {
     events: Arc<Mutex<Vec<NoesisEvent>>>,
     checkpoint: Arc<Mutex<Option<HardState>>>,
+    sessions: Arc<Mutex<Vec<StoredSessionEntry>>>,
 }
 
 impl MemoryStore {
@@ -35,6 +48,7 @@ impl MemoryStore {
         Self {
             events: Arc::new(Mutex::new(Vec::new())),
             checkpoint: Arc::new(Mutex::new(None)),
+            sessions: Arc::new(Mutex::new(Vec::new())),
         }
     }
 }
@@ -96,6 +110,27 @@ impl HardStateStore for MemoryStore {
             .map_err(|_| RivetError::Storage("memory store mutex poisoned".into()))?;
         Ok(cp.clone())
     }
+
+    async fn save_session_entry(&self, entry: &StoredSessionEntry) -> RivetResult<()> {
+        let mut sessions = self
+            .sessions
+            .lock()
+            .map_err(|_| RivetError::Storage("memory store mutex poisoned".into()))?;
+        if let Some(pos) = sessions.iter().position(|s| s.id == entry.id) {
+            sessions[pos] = entry.clone();
+        } else {
+            sessions.push(entry.clone());
+        }
+        Ok(())
+    }
+
+    async fn list_session_entries(&self) -> RivetResult<Vec<StoredSessionEntry>> {
+        let sessions = self
+            .sessions
+            .lock()
+            .map_err(|_| RivetError::Storage("memory store mutex poisoned".into()))?;
+        Ok(sessions.clone())
+    }
 }
 
 /// Durable redb embedded ACID store
@@ -116,6 +151,9 @@ impl RedbStore {
             .map_err(|e| RivetError::Storage(e.to_string()))?;
         write_txn
             .open_table(STATE_TABLE)
+            .map_err(|e| RivetError::Storage(e.to_string()))?;
+        write_txn
+            .open_table(SESSIONS_TABLE)
             .map_err(|e| RivetError::Storage(e.to_string()))?;
         write_txn
             .commit()
@@ -242,5 +280,55 @@ impl HardStateStore for RedbStore {
         } else {
             Ok(None)
         }
+    }
+
+    async fn save_session_entry(&self, entry: &StoredSessionEntry) -> RivetResult<()> {
+        let _guard = self
+            .write_lock
+            .lock()
+            .map_err(|_| RivetError::Storage("redb write lock poisoned".into()))?;
+        let serialized =
+            serde_json::to_vec(entry).map_err(|e| RivetError::Serialization(e.to_string()))?;
+        let write_txn = self
+            .db
+            .begin_write()
+            .map_err(|e| RivetError::Storage(e.to_string()))?;
+        {
+            let mut table = write_txn
+                .open_table(SESSIONS_TABLE)
+                .map_err(|e| RivetError::Storage(e.to_string()))?;
+            table
+                .insert(entry.id.as_str(), serialized.as_slice())
+                .map_err(|e| RivetError::Storage(e.to_string()))?;
+        }
+        write_txn
+            .commit()
+            .map_err(|e| RivetError::Storage(e.to_string()))?;
+        Ok(())
+    }
+
+    async fn list_session_entries(&self) -> RivetResult<Vec<StoredSessionEntry>> {
+        let read_txn = self
+            .db
+            .begin_read()
+            .map_err(|e| RivetError::Storage(e.to_string()))?;
+        let table = read_txn
+            .open_table(SESSIONS_TABLE)
+            .map_err(|e| RivetError::Storage(e.to_string()))?;
+
+        let mut entries = Vec::new();
+        let iter = table
+            .range::<&str>(..)
+            .map_err(|e| RivetError::Storage(e.to_string()))?;
+
+        for item in iter {
+            let (_, val) = item.map_err(|e| RivetError::Storage(e.to_string()))?;
+            let entry: StoredSessionEntry = serde_json::from_slice(val.value())
+                .map_err(|e| RivetError::Serialization(e.to_string()))?;
+            entries.push(entry);
+        }
+
+        entries.sort_by_key(|a| a.created_at);
+        Ok(entries)
     }
 }

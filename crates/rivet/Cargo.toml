@@ -12,12 +12,16 @@ path = "src/main.rs"
 [dependencies]
 rivet-types = { workspace = true }
 rivet-core = { workspace = true }
+rivet-service = { workspace = true }
+rivet-api = { workspace = true }
 rivet-store = { workspace = true }
 rivet-model = { workspace = true }
 rivet-model-genai = { workspace = true }
 rivet-model-rig = { workspace = true }
 rivet-runtime = { workspace = true }
 rivet-repository = { workspace = true }
+rivet-eval = { workspace = true }
+rivet-mcp = { workspace = true }
 noesis = { workspace = true }
 praxis = { workspace = true }
 accp = { workspace = true }

@@ -19,8 +19,8 @@ v0.3'ün teknik statüsü **implementation-ready research profile**'dır. Amaç 
 | Agent framework | No fork; Rig/OpenCode/Pi/DSH reference or optional compatibility adapter only | LOCKED_ARCHITECTURAL |
 | Repository/git | Native filesystem + `gix` where useful; external Git CLI allowed as explicit capability fallback | PROVISIONAL |
 | MCP | `rmcp` only at external capability boundary; never internal subsystem bus | LOCKED_FOR_SLICE |
-| UI | CLI/TUI first: `clap` + Ratatui/Crossterm; desktop deferred | LOCKED_FOR_SLICE |
-| Desktop candidate | Tauri if polished web UI wins; egui/eframe if pure-Rust direct-call UI wins | DEFERRED |
+| UI | Chat-only surface via `RivetService` facade; projections: TUI (in-process) / Web (`axum` SSE) / Tauri (`tauri::command` IPC) — `INTERACTION_MODEL.md` uyumlu | PROVISIONAL |
+| Desktop candidate | Tauri wrapping shared `web/dist` (Vite + React + shadcn); egui/eframe deferred | PROVISIONAL |
 | Internal serialization | Typed Rust values; serialization only at persistence/provider/audit boundaries | LOCKED_ARCHITECTURAL |
 
 “Full Rust” burada ürünün agent semantics, harness, Noesis, ACCP, Praxis, Hephaestus, repository runtime, CLI ve adapters'ının Rust olması anlamına gelir. External commands ve provider HTTP endpoints doğal olarak process/network boundaries'dir. Ama internal subsystem'ler HTTP/gRPC/MCP/JSON-RPC üzerinden birbirleriyle konuşmaz.
@@ -553,21 +553,35 @@ Secrets, model hidden reasoning ve sensitive raw content default telemetry'ye ya
 
 ## UI strategy
 
-<span class="badge provisional">PROVISIONAL_DECISION</span> İlk surface CLI/TUI'dir. Bunun nedeni TUI'nin “nihai UX” olması değil, cognitive runtime'ı UI architecture'ından ayırıp chat-only product thesis'ini en hızlı test etmesidir.
+<span class="badge provisional">PROVISIONAL_DECISION</span> v0.3'te UI, cognitive runtime'dan tamamen ayrılmıştır. `INTERACTION_MODEL.md`'deki chat-only thesis korunur: tek authoritative surface chat'tir; Obligations/Workspace/Census/Receipts projection'dır, mode değil. Bu ayrımı somutlaştıran katman `RivetService` facade'dir.
 
 ```text
-v0.3 vertical slice
-  clap commands
-  + Ratatui/Crossterm chat stream
-  + status line
-  + interrupt
-  + scrollback
-  + optional trace view
+RivetService facade (crates/rivet-service)
+  trait RivetService { step, stream_step, initialize_goal, get_state, get_census, current_phase }
+  UiEvent broadcast: AssistantDelta / Status / AuthorityPrompt / VerificationUpdate / Completed
+      ↑
+┌─────┼─────┐
+TUI   Web   Tauri
+(in-process) (axum SSE/WS) (webview IPC - same web/dist)
 ```
 
-Tauri bugün Rust core + OS WebView + frontend message-passing/IPC modeli kullanır. Bu production desktop polish için güçlü olabilir; fakat v0.3'te no-internal-IPC ve direct in-process state hedefi nedeniyle erken complexity'dir. egui/eframe pure-Rust native/web UI alternatifi olarak daha doğrudan olabilir; fakat product design ihtiyacı ortaya çıkmadan UI framework kararı kilitlenmez.
+```text
+v0.3 vertical slice (Phase 8)
+  RivetService facade
+  + TUI: Ratatui/Crossterm chat stream (in-process Arc<RivetService>)
+  + Web: axum REST + SSE (`rivet serve` → localhost:3000, Vite + React + shadcn)
+  + Tauri: same web/dist wrapped via tauri::command invoke
+  + status line / interrupt / scrollback / trace view (shared)
+```
 
-Core frontend'i bilmez:
+*   **TUI** `RivetService`'i in-process doğrudan çağırır. F1-F5 mode tab yerine chat + projection drawer kullanılır. `tui.rs` (215K) kademeli olarak facade'e taşınır, feature-freeze edilir.
+*   **Web** `rivet-api` (`axum`) üzerinden `POST /api/step`, `WS /api/ws` (WebSocket, primary, zero-latency), `GET /api/stream` (SSE fallback), `GET /api/state`, `GET /api/census` expose eder. WS tek persistent TCP (TCP_NODELAY), `try_send` non-blocking, per-token `AssistantDelta` broadcast; bu core subsystem'ler arası IPC değildir; single-process local projection'dır.
+*   **Tauri** aynı `web/dist`'i `invoke("step")` ↔ `RivetService::step` ile saran thin shell'dir. Web ve Desktop %100 aynı React codebase'i paylaşır.
+*   **Chat-only invariant:** `agent ≠ frontend`, `chat = projection of persistent Rivet state`. Drawer'lardaki kartlar mode değil, Hard/Soft state'in read-only projection'ıdır.
+*   **Display priority (drawer):** Tier 1 her zaman açık — Open Obligations + Verification + Contradictions (Hard State); Tier 2 collapsed — Soft Workspace hypotheses/focus + Cognitive View sent to model; Tier 3 on-demand — Recent Evidence/Receipts, Census Frontier, Full HardState explorer. Hard = solid kart, Soft = dashed/soluk (non-authoritative).
+*   Tauri bugün Rust core + OS WebView + frontend message-passing/IPC modeli kullanır; `RivetService` ile bu artık product complexity değil, local projection transport'udur. egui/eframe pure-Rust alternatifi deferred kalır; product design ihtiyacı ortaya çıkmadan framework kilitlenmez.
+
+Core frontend'i bilmez, sadece `UiEvent` basar:
 
 ```rust
 pub enum UiEvent {
@@ -579,7 +593,7 @@ pub enum UiEvent {
 }
 ```
 
-CLI, Tauri veya egui aynı event/query contracts'ını kullanabilir. Agent identity frontend'de yaşamaz.
+CLI, TUI, Web ve Tauri aynı `RivetService`/`UiEvent` contract'ını kullanır. Agent identity frontend'de yaşamaz; frontend kapanıp yeniden açılsa bile `HARD_STATE` ve `SoftWorkspace` continuity korunur.
 
 ## Testing and replay strategy
 

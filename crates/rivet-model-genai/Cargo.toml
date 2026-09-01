@@ -14,6 +14,8 @@ futures-util = { workspace = true }
 async-trait = { workspace = true }
 serde_json = { workspace = true }
 eventsource-stream = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }

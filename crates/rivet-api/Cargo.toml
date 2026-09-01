@@ -1,0 +1,29 @@
+[package]
+name = "rivet-api"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Local HTTP projection for RivetService (rivet serve) — axum + SSE"
+
+[dependencies]
+rivet-service = { workspace = true }
+rivet-types = { workspace = true }
+rivet-core = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+axum = { workspace = true }
+tower = { workspace = true }
+tower-http = { workspace = true }
+futures-util = { workspace = true }
+chrono = { workspace = true }
+tokio-stream = { workspace = true }
+[dev-dependencies]
+rivet-model = { workspace = true }
+http-body-util = { workspace = true }
+tempfile = "3"
+tower = { workspace = true, features = ["util"] }
