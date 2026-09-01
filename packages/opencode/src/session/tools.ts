@@ -23,6 +23,7 @@ import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
 import { isRecord } from "@/util/record"
 import { RuntimeFlags } from "@/effect/runtime-flags"
+import { AccpSemanticGate, CognitiveActionParser, Revision, Scope as RivetScope } from "@opencode-ai/core/rivet"
 
 const MCP_RESOURCE_TOOLS = {
   list: "list_mcp_resources",
@@ -103,6 +104,46 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
         return run.promise(
           Effect.gen(function* () {
             const ctx = context(args, options)
+
+            // Enforce Rivet ACCP 3.0 Semantic Authority Gate
+            const rawInput = isRecord(args) ? args : {}
+            const rivetScope = RivetScope.global("repo", Revision.ZERO)
+            const action = CognitiveActionParser.parseFromToolCall(item.id, rawInput, rivetScope)
+
+            if (action.type === "action_proposal") {
+              const policy = {
+                repository: "repo",
+                currentRevision: Revision.ZERO,
+                allowedScope: rivetScope,
+                allowedCapabilities: ["file.read", "file.write", "process.exec", "tool.*"],
+                allowMaterial: true,
+                humanApproved: true,
+              }
+              const { authorizedAction, decision } = AccpSemanticGate.authorize(action.proposal, policy)
+              if (!authorizedAction || decision.verdict !== "allow") {
+                const rejectionOutput = {
+                  title: item.id,
+                  metadata: {},
+                  output: `ACCP Authority Rejection: ${decision.reason}`,
+                }
+                if (options.abortSignal?.aborted) {
+                  yield* input.processor.completeToolCall(options.toolCallId, rejectionOutput)
+                }
+                return rejectionOutput
+              }
+            } else if (action.type === "claim_proposal") {
+              try {
+                AccpSemanticGate.validateClaimProposal(action.proposal)
+              } catch (err: any) {
+                const rejectionOutput = {
+                  title: item.id,
+                  metadata: {},
+                  output: `ACCP Claim Rejection: ${err.message}`,
+                }
+                return rejectionOutput
+              }
+            }
+
             yield* plugin.trigger(
               "tool.execute.before",
               { tool: item.id, sessionID: ctx.sessionID, callID: ctx.callID },

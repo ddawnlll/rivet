@@ -12,6 +12,7 @@ import { ApplicationTools } from "./application-tools"
 import { definition, permission, settle, validateName, type AnyTool, type RegistrationError } from "./tool"
 import { Tools } from "./tools"
 import { makeLocationNode } from "../effect/app-node"
+import { AccpSemanticGate, CognitiveActionParser, Revision, Scope as RivetScope } from "../rivet/index"
 
 export type ExecuteInput = {
   readonly sessionID: SessionSchema.ID
@@ -59,6 +60,46 @@ const registryLayer = Layer.effect(
         }
       if (advertised && registration.identity !== advertised)
         return { result: { type: "error" as const, value: `Stale tool call: ${input.call.name}` } }
+
+      // Enforce Rivet ACCP 3.0 Authority Layer
+      const rawInput =
+        typeof input.call.input === "object" && input.call.input !== null
+          ? (input.call.input as Record<string, unknown>)
+          : {}
+      const rivetScope = RivetScope.global("repo", Revision.ZERO)
+      const action = CognitiveActionParser.parseFromToolCall(input.call.name, rawInput, rivetScope)
+
+      if (action.type === "action_proposal") {
+        const policy = {
+          repository: "repo",
+          currentRevision: Revision.ZERO,
+          allowedScope: rivetScope,
+          allowedCapabilities: ["file.read", "file.write", "process.exec", "tool.*"],
+          allowMaterial: true,
+          humanApproved: true,
+        }
+        const { authorizedAction, decision } = AccpSemanticGate.authorize(action.proposal, policy)
+        if (!authorizedAction || decision.verdict !== "allow") {
+          return {
+            result: {
+              type: "error" as const,
+              value: `ACCP Authority Rejection: ${decision.reason}`,
+            },
+          }
+        }
+      } else if (action.type === "claim_proposal") {
+        try {
+          AccpSemanticGate.validateClaimProposal(action.proposal)
+        } catch (err: any) {
+          return {
+            result: {
+              type: "error" as const,
+              value: `ACCP Claim Rejection: ${err.message}`,
+            },
+          }
+        }
+      }
+
       const pending = yield* settle(registration.tool, input.call, {
         sessionID: input.sessionID,
         agent: input.agent,
