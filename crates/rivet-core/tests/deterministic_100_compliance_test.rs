@@ -163,6 +163,7 @@ fn ontology_epistemology_claim_lifecycle_enforced() {
         proposition: "algo O(1)".into(),
         status: EpistemicStatus::Supported,
         evidence: vec![fixed_evid("1")],
+        depends_on: vec![],
         scope: Scope::global("rivet", Revision(0)),
         timestamp: Utc::now(),
     });
@@ -183,6 +184,7 @@ fn ontology_contradiction_and_rejection() {
         proposition: "zero-copy".into(),
         status: EpistemicStatus::Supported,
         evidence: vec![fixed_evid("a")],
+        depends_on: vec![],
         scope: Scope::global("rivet", Revision(0)),
         timestamp: Utc::now(),
     });
@@ -398,6 +400,7 @@ fn cognitive_view_determinism_same_input_same_view() {
         proposition: "det proposition".into(),
         status: EpistemicStatus::Supported,
         evidence: vec![fixed_evid("e1")],
+        depends_on: vec![],
         scope: Scope::global("rivet", Revision(0)),
         timestamp: Utc::now(),
     });

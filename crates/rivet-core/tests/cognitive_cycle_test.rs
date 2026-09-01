@@ -675,6 +675,7 @@ async fn harness_rejects_unverified_authoritative_state_injection() {
             proposition: "model prose is truth".into(),
             status: EpistemicStatus::Verified,
             evidence: vec![],
+            depends_on: vec![],
             scope: Scope::global("rivet", Revision::ZERO),
             timestamp: Utc::now(),
         })
@@ -1058,4 +1059,144 @@ async fn full_verity_pipeline_is_admitted_as_scoped_harness_verification() {
             .passed
     );
     assert!(reopened.completed_tasks.is_empty());
+}
+
+struct DynamicMultiTurnBackend {
+    obligation_id: ObligationId,
+    turn: Arc<Mutex<usize>>,
+}
+
+#[async_trait]
+impl ModelBackend for DynamicMultiTurnBackend {
+    async fn invoke(&self, request: ModelRequest) -> RivetResult<ModelResponse> {
+        let mut turn = self.turn.lock().await;
+        *turn += 1;
+        let rev = request.cognitive_view.hard_revision;
+        match *turn {
+            1 => Ok(ModelResponse {
+                text_content: "Reading directory".into(),
+                actions: vec![CognitiveAction::ToolCall(ActionProposal {
+                    action_id: ActionId::new(),
+                    capability: "dir.list".into(),
+                    target: ".".into(),
+                    parameters: serde_json::json!({}),
+                    estimated_risk: ActionRisk::Inspect,
+                    intent: "List repository directory".into(),
+                    scope: Scope::global("rivet", rev),
+                    idempotency_key: None,
+                    timestamp: Utc::now(),
+                })],
+                usage: TokenUsage::default(),
+            }),
+            2 => Ok(ModelResponse {
+                text_content: "Running test verification".into(),
+                actions: vec![CognitiveAction::VerificationRequest(
+                    accp::VerificationRequest {
+                        obligation_id: self.obligation_id.clone(),
+                        predicate: "cargo test -p praxis --lib tests::test_cargo_output_parser"
+                            .into(),
+                        target_scope: Scope::global("rivet", rev),
+                        timeout_seconds: 60,
+                        timestamp: Utc::now(),
+                    },
+                )],
+                usage: TokenUsage::default(),
+            }),
+            _ => Ok(ModelResponse {
+                text_content: "All obligations verified, completing task".into(),
+                actions: vec![CognitiveAction::CompletionRequest {
+                    summary: "Autonomous resolution completed".into(),
+                }],
+                usage: TokenUsage::default(),
+            }),
+        }
+    }
+}
+
+#[tokio::test]
+async fn test_autonomous_multi_turn_run_task_to_completion() {
+    let store = Arc::new(MemoryStore::new());
+    let obligation_id = ObligationId::new();
+
+    let backend = Arc::new(DynamicMultiTurnBackend {
+        obligation_id: obligation_id.clone(),
+        turn: Arc::new(Mutex::new(0)),
+    });
+    let harness = HarnessCore::new(
+        store,
+        backend,
+        Arc::new(Runtime::new(env!("CARGO_MANIFEST_DIR"))),
+    );
+
+    harness
+        .record_event(NoesisEvent::ObligationCreated {
+            obligation_id: obligation_id.clone(),
+            description: "Praxis parser test passes".into(),
+            scope: Scope::global("rivet", Revision::ZERO),
+            timestamp: Utc::now(),
+        })
+        .await
+        .unwrap();
+
+    let result = harness
+        .run_task(
+            "Verify toolchain",
+            "Please check cargo test and complete",
+            10,
+        )
+        .await
+        .expect("run_task must complete all turns autonomously");
+
+    assert!(result.contains("Task completed"));
+    assert_eq!(harness.current_phase().await, RunPhase::Completed);
+    let hard = harness.hard_state.lock().await;
+    assert!(hard.obligations.is_empty());
+    assert_eq!(hard.closed_obligations.len(), 1);
+}
+
+#[tokio::test]
+async fn test_claim_promotion_with_evidence_support() {
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let store = Arc::new(MemoryStore::new());
+    let evid_id = EvidenceId::new();
+    let claim_id = ClaimId::new();
+
+    // Turn 1: Model proposes claim backed by existing recorded evidence
+    let responses = vec![ModelResponse {
+        text_content: "Proposing claim backed by evidence".into(),
+        actions: vec![CognitiveAction::ClaimProposal(accp::ClaimProposal {
+            claim_id: claim_id.clone(),
+            proposition: "Database supports MVCC".into(),
+            proposed_status: EpistemicStatus::Supported,
+            supporting_evidence: vec![evid_id.clone()],
+            scope: Scope::global("rivet", Revision(1)),
+            timestamp: Utc::now(),
+        })],
+        usage: TokenUsage::default(),
+    }];
+
+    let backend = Arc::new(ScriptedModelBackend::new(responses));
+    let harness = HarnessCore::new(store, backend, Arc::new(Runtime::new(tmp_dir.path())));
+
+    harness
+        .record_event(NoesisEvent::EvidenceRecorded {
+            evidence_id: evid_id.clone(),
+            source: "file.read".into(),
+            summary: "MVCC ACID transaction engine configured".into(),
+            timestamp: Utc::now(),
+        })
+        .await
+        .unwrap();
+
+    harness
+        .step("Verify DB", "Assert DB claim")
+        .await
+        .unwrap();
+
+    let hard = harness.hard_state.lock().await;
+    assert!(hard.claims.contains_key(&claim_id));
+    assert_eq!(
+        hard.claims.get(&claim_id).unwrap().status,
+        EpistemicStatus::Supported
+    );
 }

@@ -15,6 +15,8 @@ pub struct ClaimRecord {
     pub proposition: String,
     pub status: EpistemicStatus,
     pub supporting_evidence: Vec<EvidenceId>,
+    #[serde(default)]
+    pub depends_on: Vec<ClaimId>,
     pub scope: Scope,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -36,6 +38,16 @@ pub struct RejectionRecord {
     pub claim_id: ClaimId,
     pub reason: String,
     pub evidence: Vec<EvidenceId>,
+    pub timestamp: DateTime<Utc>,
+}
+
+/// Diagnostic process-level error attributed during Hephaestus cold-path analysis
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProcessErrorAttributionRecord {
+    pub attribution_id: ReceiptId,
+    pub category: String,
+    pub diagnostic: String,
+    pub suggested_policy_repair: Option<String>,
     pub timestamp: DateTime<Utc>,
 }
 
@@ -74,6 +86,8 @@ pub enum NoesisEvent {
         proposition: String,
         status: EpistemicStatus,
         evidence: Vec<EvidenceId>,
+        #[serde(default)]
+        depends_on: Vec<ClaimId>,
         scope: Scope,
         timestamp: DateTime<Utc>,
     },
@@ -126,6 +140,9 @@ pub enum NoesisEvent {
         evidence: Vec<EvidenceId>,
         timestamp: DateTime<Utc>,
     },
+    ProcessErrorAttributed {
+        record: ProcessErrorAttributionRecord,
+    },
     ModelInvocationRecorded {
         record: ModelInvocationRecord,
     },
@@ -161,6 +178,8 @@ pub struct HardState {
     #[serde(default)]
     pub model_invocations: Vec<ModelInvocationRecord>,
     #[serde(default)]
+    pub process_error_attributions: Vec<ProcessErrorAttributionRecord>,
+    #[serde(default)]
     pub completed_tasks: HashMap<TaskId, ReceiptId>,
 }
 
@@ -178,6 +197,7 @@ impl HardState {
                 proposition,
                 status,
                 evidence,
+                depends_on,
                 scope,
                 timestamp,
             } => {
@@ -188,6 +208,7 @@ impl HardState {
                         proposition: proposition.clone(),
                         status: *status,
                         supporting_evidence: evidence.clone(),
+                        depends_on: depends_on.clone(),
                         scope: scope.clone(),
                         created_at: *timestamp,
                         updated_at: *timestamp,
@@ -226,6 +247,7 @@ impl HardState {
                         created_at: *timestamp,
                     },
                 );
+                self.cascade_claim_invalidation(claim_id, reason);
             }
             NoesisEvent::ClaimRejected {
                 claim_id,
@@ -246,6 +268,7 @@ impl HardState {
                         timestamp: *timestamp,
                     },
                 );
+                self.cascade_claim_invalidation(claim_id, reason);
             }
             NoesisEvent::EvidenceRecorded {
                 evidence_id,
@@ -307,6 +330,9 @@ impl HardState {
                     .insert(obligation_id.clone(), reason.clone());
                 self.completed_tasks.clear();
             }
+            NoesisEvent::ProcessErrorAttributed { record } => {
+                self.process_error_attributions.push(record.clone());
+            }
             NoesisEvent::ModelInvocationRecorded { record } => {
                 self.model_invocations.push(record.clone());
             }
@@ -319,6 +345,39 @@ impl HardState {
                     .insert(task_id.clone(), final_receipt.clone());
             }
         }
+    }
+
+    /// Recursively invalidate any downstream claims that depended on an invalidated claim
+    pub fn cascade_claim_invalidation(&mut self, source_claim_id: &ClaimId, reason: &str) {
+        let mut to_invalidate = Vec::new();
+        for (id, record) in &self.claims {
+            if record.depends_on.contains(source_claim_id) && record.status != EpistemicStatus::Rejected {
+                to_invalidate.push(id.clone());
+            }
+        }
+        for dep_id in to_invalidate {
+            if let Some(dep_record) = self.claims.get_mut(&dep_id) {
+                dep_record.status = EpistemicStatus::Rejected;
+            }
+            self.rejected_claims.insert(
+                dep_id.clone(),
+                RejectionRecord {
+                    claim_id: dep_id.clone(),
+                    reason: format!("Dependency claim '{source_claim_id}' was invalidated: {reason}"),
+                    evidence: Vec::new(),
+                    timestamp: chrono::Utc::now(),
+                },
+            );
+            self.cascade_claim_invalidation(&dep_id, reason);
+        }
+    }
+
+    /// Check if all required evidence records exist and base revision is fresh before promoting
+    pub fn can_promote_to_supported(&self, evidence_ids: &[EvidenceId]) -> bool {
+        if evidence_ids.is_empty() {
+            return false;
+        }
+        evidence_ids.iter().all(|id| self.evidence.contains_key(id))
     }
 
     /// Replay an event sequence to reconstruct deterministic HardState
@@ -567,6 +626,7 @@ mod tests {
                 proposition: "Test proposition".into(),
                 status: EpistemicStatus::Supported,
                 evidence: vec![],
+                depends_on: vec![],
                 scope: Scope::global("repo", Revision::ZERO),
                 timestamp: Utc::now(),
             },
@@ -777,6 +837,7 @@ mod tests {
                 proposition: "Parser is zero-copy".into(),
                 status: EpistemicStatus::Supported,
                 evidence: vec![ev1.clone()],
+                depends_on: vec![],
                 scope: scope.clone(),
                 timestamp: Utc::now(),
             },
@@ -825,5 +886,53 @@ mod tests {
         assert!(prompt.contains("Parser allocates String on every token"));
         assert!(prompt.contains("### REJECTED / FALSIFIED CLAIMS"));
         assert!(prompt.contains("Borrow-checker cycle approach"));
+    }
+
+    #[test]
+    fn test_cascading_claim_invalidation_and_promotion() {
+        let parent_id = ClaimId::new();
+        let child_id = ClaimId::new();
+        let ev1 = EvidenceId::new();
+        let scope = Scope::global("rivet", Revision::ZERO);
+
+        let mut state = HardState::new();
+        state.evidence.insert(ev1.clone(), "Found benchmark test passing".into());
+
+        assert!(state.can_promote_to_supported(std::slice::from_ref(&ev1)));
+        assert!(!state.can_promote_to_supported(&[EvidenceId::new()]));
+
+        state.apply(&NoesisEvent::ClaimAsserted {
+            claim_id: parent_id.clone(),
+            proposition: "Base subsystem is thread-safe".into(),
+            status: EpistemicStatus::Supported,
+            evidence: vec![ev1.clone()],
+            depends_on: vec![],
+            scope: scope.clone(),
+            timestamp: Utc::now(),
+        });
+
+        state.apply(&NoesisEvent::ClaimAsserted {
+            claim_id: child_id.clone(),
+            proposition: "Concurrent executor is safe to run".into(),
+            status: EpistemicStatus::Supported,
+            evidence: vec![ev1.clone()],
+            depends_on: vec![parent_id.clone()],
+            scope: scope.clone(),
+            timestamp: Utc::now(),
+        });
+
+        assert_eq!(state.claims.get(&child_id).unwrap().status, EpistemicStatus::Supported);
+
+        state.apply(&NoesisEvent::ClaimContradicted {
+            claim_id: parent_id.clone(),
+            contradicted_by: vec![ev1.clone()],
+            reason: "Data race detected under Helgrind".into(),
+            scope: scope.clone(),
+            timestamp: Utc::now(),
+        });
+
+        assert_eq!(state.claims.get(&parent_id).unwrap().status, EpistemicStatus::Rejected);
+        assert_eq!(state.claims.get(&child_id).unwrap().status, EpistemicStatus::Rejected);
+        assert!(state.rejected_claims.contains_key(&child_id));
     }
 }

@@ -47,5 +47,7 @@ export interface Message {
   reasoning?: string
   elapsedSeconds?: number
   live?: boolean
+  statusMessage?: string
+  livePhase?: string
   attachments?: string[]
 }

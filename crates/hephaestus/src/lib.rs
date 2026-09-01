@@ -38,6 +38,7 @@ pub struct ReframingProposal {
     pub discarded_approaches: Vec<String>,
     pub new_hypothesis_candidates: Vec<String>,
     pub suggested_focus: Vec<String>,
+    pub suggested_policy_repair: Option<String>,
     pub timestamp: DateTime<Utc>,
 }
 
@@ -152,6 +153,15 @@ impl HephaestusEngine {
         };
 
         let suggested_focus: Vec<String> = tracker.target_failure_counts.keys().cloned().collect();
+        let suggested_policy_repair = match strategy {
+            ReframingStrategy::InterfaceContractMismatch => {
+                Some("Restrict action capability to inspect and search until upstream trait interfaces are verified".into())
+            }
+            ReframingStrategy::EnvironmentRebuild => {
+                Some("Enforce reduced command timeout bounds and require unit test scope before full suite execution".into())
+            }
+            _ => None,
+        };
 
         ReframingProposal {
             strategy,
@@ -159,6 +169,7 @@ impl HephaestusEngine {
             discarded_approaches: current_hypotheses.to_vec(),
             new_hypothesis_candidates: new_hyps,
             suggested_focus,
+            suggested_policy_repair,
             timestamp: Utc::now(),
         }
     }

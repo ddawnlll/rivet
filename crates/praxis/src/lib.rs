@@ -67,6 +67,54 @@ impl TestOutputParser {
 pub struct PraxisEngine;
 
 impl PraxisEngine {
+    /// Synthesize a formal PlanSpec from a VerificationRequest
+    pub fn synthesize_plan(req: &VerificationRequest) -> PlanSpec {
+        PlanSpec {
+            metadata: PlanMetadata {
+                plan_id: format!("verity-{}", req.obligation_id),
+                title: format!("Verify obligation: {}", req.predicate),
+                version: "3.0".into(),
+            },
+            workspace: PlanWorkspace {
+                allowed_files: vec!["**/*".into()],
+                forbidden_files: Vec::new(),
+            },
+            commands: PlanCommands {
+                exact_allowed_commands: vec![ExactAllowedCommand {
+                    id: "cmd_verify".into(),
+                    command: req.predicate.clone(),
+                    cwd: None,
+                    kind: "test".into(),
+                    timeout_seconds: Some(req.timeout_seconds as u64),
+                    expected_exit_code: Some(0),
+                    shell_allowed: Some(true),
+                    no_tests_found_is_failure: Some(false),
+                    expected_output_patterns: Vec::new(),
+                }],
+                hard_denied_commands: Vec::new(),
+            },
+            tasks: vec![PlanTask {
+                id: format!("task-{}", req.obligation_id),
+                name: format!("Verify {}", req.obligation_id),
+                description: format!("Run predicate: {}", req.predicate),
+                dependencies: Vec::new(),
+                acceptance_criteria: vec![AcceptanceCriterion {
+                    id: format!("crit-{}", req.obligation_id),
+                    description: format!(
+                        "Predicate '{}' exits 0 with passing tests",
+                        req.predicate
+                    ),
+                    verification: CriterionVerification {
+                        r#type: "command".into(),
+                        command_ref: Some("cmd_verify".into()),
+                        deterministic: true,
+                        advisory_only: false,
+                    },
+                }],
+            }],
+        }
+    }
+
     pub fn evaluate_test_result(
         req: &VerificationRequest,
         report: &TestRunReport,

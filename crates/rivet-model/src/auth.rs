@@ -229,9 +229,9 @@ impl AuthStore {
             let def_model = opencode_info
                 .default_model()
                 .map(str::to_string)
-                .or_else(|| Some("muse-spark-1.2-contributor-free".into()));
+                .or_else(|| Some("mimo-v2.5".into()));
             let models = if opencode_info.models().is_empty() {
-                vec!["muse-spark-1.2-contributor-free".into()]
+                vec!["mimo-v2.5".into(), "muse-spark-1.2-contributor-free".into()]
             } else {
                 opencode_info.models().to_vec()
             };
@@ -249,7 +249,7 @@ impl AuthStore {
                 || auth_data.active_provider.is_none()
             {
                 auth_data.active_provider = Some("opencode".into());
-                auth_data.active_model = Some("muse-spark-1.2-contributor-free".into());
+                auth_data.active_model = Some("mimo-v2.5".into());
             }
         }
 

@@ -1,5 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
-import type { Attachment, Census } from '../types'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
+import Fuse from 'fuse.js'
+import type { Attachment, Census, Diff } from '../types'
+import { useSessionStore } from '../store/useSessionStore'
 
 type Props = {
   value: string
@@ -7,6 +9,7 @@ type Props = {
   runActive: boolean
   revision?: string | null
   census?: Census | null
+  diff?: Diff | null
   onChange: (value: string) => void
   onAttachments: (attachments: Attachment[]) => void
   onSend: (attachments: Attachment[]) => void
@@ -20,6 +23,7 @@ export function Composer({
   runActive,
   revision,
   census,
+  diff,
   onChange,
   onAttachments,
   onSend,
@@ -32,6 +36,13 @@ export function Composer({
   const [mentionFilter, setMentionFilter] = useState('')
   const [highlightIndex, setHighlightIndex] = useState(0)
 
+  // Trigger census loading if empty
+  useEffect(() => {
+    if (!census) {
+      void useSessionStore.getState().loadCensus(false)
+    }
+  }, [census])
+
   useEffect(() => {
     const handleBeforeUnload = (e: BeforeUnloadEvent) => {
       if (value.trim().length > 0) {
@@ -43,13 +54,58 @@ export function Composer({
     return () => window.removeEventListener('beforeunload', handleBeforeUnload)
   }, [value])
 
+  // Aggregate candidate paths from census, diff, and standard project locations
+  const allPaths = useMemo(() => {
+    const set = new Set<string>()
+    if (census?.directories) {
+      for (const d of census.directories) {
+        if (d.relative_path) set.add(d.relative_path)
+      }
+    }
+    if (diff?.files) {
+      for (const f of diff.files) {
+        if (f) set.add(f)
+      }
+    }
+    // Fallback baseline paths if census is not fully populated yet
+    const fallback = [
+      'Cargo.toml',
+      'package.json',
+      'README.md',
+      'docs/rivet-gui-design-spec-v1.0.html',
+      'crates/rivet',
+      'crates/rivet-api',
+      'crates/rivet-service',
+      'crates/noesis',
+      'crates/praxis',
+      'crates/accp',
+      'crates/hephaestus',
+      'web/src/App.tsx',
+      'web/src/styles.css',
+    ]
+    for (const p of fallback) {
+      set.add(p)
+    }
+    return Array.from(set)
+  }, [census, diff])
+
+  // Fuse.js fuzzy index
+  const fuse = useMemo(() => {
+    return new Fuse(allPaths, {
+      threshold: 0.5,
+      distance: 120,
+      minMatchCharLength: 1,
+      shouldSort: true,
+    })
+  }, [allPaths])
+
   const candidateFiles = useMemo(() => {
-    if (!census) return []
-    const paths = census.directories.map(d => d.relative_path)
-    if (!mentionFilter) return paths.slice(0, 8)
-    const q = mentionFilter.toLowerCase()
-    return paths.filter(p => p.toLowerCase().includes(q)).slice(0, 8)
-  }, [census, mentionFilter])
+    if (!mentionFilter.trim()) {
+      return allPaths.slice(0, 10)
+    }
+    const results = fuse.search(mentionFilter)
+    return results.slice(0, 10).map(r => r.item)
+  }, [allPaths, fuse, mentionFilter])
 
   const submit = () => {
     const trimmed = value.trim()
@@ -59,14 +115,29 @@ export function Composer({
   }
 
   const handleMentionSelect = (file: string) => {
-    const lastAtIndex = value.lastIndexOf('@')
+    const textarea = textareaRef.current
+    const cursor = textarea?.selectionStart ?? value.length
+    const textBeforeCursor = value.slice(0, cursor)
+    const textAfterCursor = value.slice(cursor)
+    const lastAtIndex = textBeforeCursor.lastIndexOf('@')
+
     if (lastAtIndex !== -1) {
-      const before = value.slice(0, lastAtIndex)
-      const newValue = `${before}@${file} `
+      const before = textBeforeCursor.slice(0, lastAtIndex)
+      const inserted = `@${file} `
+      const newValue = `${before}${inserted}${textAfterCursor}`
       onChange(newValue)
+      setMentionActive(false)
+
+      setTimeout(() => {
+        if (textarea) {
+          textarea.focus()
+          const newCursorPos = before.length + inserted.length
+          textarea.setSelectionRange(newCursorPos, newCursorPos)
+        }
+      }, 10)
+    } else {
+      setMentionActive(false)
     }
-    setMentionActive(false)
-    textareaRef.current?.focus()
   }
 
   const handleInputChange = (text: string) => {
@@ -74,6 +145,7 @@ export function Composer({
     const cursor = textareaRef.current?.selectionStart ?? text.length
     const textBeforeCursor = text.slice(0, cursor)
     const lastAt = textBeforeCursor.lastIndexOf('@')
+
     if (lastAt !== -1 && !/\s/.test(textBeforeCursor.slice(lastAt + 1))) {
       const filter = textBeforeCursor.slice(lastAt + 1)
       setMentionFilter(filter)
@@ -98,7 +170,10 @@ export function Composer({
       }
       if (event.key === 'Enter' || event.key === 'Tab') {
         event.preventDefault()
-        handleMentionSelect(candidateFiles[highlightIndex])
+        const selected = candidateFiles[highlightIndex] || candidateFiles[0]
+        if (selected) {
+          handleMentionSelect(selected)
+        }
         return
       }
       if (event.key === 'Escape') {
@@ -137,10 +212,13 @@ export function Composer({
 
   return (
     <form className="composer" onSubmit={event => { event.preventDefault(); submit() }}>
-      <div className="composer-card">
-        {mentionActive && candidateFiles.length > 0 && (
-          <div className="mention-popover" role="listbox" aria-label="Mention file">
-            <div className="mention-header">Mention repository file (@)</div>
+      {mentionActive && candidateFiles.length > 0 && (
+        <div className="mention-popover" role="listbox" aria-label="Mention file">
+          <div className="mention-header">
+            <span>Mention file (@)</span>
+            <small>{candidateFiles.length} matches</small>
+          </div>
+          <div className="mention-list-scroll">
             {candidateFiles.map((file, idx) => (
               <button
                 key={file}
@@ -148,77 +226,88 @@ export function Composer({
                 role="option"
                 aria-selected={idx === highlightIndex}
                 className={`mention-item ${idx === highlightIndex ? 'active' : ''}`}
-                onMouseDown={e => { e.preventDefault(); handleMentionSelect(file) }}
+                onMouseDown={e => {
+                  e.preventDefault()
+                  handleMentionSelect(file)
+                }}
               >
-                <span>{file}</span>
+                <span className="mention-file-path">{file}</span>
               </button>
             ))}
           </div>
-        )}
+        </div>
+      )}
 
-        <textarea
-          ref={textareaRef}
-          id="rivet-composer"
-          name="prompt"
-          autoComplete="off"
-          spellCheck={false}
-          aria-label="Prompt Rivet"
-          value={value}
-          onChange={event => handleInputChange(event.target.value)}
-          onKeyDown={onKeyDown}
-          placeholder={runActive ? 'Steer the live run…' : 'Describe what to build or fix (type @ to reference files)…'}
-          rows={2}
-        />
+      <textarea
+        ref={textareaRef}
+        id="composerInput"
+        name="prompt"
+        autoComplete="off"
+        spellCheck={false}
+        aria-label="Prompt Rivet"
+        value={value}
+        onChange={event => handleInputChange(event.target.value)}
+        onKeyDown={onKeyDown}
+        placeholder={runActive ? 'Steer the live run…' : 'Message Rivet (type @ to reference files, / for commands)…'}
+        rows={2}
+      />
 
-        <div className="composer-bar">
-          <div className="composer-tools">
+      <div className="composerBar">
+        <div className="composerTools">
+          <button
+            type="button"
+            className="attachButton"
+            aria-label="Attach files"
+            onClick={() => input.current?.click()}
+            title="Attach file"
+          >
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.7">
+              <path d="m8.5 12.5 6-6a3 3 0 0 1 4.2 4.2l-8 8a5 5 0 1 1-7.1-7.1l8.1-8.1" />
+              <path d="m6.7 14.3 7.2-7.2" />
+            </svg>
+          </button>
+
+          {revision && <span className="contextChip">rev:{revision}</span>}
+
+          {attachments.map(file => (
             <button
               type="button"
-              className="attach"
-              aria-label="Attach files to message"
-              onClick={() => input.current?.click()}
+              className="contextChip"
+              key={file.name}
+              onClick={() => onRemoveAttachment(file.name)}
+              aria-label={`Remove attachment ${file.name}`}
+              title="Remove attachment"
+              style={{ cursor: 'pointer' }}
             >
-              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true">
-                <path d="m8.5 12.5 6-6a3 3 0 0 1 4.2 4.2l-8 8a5 5 0 1 1-7.1-7.1l8.1-8.1" />
-                <path d="m6.7 14.3 7.2-7.2" />
-              </svg>
+              <span>{file.name} ×</span>
             </button>
+          ))}
+        </div>
 
-            {revision && <span className="chip">r{revision}</span>}
-
-            {attachments.map(file => (
-              <button
-                type="button"
-                className="chip file-chip"
-                key={file.name}
-                onClick={() => onRemoveAttachment(file.name)}
-                aria-label={`Remove attachment ${file.name}`}
-                title="Remove attachment"
-              >
-                {file.name} ×
-              </button>
-            ))}
-          </div>
-
-          <div className="composer-right">
-            <span>{runActive ? 'Live' : 'Ready'} · {value.length}</span>
-            {runActive && (
-              <button type="button" className="cancel-button" onClick={onCancel}>
-                Stop
-              </button>
-            )}
+        <div className="composerRight">
+          <span className="meta">{runActive ? 'steer run' : 'message'}</span>
+          {runActive && (
             <button
-              type="submit"
-              className="send"
-              aria-label={runActive ? 'Steer live run' : 'Send message'}
-              disabled={!value.trim()}
+              type="button"
+              className="iconButton"
+              onClick={onCancel}
+              title="Stop run execution"
+              style={{ width: 'auto', padding: '0 8px', gap: '4px', fontSize: '10px' }}
             >
-              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true">
-                <path d="M12 19V5" />
-                <path d="m6.5 10.5 5.5-5.5 5.5 5.5" />
-              </svg>
+              <span>Stop</span>
             </button>
-          </div>
+          )}
+          <button
+            type="submit"
+            className="sendButton"
+            aria-label={runActive ? 'Steer run' : 'Send'}
+            disabled={!value.trim()}
+          >
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.7">
+              <path d="M12 19V5" />
+              <path d="m6.5 10.5 5.5-5.5 5.5 5.5" />
+            </svg>
+          </button>
         </div>
       </div>
 

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import React, { useState } from 'react'
 import type { Activity } from '../types'
 
 type Props = {
@@ -12,77 +12,95 @@ type Props = {
 }
 
 export function ActivitySpine({ activities, runActive, selected, onSelect, onCancel, summary }: Props) {
-  const [detailsOpen, setDetailsOpen] = useState(false)
+  const [apertureOpen, setApertureOpen] = useState(false)
 
-  // Filter out internal noisy events
   const meaningfulActivities = activities.filter(
     a => a.kind !== 'request' && !a.body.startsWith('task_') && a.kind !== 'preparing view'
   )
 
-  const activeActivity = meaningfulActivities.find(a => a.status === 'active') ?? meaningfulActivities.at(-1)
+  const activeActivity = selected ?? meaningfulActivities.find(a => a.status === 'active') ?? meaningfulActivities.at(-1)
 
-  if (!runActive) {
-    if (!summary && meaningfulActivities.length === 0) return null
-    return (
-      <div className="run-status-compact completed" aria-label="Run summary">
-        {summary && <div className="summary-pill">{summary}</div>}
-        {meaningfulActivities.length > 0 && (
-          <div className="activity-toggle">
-            <button
-              type="button"
-              className="ghost-toggle"
-              onClick={() => setDetailsOpen(open => !open)}
-            >
-              <span>{detailsOpen ? '▾ Hide execution steps' : `▸ View ${meaningfulActivities.length} step${meaningfulActivities.length > 1 ? 's' : ''}`}</span>
-            </button>
-            {detailsOpen && (
-              <div className="activity-stream-compact">
-                {meaningfulActivities.map(activity => (
-                  <button
-                    key={activity.id}
-                    type="button"
-                    className={`activity-mini ${activity.kind} ${activity.status} ${selected?.id === activity.id ? 'selected' : ''}`}
-                    onClick={() => onSelect(activity)}
-                  >
-                    <span className="kind">{activity.kind}</span>
-                    <span className="body" dangerouslySetInnerHTML={{ __html: activity.body }} />
-                    <time>{activity.timestamp}</time>
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
-      </div>
-    )
+  if (!runActive && !summary && meaningfulActivities.length === 0) {
+    return null
   }
 
   return (
-    <div className="run-status-compact active" aria-label="Live run progress">
-      <div className="status-indicator-bar">
-        <div className="status-dot-pulse" aria-hidden="true" />
-        <span className="status-current-label">
-          {activeActivity ? `${activeActivity.kind}: ${activeActivity.body}` : 'Rivet is thinking…'}
-        </span>
-        <button type="button" className="mini-cancel-btn" onClick={onCancel}>
-          Cancel
-        </button>
+    <div className="liveRun" aria-live="polite">
+      <div className="liveRunHeader">
+        <div className="name">
+          <span className={`liveDot ${runActive ? 'pulse' : ''}`} />
+          <span>{runActive ? 'live run' : 'run complete'}</span>
+        </div>
+        <div className="runMeta">
+          {runActive && (
+            <button
+              type="button"
+              onClick={onCancel}
+              className="stopBtn"
+              title="Stop active run"
+            >
+              stop
+            </button>
+          )}
+          <span>{meaningfulActivities.length} events</span>
+        </div>
       </div>
 
-      {meaningfulActivities.length > 1 && (
-        <details className="status-details-accordion" open={detailsOpen} onToggle={e => setDetailsOpen(e.currentTarget.open)}>
-          <summary>
-            {meaningfulActivities.length} step{meaningfulActivities.length > 1 ? 's' : ''} in progress
-          </summary>
-          <div className="activity-stream-compact">
-            {meaningfulActivities.slice(-6).map(activity => (
-              <div key={activity.id} className="activity-mini-item">
-                <span className="kind">{activity.kind}</span>
-                <span className="body" dangerouslySetInnerHTML={{ __html: activity.body }} />
-              </div>
-            ))}
+      <div className="activityStream">
+        {meaningfulActivities.slice(-12).map((activity, idx) => {
+          const isLatestActive = runActive && idx === Math.min(11, meaningfulActivities.length - 1)
+          const isSelected = selected?.id === activity.id
+          const cls = isLatestActive ? 'active' : isSelected ? 'selected' : 'done'
+
+          return (
+            <div
+              key={activity.id}
+              className={`activityRow ${activity.kind.replace(/\s+/g, '-').toLowerCase()} ${cls}`}
+              onClick={() => {
+                onSelect(activity)
+                setApertureOpen(true)
+              }}
+              style={{ cursor: 'pointer' }}
+            >
+              <span className="eventDot" />
+              <span className="kind">{activity.kind}</span>
+              <span className="eventBody" dangerouslySetInnerHTML={{ __html: activity.body }} />
+              <span className="eventMeta">{activity.timestamp}</span>
+            </div>
+          )
+        })}
+      </div>
+
+      {activeActivity && activeActivity.detail.length > 0 && (
+        <>
+          <button
+            className="activityInspect"
+            type="button"
+            onClick={() => setApertureOpen(open => !open)}
+          >
+            {apertureOpen ? 'close inspection' : `inspect ${activeActivity.kind} event`}
+          </button>
+
+          <div className={`runAperture ${apertureOpen ? 'open' : ''}`}>
+            <dl className="apertureInner">
+              {activeActivity.detail.map(([key, value]) => (
+                <React.Fragment key={key}>
+                  <dt>{key}</dt>
+                  <dd>{value}</dd>
+                </React.Fragment>
+              ))}
+            </dl>
           </div>
-        </details>
+        </>
+      )}
+
+      {summary && (
+        <div className="runReceipt show">
+          <div className="runReceiptTitle">{summary}</div>
+          <div className="runReceiptMeta">
+            Praxis verified · authoritative state updated · inspect diff for details
+          </div>
+        </div>
       )}
     </div>
   )

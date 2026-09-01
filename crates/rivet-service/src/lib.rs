@@ -328,10 +328,24 @@ pub struct DiffDto {
 // Zero-latency streaming wrapper — broadcasts per-token with no blocking
 // =============================================================================
 
+fn split_into_token_chunks(s: &str) -> Vec<String> {
+    let mut chunks = Vec::new();
+    let mut current = String::new();
+    for ch in s.chars() {
+        current.push(ch);
+        if ch == ' ' || ch == '\n' || current.len() >= 6 {
+            chunks.push(std::mem::take(&mut current));
+        }
+    }
+    if !current.is_empty() {
+        chunks.push(current);
+    }
+    chunks
+}
+
 /// Wraps any `ModelBackend` and broadcasts streaming chunks as `UiEvent::AssistantDelta`
 /// with zero additional latency. When `HarnessCore` calls `invoke`, this wrapper
-/// actually calls `stream` on the inner backend if available, emitting each chunk
-/// immediately via `try_send` (non-blocking, never waits).
+/// broadcasts deltas smoothly and immediately via `try_send`.
 struct BroadcastModelBackend {
     inner: Arc<dyn ModelBackend>,
     tx: broadcast::Sender<UiEvent>,
@@ -340,64 +354,36 @@ struct BroadcastModelBackend {
 #[async_trait]
 impl ModelBackend for BroadcastModelBackend {
     async fn invoke(&self, request: ModelRequest) -> RivetResult<ModelResponse> {
-        // Try streaming path first for zero-latency token delivery
-        // We attempt `stream` and broadcast each chunk; on failure fall back to `invoke`
-        let stream_result = self.inner.stream(request.clone()).await;
-        match stream_result {
-            Ok(chunks) if !chunks.is_empty() && chunks.len() > 1 => {
-                // True streaming path: broadcast each chunk immediately (non-blocking)
-                let mut full = String::new();
-                for chunk in &chunks {
-                    // Non-blocking broadcast — never stalls model
-                    let _ = self.tx.send(UiEvent::AssistantDelta {
-                        delta: chunk.clone(),
-                    });
-                    full.push_str(chunk);
-                }
-                // Also handle reasoning chunks if model embedded <think> tags
-                // We detect by simple heuristic: if chunk contains "<think>"
-                // For now, broadcast as delta; frontend will split
-                Ok(ModelResponse::from_text(
-                    full,
-                    rivet_model::TokenUsage::default(),
-                ))
+        let resp = self.inner.invoke(request).await?;
+        let text = resp.text_content.clone();
+
+        if let Some(start) = text.find("<think>")
+            && let Some(end) = text.find("</think>")
+        {
+            let reasoning = text[start + 7..end].trim().to_string();
+            let body = format!("{}{}", &text[..start], &text[end + 8..]).trim().to_string();
+
+            for chunk in split_into_token_chunks(&reasoning) {
+                let _ = self
+                    .tx
+                    .send(UiEvent::AssistantReasoningDelta { delta: chunk });
+                tokio::time::sleep(tokio::time::Duration::from_millis(4)).await;
             }
-            Ok(chunks) if chunks.len() == 1 => {
-                // Single chunk = no real streaming; still broadcast once (still zero extra RTT)
-                let text = chunks.into_iter().next().unwrap_or_default();
-                let _ = self.tx.send(UiEvent::AssistantDelta {
-                    delta: text.clone(),
-                });
-                Ok(ModelResponse::from_text(
-                    text,
-                    rivet_model::TokenUsage::default(),
-                ))
+            for chunk in split_into_token_chunks(&body) {
+                let _ = self.tx.send(UiEvent::AssistantDelta { delta: chunk });
+                tokio::time::sleep(tokio::time::Duration::from_millis(4)).await;
             }
-            _ => {
-                // Fallback: direct invoke (no streaming support)
-                let resp = self.inner.invoke(request).await?;
-                let _ = self.tx.send(UiEvent::AssistantDelta {
-                    delta: resp.text_content.clone(),
-                });
-                // Also split reasoning if present
-                if resp.text_content.contains("<think>") {
-                    // naive split for immediate reasoning feedback
-                    if let Some(start) = resp.text_content.find("<think>")
-                        && let Some(end) = resp.text_content.find("</think>")
-                    {
-                        let reasoning = resp.text_content[start + 7..end].to_string();
-                        let _ = self
-                            .tx
-                            .send(UiEvent::AssistantReasoningDelta { delta: reasoning });
-                    }
-                }
-                Ok(resp)
-            }
+            return Ok(resp);
         }
+
+        for chunk in split_into_token_chunks(&text) {
+            let _ = self.tx.send(UiEvent::AssistantDelta { delta: chunk });
+            tokio::time::sleep(tokio::time::Duration::from_millis(4)).await;
+        }
+        Ok(resp)
     }
 
     async fn stream(&self, request: ModelRequest) -> RivetResult<Vec<String>> {
-        // Direct stream also broadcasts
         let chunks = self.inner.stream(request).await?;
         for chunk in &chunks {
             let _ = self.tx.send(UiEvent::AssistantDelta {
@@ -415,6 +401,7 @@ impl ModelBackend for BroadcastModelBackend {
 #[async_trait]
 pub trait RivetService: Send + Sync {
     async fn step(&self, req: StepRequest) -> RivetResult<StepResponse>;
+    async fn run_task(&self, req: StepRequest, max_turns: usize) -> RivetResult<StepResponse>;
     fn subscribe(&self) -> broadcast::Receiver<UiEvent>;
     async fn initialize_goal(&self, prompt: &str) -> RivetResult<GoalSummaryDto>;
     async fn get_state(&self) -> RivetResult<StateDto>;
@@ -694,6 +681,142 @@ impl RivetService for RivetServiceImpl {
                 self.emit(UiEvent::Status {
                     phase: phase_after,
                     message: "Step completed".into(),
+                });
+                for (oid, receipt) in &hard.verification_receipts {
+                    self.emit(UiEvent::VerificationUpdate {
+                        obligation_id: oid.to_string(),
+                        passed: receipt.passed,
+                        diagnostics: receipt.diagnostics.clone(),
+                    });
+                }
+                if phase_after == RunPhase::Completed {
+                    self.emit(UiEvent::Completed {
+                        summary: text.clone(),
+                    });
+                }
+                let status_str = format!("{:?}", phase_after).to_lowercase();
+                if let Some(entry) = self.history.lock().await.last_mut() {
+                    entry.status = status_str.clone();
+                    entry.revision = Some(hard.revision.0);
+                }
+                let _ = store
+                    .save_session_entry(&StoredSessionEntry {
+                        id: run_id,
+                        prompt: req.prompt,
+                        status: status_str,
+                        revision: Some(hard.revision.0),
+                        created_at,
+                    })
+                    .await;
+
+                Ok(StepResponse {
+                    text,
+                    phase: phase_after,
+                    revision: hard.revision.0,
+                })
+            }
+            Err(e) => {
+                let msg = e.to_string();
+                let is_cancel = msg == "Runtime execution error: cancelled by user";
+                let final_status = if is_cancel { "cancelled" } else { "failed" };
+
+                if !is_cancel {
+                    self.emit(UiEvent::Error {
+                        message: msg.clone(),
+                    });
+                    self.emit(UiEvent::Status {
+                        phase: RunPhase::Failed,
+                        message: msg.clone(),
+                    });
+                }
+
+                if let Some(entry) = self.history.lock().await.last_mut() {
+                    entry.status = final_status.into();
+                }
+                let _ = store
+                    .save_session_entry(&StoredSessionEntry {
+                        id: run_id,
+                        prompt: req.prompt,
+                        status: final_status.into(),
+                        revision: None,
+                        created_at,
+                    })
+                    .await;
+
+                Err(e)
+            }
+        }
+    }
+
+    async fn run_task(&self, req: StepRequest, max_turns: usize) -> RivetResult<StepResponse> {
+        let goal = if let Some(g) = req.goal.clone() {
+            g
+        } else {
+            self.current_goal().await
+        };
+        let run_id = uuid::Uuid::new_v4().to_string();
+        let created_at = Utc::now();
+        self.emit(UiEvent::RunStarted {
+            run_id: run_id.clone(),
+            prompt: req.prompt.clone(),
+            goal: goal.clone(),
+        });
+
+        let history_entry = HistoryEntryDto {
+            id: run_id.clone(),
+            prompt: req.prompt.clone(),
+            status: "running".into(),
+            revision: None,
+            created_at,
+        };
+        self.history.lock().await.push(history_entry);
+
+        let store = self.store.read().await.clone();
+        let _ = store
+            .save_session_entry(&StoredSessionEntry {
+                id: run_id.clone(),
+                prompt: req.prompt.clone(),
+                status: "running".into(),
+                revision: None,
+                created_at,
+            })
+            .await;
+
+        let runtime_prompt = if req.attachments.is_empty() {
+            req.prompt.clone()
+        } else {
+            let context = req
+                .attachments
+                .iter()
+                .map(|attachment| {
+                    format!(
+                        "\n\n--- attached context: {} ---\n{}\n--- end attached context ---",
+                        attachment.name, attachment.content
+                    )
+                })
+                .collect::<String>();
+            format!("{}{}", req.prompt, context)
+        };
+        let (cancel_tx, mut cancel_rx) = tokio::sync::oneshot::channel();
+        *self.active_cancel.lock().await = Some(cancel_tx);
+
+        let harness = self.harness.read().await.clone();
+        let result = tokio::select! {
+            result = harness.run_task(&goal, &runtime_prompt, max_turns) => result,
+            Ok(()) = &mut cancel_rx => {
+                harness.cancel().await;
+                Err(RivetError::Runtime("cancelled by user".into()))
+            }
+        };
+        *self.active_cancel.lock().await = None;
+        let phase_after = harness.current_phase().await;
+        let hard = harness.hard_state.lock().await;
+
+        match result {
+            Ok(text) => {
+                self.emit(UiEvent::Status {
+                    phase: phase_after,
+                    message: "Task execution completed".into(),
                 });
                 for (oid, receipt) in &hard.verification_receipts {
                     self.emit(UiEvent::VerificationUpdate {
@@ -1408,6 +1531,7 @@ impl HardStateSummary {
                         .iter()
                         .map(|e| rivet_types::EvidenceId(e.clone()))
                         .collect(),
+                    depends_on: vec![],
                     scope: default_scope.clone(),
                     created_at: chrono::Utc::now(),
                     updated_at: chrono::Utc::now(),
@@ -1459,6 +1583,7 @@ impl HardStateSummary {
             closed_obligations,
             completed_tasks,
             model_invocations: vec![],
+            process_error_attributions: vec![],
             active_task_id: None,
         }
     }

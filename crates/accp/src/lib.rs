@@ -61,7 +61,13 @@ pub enum ActionDecisionVerdict {
     Allow,
     #[serde(alias = "Block", alias = "BLOCK")]
     Block,
-    #[serde(alias = "RequireHumanApproval", alias = "REQUIRE_HUMAN_APPROVAL")]
+    #[serde(
+        alias = "RequireHumanApproval",
+        alias = "REQUIRE_HUMAN_APPROVAL",
+        alias = "HoldForReview",
+        alias = "HOLD_FOR_REVIEW",
+        alias = "hold_for_review"
+    )]
     RequireHumanApproval,
 }
 
@@ -217,12 +223,72 @@ pub struct QueryMessage {
     pub scope: Scope,
 }
 
+impl QueryMessage {
+    pub fn evidence(evidence_id: &str, scope: Scope) -> Self {
+        Self {
+            kind: "EVIDENCE".into(),
+            selector: serde_json::json!({ "evidence_id": evidence_id }),
+            purpose: "inspect_evidence".into(),
+            scope,
+        }
+    }
+
+    pub fn artifact(path: &str, scope: Scope) -> Self {
+        Self {
+            kind: "ARTIFACT".into(),
+            selector: serde_json::json!({ "path": path }),
+            purpose: "inspect_artifact".into(),
+            scope,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SignalMessage {
     pub kind: String,
     pub subject_ref: Option<String>,
     pub reason: String,
     pub scope: Option<Scope>,
+}
+
+impl SignalMessage {
+    pub fn stale_state(current_revision: Revision, required_revision: Revision) -> Self {
+        Self {
+            kind: "STALE_STATE".into(),
+            subject_ref: Some(format!("{current_revision}")),
+            reason: format!(
+                "state revision mismatch: harness is at {current_revision}, requested {required_revision}"
+            ),
+            scope: None,
+        }
+    }
+
+    pub fn budget_exhausted(limit: usize) -> Self {
+        Self {
+            kind: "BUDGET".into(),
+            subject_ref: None,
+            reason: format!("cognitive turn budget of {limit} steps has been exhausted"),
+            scope: None,
+        }
+    }
+
+    pub fn cancellation(reason: impl Into<String>) -> Self {
+        Self {
+            kind: "CANCELLATION".into(),
+            subject_ref: None,
+            reason: reason.into(),
+            scope: None,
+        }
+    }
+
+    pub fn contradiction(claim_id: &str, reason: impl Into<String>) -> Self {
+        Self {
+            kind: "CONTRADICTION".into(),
+            subject_ref: Some(claim_id.to_string()),
+            reason: reason.into(),
+            scope: None,
+        }
+    }
 }
 
 /// All 9 Normative ACCP 3.0 Message Classes

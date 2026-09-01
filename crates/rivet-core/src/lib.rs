@@ -45,7 +45,12 @@ pub enum RunPhase {
     Failed,
 }
 
-/// Authoritative lifecycle signals emitted by the Harness for UI projections.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct TurnOutcome {
+    pub text: String,
+    pub has_actions: bool,
+    pub is_completed: bool,
+}
 /// These are intentionally typed summaries: raw model chain-of-thought never
 /// crosses this boundary.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -376,7 +381,81 @@ impl HarnessCore {
         result
     }
 
+    /// Execute an autonomous multi-turn cognitive cycle until completion,
+    /// user interaction, stagnation, cancellation, or turn budget exhaustion.
+    pub async fn run_task(
+        &self,
+        goal: &str,
+        initial_prompt: &str,
+        max_turns: usize,
+    ) -> RivetResult<String> {
+        let _cycle_guard = self.cycle_lock.lock().await;
+        let mut turn = 0;
+        let mut current_prompt = initial_prompt.to_string();
+        let mut final_response = String::new();
+
+        while turn < max_turns {
+            turn += 1;
+            if self.current_phase().await == RunPhase::Cancelled {
+                return Err(RivetError::Runtime("Task cancelled by user".into()));
+            }
+
+            let outcome = match self.step_turn_inner(goal, &current_prompt).await {
+                Ok(res) => res,
+                Err(err) => {
+                    self.set_phase(RunPhase::Failed).await;
+                    return Err(err);
+                }
+            };
+            final_response = outcome.text.clone();
+
+            if outcome.is_completed || self.current_phase().await == RunPhase::Completed {
+                self.set_phase(RunPhase::Completed).await;
+                return Ok(final_response);
+            }
+
+            let phase = self.current_phase().await;
+            if phase == RunPhase::Stagnated || phase == RunPhase::WaitingForUser {
+                return Ok(final_response);
+            }
+
+            if !outcome.has_actions {
+                self.set_phase(RunPhase::Idle).await;
+                return Ok(final_response);
+            }
+
+            current_prompt = format!(
+                "Goal: {goal}\nPrevious turn {turn} produced new observations and evidence. Proceed with next required action or verification towards goal closure."
+            );
+        }
+
+        self.record_event(NoesisEvent::ProcessErrorAttributed {
+            record: noesis::ProcessErrorAttributionRecord {
+                attribution_id: ReceiptId::new(),
+                category: "BUDGET_EXHAUSTED".into(),
+                diagnostic: format!("Autonomous loop reached turn limit of {max_turns}"),
+                suggested_policy_repair: Some(
+                    "Narrow scope or increase maximum turn budget".into(),
+                ),
+                timestamp: chrono::Utc::now(),
+            },
+        })
+        .await?;
+
+        self.set_phase(RunPhase::Idle).await;
+        Ok(final_response)
+    }
+
     async fn step_inner(&self, goal: &str, user_prompt: &str) -> RivetResult<String> {
+        let outcome = self.step_turn_inner(goal, user_prompt).await?;
+        Ok(outcome.text)
+    }
+
+    async fn step_turn_inner(
+        &self,
+        goal: &str,
+        user_prompt: &str,
+    ) -> RivetResult<TurnOutcome> {
         self.set_phase(RunPhase::PreparingView).await;
         let view = self.compile_view(goal).await;
         self.emit_event(HarnessEvent::CognitiveState {
@@ -624,11 +703,34 @@ impl HarnessCore {
                     )?
                     .validate_direction()?;
                     AccpSemanticGate::validate_claim_proposal(&proposal)?;
-                    let mut soft = self.soft_workspace.lock().await;
-                    soft.add_hypothesis(format!(
-                        "Claim proposal (not promoted): {}",
-                        proposal.proposition
-                    ));
+                    
+                    let hard = self.hard_state.lock().await;
+                    let can_promote = hard.can_promote_to_supported(&proposal.supporting_evidence);
+                    drop(hard);
+
+                    if can_promote {
+                        self.record_event(NoesisEvent::ClaimAsserted {
+                            claim_id: proposal.claim_id.clone(),
+                            proposition: proposal.proposition.clone(),
+                            status: EpistemicStatus::Supported,
+                            evidence: proposal.supporting_evidence.clone(),
+                            depends_on: Vec::new(),
+                            scope: proposal.scope.clone(),
+                            timestamp: chrono::Utc::now(),
+                        })
+                        .await?;
+                        let mut soft = self.soft_workspace.lock().await;
+                        soft.add_hypothesis(format!(
+                            "Promoted claim (supported): {}",
+                            proposal.proposition
+                        ));
+                    } else {
+                        let mut soft = self.soft_workspace.lock().await;
+                        soft.add_hypothesis(format!(
+                            "Provisional claim (unpromoted): {}",
+                            proposal.proposition
+                        ));
+                    }
                 }
                 CognitiveAction::StateTransitionProposal(proposal) => {
                     self.set_phase(RunPhase::RevisingState).await;
@@ -713,7 +815,11 @@ impl HarnessCore {
                     })
                     .await?;
                     self.set_phase(RunPhase::Completed).await;
-                    return Ok(format!("Task completed: {summary}"));
+                    return Ok(TurnOutcome {
+                        text: format!("Task completed: {summary}"),
+                        has_actions: true,
+                        is_completed: true,
+                    });
                 }
             }
         }
@@ -730,7 +836,11 @@ impl HarnessCore {
         }
 
         self.set_phase(RunPhase::Responding).await;
-        Ok(response.text_content)
+        Ok(TurnOutcome {
+            text: response.text_content,
+            has_actions,
+            is_completed: false,
+        })
     }
 
     /// Execute a model-requested verification through Runtime and classify its
@@ -1001,11 +1111,25 @@ impl HarnessCore {
                     .hephaestus
                     .analyze_and_reframe(&tracker, &soft.hypotheses);
                 soft.hypotheses.clear();
-                for hyp in reframing.new_hypothesis_candidates {
+                for hyp in &reframing.new_hypothesis_candidates {
                     soft.add_hypothesis(format!("[Hephaestus Reframed] {}", hyp));
                 }
-                soft.active_focus = reframing.suggested_focus;
+                if let Some(repair) = &reframing.suggested_policy_repair {
+                    soft.add_hypothesis(format!("[Hephaestus Policy Repair] {}", repair));
+                }
+                soft.active_focus = reframing.suggested_focus.clone();
                 drop(soft);
+
+                let _ = self.record_event(NoesisEvent::ProcessErrorAttributed {
+                    record: noesis::ProcessErrorAttributionRecord {
+                        attribution_id: ReceiptId::new(),
+                        category: format!("{:?}", reframing.strategy),
+                        diagnostic: reframing.suggested_frame.clone(),
+                        suggested_policy_repair: reframing.suggested_policy_repair.clone(),
+                        timestamp: chrono::Utc::now(),
+                    },
+                }).await;
+
                 self.set_phase(RunPhase::Stagnated).await;
             }
         }

@@ -153,7 +153,7 @@ impl ModelBackend for RigBackend {
 
         // Construct full prompt from cognitive view and instructions
         let prompt_payload = format!(
-            "<workspace_context>\n{}\n</workspace_context>\n\nUser Request: {}\n(Instruction: Answer the user naturally and conversationally in Markdown. Do not recite raw internal IDs like oblg_... or rN in chat.)",
+            "<workspace_context>\n{}\n</workspace_context>\n\nUser Request: {}\n(Instruction: You MUST reply entirely in the exact language used by the user. If the user wrote in Turkish, answer 100% in Turkish without switching to English. Answer naturally in Markdown and do not recite raw internal IDs like oblg_... or rN.)",
             request.cognitive_view.format_prompt_block(),
             request.user_prompt
         );

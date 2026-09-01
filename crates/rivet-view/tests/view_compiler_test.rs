@@ -28,6 +28,7 @@ fn test_view_compiler_all_4_modes() {
         proposition: "auth middleware is threadsafe".into(),
         status: EpistemicStatus::Supported,
         evidence: vec![evid_id.clone()],
+        depends_on: vec![],
         scope: Scope::global("rivet", hard.revision),
         timestamp: chrono::Utc::now(),
     });
@@ -45,6 +46,7 @@ fn test_view_compiler_all_4_modes() {
         proposition: "refresh token rotates on use".into(),
         status: EpistemicStatus::Supported,
         evidence: vec![evid_id.clone()],
+        depends_on: vec![],
         scope: Scope::global("rivet", hard.revision),
         timestamp: chrono::Utc::now(),
     });

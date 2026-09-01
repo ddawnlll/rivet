@@ -37,6 +37,7 @@ async fn test_harness_compile_view_uses_view_compiler() {
             proposition: "The auth subsystem supports multiple providers".into(),
             status: EpistemicStatus::Hypothetical,
             evidence: vec![],
+            depends_on: vec![],
             scope: Scope::global("rivet", Revision(0)),
             timestamp: Utc::now(),
         })

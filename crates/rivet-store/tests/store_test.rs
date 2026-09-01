@@ -15,6 +15,7 @@ async fn test_redb_persistence_and_replay_across_reopen() {
         proposition: "Repository entrypoint is main.rs".into(),
         status: EpistemicStatus::Supported,
         evidence: vec![EvidenceId::new()],
+        depends_on: vec![],
         scope: Scope::global("rivet", Revision::ZERO),
         timestamp: Utc::now(),
     };
@@ -84,6 +85,7 @@ async fn uncheckpointed_events_are_recoverable_from_append_log() {
         proposition: "event log survives a stale checkpoint".into(),
         status: EpistemicStatus::Supported,
         evidence: vec![],
+        depends_on: vec![],
         scope: Scope::global("rivet", Revision::ZERO),
         timestamp: Utc::now(),
     };
