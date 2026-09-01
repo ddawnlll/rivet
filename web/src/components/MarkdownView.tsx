@@ -77,6 +77,23 @@ interface MarkdownViewProps {
   className?: string
 }
 
+function normalizeRawAccpBlocks(text: string): string {
+  // If JSON is already fenced, don't double fence
+  const parts = text.split('```')
+  for (let i = 0; i < parts.length; i += 2) {
+    // Unfenced part
+    parts[i] = parts[i].replace(/(\{(?:[^{}]|(?:\{[^{}]*\}))*"accp_version"[^{}]*\})/g, (match) => {
+      try {
+        JSON.parse(match.trim())
+        return `\n\`\`\`accp\n${match.trim()}\n\`\`\`\n`
+      } catch {
+        return match
+      }
+    })
+  }
+  return parts.join('```')
+}
+
 export function MarkdownView({ content, className = '' }: MarkdownViewProps) {
   // Check for <think>...</think> blocks
   const { thinking, mainContent } = useMemo(() => {
@@ -92,7 +109,7 @@ export function MarkdownView({ content, className = '' }: MarkdownViewProps) {
       main = ''
     }
 
-    return { thinking, mainContent: main }
+    return { thinking, mainContent: normalizeRawAccpBlocks(main) }
   }, [content])
 
   const html = useMemo(() => {
