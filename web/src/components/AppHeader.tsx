@@ -1,7 +1,6 @@
-import React, { useState } from 'react'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
-import * as Popover from '@radix-ui/react-popover'
 import type { ModelCatalog, Project } from '../types'
+import { ModelPicker } from './ModelPicker'
 
 type Props = {
   project: Project | null
@@ -24,12 +23,6 @@ export function AppHeader({
   onPickModel,
   onOpenCommand,
 }: Props) {
-  const [modelPickerOpen, setModelPickerOpen] = useState(false)
-  const [activeTabProvider, setActiveTabProvider] = useState<string | null>(null)
-
-  const currentProviderId = activeTabProvider ?? models?.active_provider ?? models?.providers[0]?.id ?? 'anthropic'
-  const activeProviderObj = models?.providers.find(p => p.id === currentProviderId) ?? models?.providers[0]
-
   return (
     <header className="topbar">
       <div className="projectCluster">
@@ -74,75 +67,7 @@ export function AppHeader({
           <span>{connection === 'live' ? 'live' : connection}</span>
         </div>
 
-        <Popover.Root open={modelPickerOpen} onOpenChange={setModelPickerOpen}>
-          <Popover.Trigger asChild>
-            <button className="modelButton" type="button" aria-label="Model selector">
-              <strong>{models?.active_model ?? 'Select Model'}</strong>
-              <span>{models?.active_provider ?? 'provider'}</span>
-              <span>⌄</span>
-            </button>
-          </Popover.Trigger>
-
-          <Popover.Portal>
-            <Popover.Content className="modelPopover" sideOffset={6} align="end">
-              {models?.providers && models.providers.length > 0 ? (
-                <>
-                  <div className="modelProviderTabs">
-                    {models.providers.map(p => (
-                      <button
-                        key={p.id}
-                        type="button"
-                        className={`providerTab ${p.id === currentProviderId ? 'active' : ''}`}
-                        onClick={() => setActiveTabProvider(p.id)}
-                      >
-                        {p.name}
-                      </button>
-                    ))}
-                  </div>
-
-                  <div className="modelList">
-                    {activeProviderObj?.models.map(m => {
-                      const isActive = models.active_model === m && models.active_provider === activeProviderObj.id
-                      return (
-                        <button
-                          key={`${activeProviderObj.id}:${m}`}
-                          type="button"
-                          className={`modelItem ${isActive ? 'active' : ''}`}
-                          onClick={() => {
-                            onPickModel(activeProviderObj.id, m)
-                            setModelPickerOpen(false)
-                          }}
-                        >
-                          {m}
-                          <small>{activeProviderObj.name} · {isActive ? 'current model' : 'select'}</small>
-                        </button>
-                      )
-                    })}
-                  </div>
-
-                  <div style={{ borderTop: '1px solid var(--line-soft)', marginTop: '6px', paddingTop: '6px' }}>
-                    <button
-                      type="button"
-                      className="modelItem"
-                      onClick={() => {
-                        setModelPickerOpen(false)
-                        onOpenAuth()
-                      }}
-                    >
-                      Manage API Keys…
-                      <small>configure provider credentials</small>
-                    </button>
-                  </div>
-                </>
-              ) : (
-                <div className="modelItem">
-                  Connecting to adapter…
-                  <small>loading models</small>
-                </div>
-              )}
-            </Popover.Content>
-          </Popover.Portal>
-        </Popover.Root>
+        <ModelPicker models={models} onOpenAuth={onOpenAuth} onPickModel={onPickModel} />
 
         <DropdownMenu.Root>
           <DropdownMenu.Trigger asChild>
