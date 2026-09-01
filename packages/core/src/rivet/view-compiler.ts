@@ -1,11 +1,12 @@
-import type {
-  ClaimRecord,
-  ContradictionRecord,
-  HardState,
-  RejectionRecord,
+import {
   SoftWorkspace,
+  type ClaimRecord,
+  type ContradictionRecord,
+  type HardState,
+  type RejectionRecord,
 } from "./noesis"
 import {
+  createSessionId,
   type EpistemicStatus,
   type EvidenceId,
   type ObligationId,
@@ -43,11 +44,11 @@ export interface OmittedSummary {
 
 export interface CompilationContext {
   readonly hardState: HardState
-  readonly softWorkspace: SoftWorkspace
+  readonly softWorkspace?: SoftWorkspace
   readonly goalDescription: string
   readonly repositoryId: string
-  readonly relevantFiles: readonly string[]
-  readonly repositorySignals: readonly string[]
+  readonly relevantFiles?: readonly string[]
+  readonly repositorySignals?: readonly string[]
   readonly tokenBudget: number
   readonly mode: RepresentationMode
   readonly deferredTreesCount?: number
@@ -75,8 +76,22 @@ export interface CompiledViewPayload {
   readonly mode: RepresentationMode
 }
 
+type ResolvedCompilationContext = CompilationContext & {
+  readonly softWorkspace: SoftWorkspace
+  readonly relevantFiles: readonly string[]
+  readonly repositorySignals: readonly string[]
+}
+
 export class CognitiveViewCompiler {
-  static compile(ctx: CompilationContext): CompiledViewPayload {
+  static compile(ctxInput: CompilationContext): CompiledViewPayload {
+    const softWorkspace = ctxInput.softWorkspace ?? new SoftWorkspace(createSessionId(), ctxInput.hardState.revision)
+    const ctx: ResolvedCompilationContext = {
+      ...ctxInput,
+      softWorkspace,
+      relevantFiles: ctxInput.relevantFiles ?? [],
+      repositorySignals: ctxInput.repositorySignals ?? [],
+    }
+
     // Stage 1: Deterministic Eligibility Filtering
     const { eligibleClaims, eligibleObligations, eligibleEvidence } =
       this.stageEligibilityFilter(ctx)
@@ -125,7 +140,7 @@ export class CognitiveViewCompiler {
     }
   }
 
-  private static stageEligibilityFilter(ctx: CompilationContext) {
+  private static stageEligibilityFilter(ctx: ResolvedCompilationContext) {
     const eligibleClaims: ClaimRecord[] = []
     for (const c of ctx.hardState.claims.values()) {
       if (c.status !== "superseded" && c.status !== "rejected") {
@@ -153,7 +168,7 @@ export class CognitiveViewCompiler {
   }
 
   private static stageProvenanceExpansion(
-    ctx: CompilationContext,
+    ctx: ResolvedCompilationContext,
     claims: readonly ClaimRecord[],
     obligations: readonly [ObligationId, string, Scope][],
     evidence: readonly [EvidenceId, string, string][]
@@ -242,7 +257,7 @@ export class CognitiveViewCompiler {
   }
 
   private static stageRelevanceAndCompression(
-    ctx: CompilationContext,
+    ctx: ResolvedCompilationContext,
     claims: ClaimRecord[],
     evidence: [EvidenceId, string, string][],
     signals: readonly string[]
