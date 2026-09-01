@@ -71,7 +71,7 @@ const layer = Layer.effect(
         }).pipe(Effect.provide(locations.get(Location.Ref.make({ directory: AbsolutePath.make(ctx.directory) }))))
         return [
           [
-            `You are powered by the model named ${model.api.id}. The exact model ID is ${model.providerID}/${model.api.id}`,
+            `You are Rivet, powered by the model named ${model.api.id}. The exact model ID is ${model.providerID}/${model.api.id}`,
             `Here is some useful information about the environment you are running in:`,
             `<env>`,
             `  Working directory: ${ctx.directory}`,
@@ -80,6 +80,12 @@ const layer = Layer.effect(
             `  Platform: ${process.platform}`,
             `  Today's date: ${new Date().toDateString()}`,
             `</env>`,
+            `<rivet_constitution>`,
+            `  Epistemic Kernel: Noesis event-sourced HardState is authoritative.`,
+            `  ACCP 3.0 Execution Gate: Every tool invocation compiles into ActionProposal -> AuthorizedAction -> ExecutionReceipt.`,
+            `  Truth Kernel: Claims require Praxis mechanical verification; model prose cannot mint VERIFIED status.`,
+            `  Completion: A goal is complete ONLY when zero open obligations remain and valid verification receipt is produced.`,
+            `</rivet_constitution>`,
           ].join("\n"),
           references.length === 0
             ? undefined

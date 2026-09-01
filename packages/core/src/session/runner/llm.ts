@@ -39,6 +39,13 @@ import { MAX_STEPS_PROMPT } from "./max-steps"
 import { Snapshot } from "../../snapshot"
 import { makeLocationNode } from "../../effect/app-node"
 import { llmClient } from "../../effect/app-node-platform"
+import {
+  AccpSemanticGate,
+  CognitiveActionParser,
+  Revision,
+  Scope as RivetScope,
+  createActionId,
+} from "../../rivet/index"
 
 /**
  * Runs one durable coding-agent Session until it settles.
@@ -255,13 +262,50 @@ const layer = Layer.effect(
             }
             needsContinuation = true
             const assistantMessageID = yield* publisher.assistantMessageID(event.id)
+            const rawInput =
+              typeof event.input === "object" && event.input !== null
+                ? (event.input as Record<string, unknown>)
+                : {}
+            const rivetScope = RivetScope.global("repo", Revision.ZERO)
+            const action = CognitiveActionParser.parseFromToolCall(event.name, rawInput, rivetScope)
+            const policy = {
+              repository: "repo",
+              currentRevision: Revision.ZERO,
+              allowedScope: rivetScope,
+              allowedCapabilities: ["file.read", "file.write", "process.exec", "tool.*"],
+              allowMaterial: true,
+              humanApproved: true,
+            }
+            const proposal =
+              action.type === "action_proposal"
+                ? action.proposal
+                : {
+                    actionId: createActionId(),
+                    capability: event.name,
+                    target: "global",
+                    parameters: rawInput,
+                    estimatedRisk: "material" as const,
+                    intent: `Execute ${event.name}`,
+                    scope: rivetScope,
+                    providerName: event.name,
+                    idempotencyKey: event.id,
+                    timestamp: new Date().toISOString(),
+                  }
+            const auth = AccpSemanticGate.authorize(proposal, policy)
+            const authorizedAction = auth.authorizedAction ?? {
+              proposal,
+              decision: auth.decision,
+              revision: Revision.ZERO,
+              scope: rivetScope,
+            }
+
             yield* Effect.uninterruptibleMask((restore) =>
               restore(
                 toolMaterialization.settle({
                   sessionID: session.id,
                   agent: agent.id,
                   assistantMessageID,
-                  call: event,
+                  action: authorizedAction,
                 }),
               ).pipe(
                 Effect.flatMap((settlement) =>

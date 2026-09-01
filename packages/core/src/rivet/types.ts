@@ -9,6 +9,7 @@ export type ArtifactId = string & { readonly __brand: "ArtifactId" }
 export type WorkspaceId = string & { readonly __brand: "WorkspaceId" }
 export type ActionId = string & { readonly __brand: "ActionId" }
 export type ReceiptId = string & { readonly __brand: "ReceiptId" }
+export type InvocationId = string & { readonly __brand: "InvocationId" }
 
 function randomSuffix(): string {
   return Math.random().toString(36).substring(2, 10) + Math.random().toString(36).substring(2, 10)
@@ -48,6 +49,10 @@ export function createActionId(val?: string): ActionId {
 
 export function createReceiptId(val?: string): ReceiptId {
   return (val ?? `rcpt_${randomSuffix()}`) as ReceiptId
+}
+
+export function createInvocationId(val?: string): InvocationId {
+  return (val ?? `inv_${randomSuffix()}`) as InvocationId
 }
 
 export class Revision {

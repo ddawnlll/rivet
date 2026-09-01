@@ -26,6 +26,8 @@ export type ActionDecisionVerdict = "allow" | "block" | "require_human_approval"
 
 export interface ActionProposal {
   readonly actionId: ActionId
+  /** Provider tool name is transport identity, never execution authority. */
+  readonly providerName: string
   readonly capability: string
   readonly target: string
   readonly parameters: Record<string, unknown>
@@ -38,6 +40,7 @@ export interface ActionProposal {
 
 export function createActionProposal(init: {
   actionId?: ActionId
+  providerName?: string
   capability: string
   target: string
   parameters?: Record<string, unknown>
@@ -48,6 +51,7 @@ export function createActionProposal(init: {
 }): ActionProposal {
   return {
     actionId: init.actionId ?? createActionId(),
+    providerName: init.providerName ?? init.capability,
     capability: init.capability,
     target: init.target,
     parameters: init.parameters ?? {},

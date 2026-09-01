@@ -1,10 +1,11 @@
 export * as Tool from "./tool"
 
-import { ToolDefinition, ToolFailure, ToolOutput, type ToolCall } from "@opencode-ai/llm"
+import { ToolDefinition, ToolFailure, ToolOutput } from "@opencode-ai/llm"
 import { Effect, JsonSchema, Schema } from "effect"
 import type { AgentV2 } from "../agent"
 import type { SessionMessage } from "../session/message"
 import type { SessionSchema } from "../session/schema"
+import type { AuthorizedAction } from "../rivet/accp"
 
 export interface Context {
   readonly sessionID: SessionSchema.ID
@@ -63,7 +64,7 @@ type Config<
 type Runtime = {
   readonly permission?: string
   readonly definition: (name: string) => ToolDefinition
-  readonly settle: (call: ToolCall, context: Context) => Effect.Effect<ToolOutput, ToolFailure>
+  readonly settle: (action: AuthorizedAction, context: Context) => Effect.Effect<ToolOutput, ToolFailure>
 }
 
 const runtimes = new WeakMap<AnyTool, Runtime>()
@@ -88,8 +89,8 @@ export function make<
       definitions.set(name, definition)
       return definition
     },
-    settle: (call, context) =>
-      Schema.decodeUnknownEffect(config.input)(call.input).pipe(
+    settle: (action, context) =>
+      Schema.decodeUnknownEffect(config.input)(action.proposal.parameters).pipe(
         Effect.mapError((error) => new ToolFailure({ message: `Invalid tool input: ${error.message}` })),
         Effect.flatMap((input) =>
           config.execute(input, context).pipe(
@@ -147,7 +148,8 @@ export const withPermission = <Input extends SchemaType<any>, Output extends Sch
 
 export const permission = (tool: AnyTool, name: string) => runtimeOf(tool).permission ?? name
 export const definition = (name: string, tool: AnyTool) => runtimeOf(tool).definition(name)
-export const settle = (tool: AnyTool, call: ToolCall, context: Context) => runtimeOf(tool).settle(call, context)
+export const settle = (tool: AnyTool, action: AuthorizedAction, context: Context) =>
+  runtimeOf(tool).settle(action, context)
 
 function runtimeOf(tool: AnyTool) {
   const runtime = runtimes.get(tool)

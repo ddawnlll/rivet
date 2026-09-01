@@ -44,6 +44,7 @@ describe("Rivet Native Harness Core & Architectural Guarantees (1..16)", () => {
       estimatedRisk: "material",
       intent: "Fix auth",
       scope: Scope.path("repo", "src/auth.ts", Revision.from(1)), // Stale revision 1
+      providerName: "edit",
       timestamp: new Date().toISOString(),
     }
 
@@ -71,6 +72,7 @@ describe("Rivet Native Harness Core & Architectural Guarantees (1..16)", () => {
       estimatedRisk: "material",
       intent: "Malicious escape",
       scope: Scope.path("repo", "../secret/config.json", Revision.ZERO),
+      providerName: "edit",
       timestamp: new Date().toISOString(),
     }
 
@@ -97,6 +99,7 @@ describe("Rivet Native Harness Core & Architectural Guarantees (1..16)", () => {
       estimatedRisk: "material",
       intent: "Create app.ts",
       scope: Scope.path("repo", "src/app.ts", Revision.ZERO),
+      providerName: "edit",
       timestamp: new Date().toISOString(),
     }
 

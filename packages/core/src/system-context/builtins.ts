@@ -37,6 +37,22 @@ const builtIns = Layer.effectDiscard(
         baseline: (date) => `Today's date: ${date}`,
         update: (_previous, date) => `Today's date is now: ${date}`,
       }),
+      SystemContext.make({
+        key: SystemContext.Key.make("core/rivet-epistemic-charter"),
+        codec: Schema.toCodecJson(Schema.String),
+        load: Effect.succeed(
+          [
+            "<rivet_harness_constitution>",
+            "  Epistemic Authority: Noesis event-sourced HardState is authoritative memory.",
+            "  ACCP 3.0 Execution Gate: Every action requires valid Revision CAS and Scope binding.",
+            "  Truth Kernel: Claims require Praxis mechanical verification; prose cannot mint VERIFIED status.",
+            "  Completion: A goal is complete ONLY when zero open obligations remain and valid verification receipt is produced.",
+            "</rivet_harness_constitution>",
+          ].join("\n")
+        ),
+        baseline: (charter) => charter,
+        update: (_previous, charter) => charter,
+      }),
     ])
 
     yield* registry.register({ key: SystemContext.Key.make("core/builtins"), load: Effect.succeed(context) })
