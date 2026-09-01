@@ -202,6 +202,7 @@ const layer = Layer.effect(
       const isLastStep = agent.info?.steps !== undefined && currentStep >= agent.info.steps
       const toolMaterialization = isLastStep ? undefined : yield* tools.materialize(agent.info?.permissions)
       const promptCacheKey = /^ses_[0-9a-f]{64}$/.test(session.id) ? session.id.slice(4) : session.id
+      const rivetContextBlock = `[RIVET COGNITIVE VIEW]\nAuthority: ACCP 3.0 Enforced (All actions require valid revision CAS and scope binding)\nTruth Kernel: Praxis Scoped Mechanical Verification Active`
       const request = LLM.request({
         model,
         http: {
@@ -212,7 +213,7 @@ const layer = Layer.effect(
           },
         },
         providerOptions: { openai: { promptCacheKey } },
-        system: [agent.info?.system, system.baseline]
+        system: [agent.info?.system, system.baseline, rivetContextBlock]
           .filter((part): part is string => part !== undefined && part.length > 0)
           .map(SystemPart.make),
         messages: [...toLLMMessages(context, model), ...(isLastStep ? [Message.assistant(MAX_STEPS_PROMPT)] : [])],
