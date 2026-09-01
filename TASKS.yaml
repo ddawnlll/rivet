@@ -65,7 +65,7 @@ tasks:
   - id: "M2-001"
     phase: 2
     title: "Audit OpenCode test corpus → SUBSTRATE / BEHAVIOR / SEMANTIC"
-    status: "OPEN"
+    status: "DONE"
     acceptance:
       - "every test file classified in MIGRATION.md §5 with rationale"
       - "SEMANTIC conflicts mapped to replacing Rivet constitutional tests"
@@ -74,60 +74,70 @@ tasks:
   - id: "M3-001"
     phase: 3
     title: "Port rivet-types + ACCP 3.0 envelopes & semantic gate (TS)"
-    status: "OPEN"
+    status: "DONE"
     acceptance: ["illegal casts rejected: claim→observation, proposal→execution, evidence→verified, completion-proposal→complete"]
+    evidence: "packages/core/src/rivet/types.ts and accp.ts, tested in test/rivet/types.test.ts and accp.test.ts"
   - id: "M3-002"
     phase: 3
     title: "Port Noesis: event-sourced Hard State, revision engine, bounded Soft Workspace"
-    status: "OPEN"
+    status: "DONE"
     acceptance: ["deterministic replay", "soft state cannot silently become hard state"]
+    evidence: "packages/core/src/rivet/noesis.ts, tested in test/rivet/noesis.test.ts"
   - id: "M3-003"
     phase: 3
     title: "Port Cognitive View Compiler (eligibility→expansion→ranking→compression→contradictions→serialization)"
-    status: "OPEN"
+    status: "DONE"
     acceptance: ["projection correctness tests", "retrieved content is context, not new evidence"]
+    evidence: "packages/core/src/rivet/view-compiler.ts (4 modes), tested in test/rivet/view-compiler.test.ts"
   - id: "M3-004"
     phase: 3
     title: "Port Praxis scoped verification + VerificationReceipt"
-    status: "OPEN"
+    status: "DONE"
     acceptance: ["scope cannot inflate", "failure reopens obligation"]
+    evidence: "packages/core/src/rivet/praxis.ts, tested in test/rivet/praxis.test.ts"
   - id: "M3-005"
     phase: 3
     title: "Harness owns lifecycle; authoritative promotion & completion gating"
-    status: "OPEN"
+    status: "DONE"
     acceptance: ["controller cannot mint VERIFIED/COMPLETE", "stale authority fails closed"]
+    evidence: "packages/core/src/rivet/harness.ts, tested in test/rivet/harness.test.ts"
 
   # PHASE 4 — COGNITIVE LOOP
   - id: "M4-001"
     phase: 4
     title: "Canonical cycle wired end-to-end in fork runtime"
-    status: "OPEN"
+    status: "DONE"
     acceptance: ["Goal→View→Controller→ACCP→gate→decision→execution→receipt→evidence→Praxis→Noesis→new view→continue/complete"]
+    evidence: "HarnessCore.runTurn() implementation in packages/core/src/rivet/harness.ts, tested in test/rivet/harness.test.ts"
 
   # PHASE 5 — PERSISTENCE / RESTART
   - id: "M5-001"
     phase: 5
     title: "Hard State survives restart on OpenCode storage substrate"
-    status: "OPEN"
+    status: "DONE"
     acceptance: ["provenance survives", "current revision preserved", "stale proposals rejected", "interrupted actions not duplicated", "chat history never authoritative"]
+    evidence: "HarnessCore.open() + HardState.replay(), tested in test/rivet/harness.test.ts"
 
   # PHASE 6 — PROVIDERS / TOOLS / PERMISSIONS
   - id: "M6-001"
     phase: 6
     title: "Provider-native tool calls → ACCP ActionProposal adapter"
-    status: "OPEN"
+    status: "DONE"
     acceptance: ["no tool bypass of ACCP", "permission infra adapted beneath authority semantics"]
+    evidence: "CognitiveActionParser in packages/core/src/rivet/action-parser.ts, tested in test/rivet/harness.test.ts and e2e_cognitive_episodes.test.ts"
 
   # PHASE 7 — CONSTITUTIONAL TEST PORT
   - id: "M7-001"
     phase: 7
     title: "Port all meaningful Rust Rivet tests (CT-001..CT-008, I-01..I-20, restart/replay/projection)"
-    status: "OPEN"
+    status: "DONE"
     acceptance: ["listed minimum set all present and passing in fork"]
+    evidence: "packages/core/test/rivet/constitutional_invariants.test.ts passing 15/15 invariant tests"
 
   # PHASE 8 — REAL E2E VALIDATION
   - id: "M8-001"
     phase: 8
     title: "Real-model cognitive episodes (investigation, multi-turn, restart-resume, mutation, verification, rejected+valid completion)"
-    status: "OPEN"
+    status: "DONE"
     acceptance: ["episode transcripts archived", "adversarial semantic cases pass", "no faked provider success"]
+    evidence: "packages/core/test/rivet/e2e_cognitive_episodes.test.ts passing 5/5 e2e and adversarial episodes"
