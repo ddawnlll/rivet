@@ -67,6 +67,13 @@ export interface ActionDecision {
   readonly timestamp: string
 }
 
+export interface AuthorizedAction {
+  readonly proposal: ActionProposal
+  readonly decision: ActionDecision
+  readonly revision: Revision
+  readonly scope: Scope
+}
+
 export interface ExecutionReceipt {
   readonly receiptId: ReceiptId
   readonly actionId: ActionId
@@ -258,6 +265,25 @@ export class AccpSemanticGate {
     if (proposal.proposedStatus === "verified") {
       throw new RivetError("SemanticViolation", "Controller cannot mint VERIFIED claim status")
     }
+  }
+
+  static authorize(
+    proposal: ActionProposal,
+    policy: ActionAuthorizationPolicy
+  ): { readonly authorizedAction: AuthorizedAction | null; readonly decision: ActionDecision } {
+    const decision = this.authorizeAction(proposal, policy)
+    if (decision.verdict === "allow") {
+      return {
+        authorizedAction: {
+          proposal,
+          decision,
+          revision: policy.currentRevision,
+          scope: decision.authorizedScope,
+        },
+        decision,
+      }
+    }
+    return { authorizedAction: null, decision }
   }
 
   static authorizeAction(

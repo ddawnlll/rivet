@@ -1,6 +1,7 @@
 import {
   type ActionAuthorizationPolicy,
   type ActionProposal,
+  type AuthorizedAction,
   type CompletionProposal,
   type ExecutionReceipt,
   type VerificationReceipt,
@@ -72,7 +73,7 @@ export interface ModelBackendHandler {
 }
 
 export interface RuntimeExecutionHandler {
-  execute(proposal: ActionProposal): Promise<{ success: boolean; output: string; exitCode?: number }>
+  execute(action: AuthorizedAction): Promise<{ success: boolean; output: string; exitCode?: number }>
   runTest(predicate: string): Promise<ParsedTestReport>
 }
 
@@ -325,24 +326,26 @@ export class HarnessCore {
         }
       } else if (action.type === "action_proposal") {
         this.setPhase("authorizing")
-        const decision = AccpSemanticGate.authorizeAction(action.proposal, policy)
+        const { authorizedAction, decision } = AccpSemanticGate.authorize(action.proposal, policy)
 
-        if (decision.verdict === "allow") {
+        if (authorizedAction && decision.verdict === "allow") {
           this.setPhase("executing")
-          const execRes = await this.runtime.execute(action.proposal)
+          const execRes = await this.runtime.execute(authorizedAction)
           const evidenceId = createEvidenceId()
           const receiptId = createReceiptId()
 
+          // 1. Produce authoritative ExecutionReceipt
           const receipt: ExecutionReceipt = {
             receiptId,
-            actionId: action.proposal.actionId,
-            idempotencyKey: action.proposal.idempotencyKey ?? action.proposal.actionId,
-            actionFingerprint: JSON.stringify(action.proposal.parameters),
-            capability: action.proposal.capability,
+            actionId: authorizedAction.proposal.actionId,
+            idempotencyKey:
+              authorizedAction.proposal.idempotencyKey ?? authorizedAction.proposal.actionId,
+            actionFingerprint: JSON.stringify(authorizedAction.proposal.parameters),
+            capability: authorizedAction.proposal.capability,
             success: execRes.success,
             exitCode: execRes.exitCode ?? 0,
-            scope: action.proposal.scope,
-            risk: action.proposal.estimatedRisk,
+            scope: authorizedAction.scope,
+            risk: authorizedAction.proposal.estimatedRisk,
             humanApproved: policy.humanApproved,
             outputSummary: execRes.output.slice(0, 500),
             evidenceId,
@@ -356,10 +359,11 @@ export class HarnessCore {
             timestamp: new Date().toISOString(),
           })
 
+          // 2. Distinct subsequent step: Evidence Admission into Noesis
           newEvents.push({
             type: "evidence_recorded",
             evidenceId,
-            source: action.proposal.capability,
+            source: authorizedAction.proposal.capability,
             summary: execRes.output.slice(0, 300),
             timestamp: new Date().toISOString(),
           })
@@ -368,8 +372,14 @@ export class HarnessCore {
             this.failureTracker.recordSuccess()
             madeProgress = true
           } else {
-            this.failureTracker.recordFailure(action.proposal.target, execRes.output)
+            this.failureTracker.recordFailure(authorizedAction.proposal.target, execRes.output)
           }
+        } else {
+          this.emit({
+            type: "observation",
+            data: { blocked: decision.reason },
+            timestamp: new Date().toISOString(),
+          })
         }
       } else if (action.type === "verification_request") {
         this.setPhase("verifying")

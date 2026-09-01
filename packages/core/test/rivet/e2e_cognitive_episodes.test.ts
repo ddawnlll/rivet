@@ -33,8 +33,8 @@ describe("End-to-End Cognitive Episodes & Adversarial Verification", () => {
     }
 
     const runtime: RuntimeExecutionHandler = {
-      execute: async (proposal) => {
-        readPaths.push(proposal.target)
+      execute: async (action) => {
+        readPaths.push(action.proposal.target)
         return {
           success: true,
           output: JSON.stringify({ name: "rivet", version: "0.4.0" }),
@@ -103,9 +103,9 @@ describe("End-to-End Cognitive Episodes & Adversarial Verification", () => {
     }
 
     const runtime: RuntimeExecutionHandler = {
-      execute: async (proposal) => {
-        fs[proposal.target] = String(proposal.parameters.content || "")
-        return { success: true, output: `Saved ${proposal.target}` }
+      execute: async (action) => {
+        fs[action.proposal.target] = String(action.proposal.parameters.content || "")
+        return { success: true, output: `Saved ${action.proposal.target}` }
       },
       runTest: async () => {
         const isValid = fs["src/calc.ts"]?.includes("return a + b")
