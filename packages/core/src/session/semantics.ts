@@ -4,7 +4,7 @@ import { Database } from "../database/database"
 import { EventV2 } from "../event"
 import { SessionEvent } from "./event"
 import { SessionSchema } from "./schema"
-import { CognitiveView, HardState, SoftWorkspace, type NoesisEvent, type Observation } from "../rivet/noesis"
+import { CognitiveView, HardState, SoftWorkspace, type ClaimRecord, type NoesisEvent, type Observation } from "../rivet/noesis"
 import { CognitiveViewCompiler, type RepresentationMode } from "../rivet/view-compiler"
 import {
   AccpSemanticGate,
@@ -27,11 +27,33 @@ import {
   createReceiptId,
   createTaskId,
   type ClaimId,
+  type DependencyRef,
+  type EpistemicStatus,
   type InvocationId,
+  type MemoryFrontier,
+  type PremiseConflict,
+  type Provenance,
   type SessionId,
   type TaskId,
+  type ValidityPolicy,
 } from "../rivet/types"
 import { parseProviderToolFrame, type ProviderToolFrame } from "./commitment"
+import { ValidityEngine, type EnvironmentChange } from "../rivet/validity"
+
+export interface EpistemicStateSnapshot {
+  readonly revision: Revision
+  readonly goalDescription: string | null
+  readonly activeClaims: readonly ClaimRecord[]
+  readonly historicalClaims: readonly ClaimRecord[]
+  readonly dirtyClaims: readonly ClaimRecord[]
+  readonly supersededClaims: readonly ClaimRecord[]
+  readonly rejectedClaims: readonly ClaimRecord[]
+  readonly openObligations: readonly [string, string][]
+  readonly closedObligations: readonly [string, string][]
+  readonly recentEvidence: readonly [string, string][]
+  readonly premiseConflicts: readonly PremiseConflict[]
+  readonly memoryFrontier: MemoryFrontier
+}
 
 /** Rivet semantic state attached to one durable Session aggregate. */
 export class SessionSemantics {
@@ -235,37 +257,162 @@ export class SessionSemantics {
     return this.verifyLastExecution(events, request)
   }
 
-  admitClaim(events: EventV2.Interface, proposal: ClaimProposal) {
-    try {
-      AccpSemanticGate.validateClaimProposal(proposal)
-    } catch (error) {
-      return Effect.fail(error instanceof Error ? error : new Error(String(error)))
-    }
-    if (!this.hardState.canPromoteToSupported(proposal.supportingEvidence))
-      return Effect.fail(new Error("Claim evidence has not been admitted by the Harness"))
-    return this.append(events, {
-      type: "claim_asserted",
-      claimId: proposal.claimId,
-      proposition: proposal.proposition,
-      status: proposal.proposedStatus,
-      evidence: proposal.supportingEvidence,
-      scope: proposal.scope,
-      timestamp: proposal.timestamp,
+  /**
+   * Adjudicates and admits a new claim proposal through the Write-Time Validity Barrier.
+   * Distinguishes between supersession (historical replacement) and contradiction.
+   */
+  admitClaim(
+    events: EventV2.Interface,
+    proposal: ClaimProposal,
+    options?: {
+      readonly validityPolicy?: ValidityPolicy
+      readonly dependencies?: readonly DependencyRef[]
+      readonly provenance?: Provenance
+      readonly validFromRevision?: Revision
+    },
+  ) {
+    const self = this
+    return Effect.gen(function* () {
+      try {
+        AccpSemanticGate.validateClaimProposal(proposal)
+      } catch (error) {
+        return yield* Effect.fail(error instanceof Error ? error : new Error(String(error)))
+      }
+
+      if (proposal.supportingEvidence.length > 0 && !self.hardState.canPromoteToSupported(proposal.supportingEvidence))
+        return yield* Effect.fail(new Error("Claim evidence has not been admitted by the Harness"))
+
+      // Write-Time Barrier: Adjudicate against existing state
+      const adjudication = ValidityEngine.adjudicateWriteTime(
+        self.hardState,
+        proposal,
+        options?.validityPolicy ?? "EPISTEMIC",
+      )
+
+      if (adjudication.action === "supersede" && adjudication.supersededClaimId) {
+        yield* self.append(events, {
+          type: "claim_superseded",
+          claimId: adjudication.supersededClaimId,
+          supersededBy: proposal.claimId,
+          reason: `Superseded by updated claim ${proposal.claimId}: '${proposal.proposition}'`,
+          timestamp: proposal.timestamp,
+        })
+      } else if (adjudication.action === "contradict" && adjudication.contradictionReason) {
+        yield* self.append(events, {
+          type: "claim_contradicted",
+          claimId: proposal.claimId,
+          contradictedBy: [...proposal.supportingEvidence],
+          reason: adjudication.contradictionReason,
+          scope: proposal.scope,
+          timestamp: proposal.timestamp,
+        })
+      }
+
+      yield* self.append(events, {
+        type: "claim_asserted",
+        claimId: proposal.claimId,
+        proposition: proposal.proposition,
+        status: proposal.proposedStatus,
+        evidence: proposal.supportingEvidence,
+        dependencies: options?.dependencies ? [...options.dependencies] : undefined,
+        scope: proposal.scope,
+        validFromRevision: options?.validFromRevision ?? self.hardState.revision,
+        validityPolicy: options?.validityPolicy ?? "EPISTEMIC",
+        provenance: options?.provenance,
+        timestamp: proposal.timestamp,
+      })
     })
   }
 
   proposeClaim(
     events: EventV2.Interface,
-    input: { readonly repository: string; readonly proposition: string; readonly supportingEvidence?: readonly string[] },
+    input: {
+      readonly repository: string
+      readonly proposition: string
+      readonly supportingEvidence?: readonly string[]
+      readonly validityPolicy?: ValidityPolicy
+      readonly dependencies?: readonly DependencyRef[]
+      readonly provenance?: Provenance
+      readonly validFromRevision?: Revision
+    },
   ) {
-    return this.admitClaim(events, {
-      claimId: createClaimId(),
-      proposition: input.proposition,
-      proposedStatus: "supported",
-      supportingEvidence: [...(input.supportingEvidence ?? [])] as ClaimProposal["supportingEvidence"],
-      scope: this.scope(input.repository),
-      timestamp: new Date().toISOString(),
+    return this.admitClaim(
+      events,
+      {
+        claimId: createClaimId(),
+        proposition: input.proposition,
+        proposedStatus: "supported",
+        supportingEvidence: [...(input.supportingEvidence ?? [])] as ClaimProposal["supportingEvidence"],
+        scope: this.scope(input.repository),
+        timestamp: new Date().toISOString(),
+      },
+      {
+        validityPolicy: input.validityPolicy,
+        dependencies: input.dependencies,
+        provenance: input.provenance,
+        validFromRevision: input.validFromRevision,
+      },
+    )
+  }
+
+  /**
+   * Change-Time Barrier: Evaluates environmental changes and marks affected claims DIRTY.
+   */
+  handleEnvironmentChanges(events: EventV2.Interface, changes: readonly EnvironmentChange[]) {
+    const self = this
+    return Effect.gen(function* () {
+      const impact = ValidityEngine.analyzeEnvironmentChanges(self.hardState.validityGraph, self.hardState, changes)
+      if (impact.allDirtyClaimIds.length === 0) return impact
+
+      for (const claimId of impact.allDirtyClaimIds) {
+        yield* self.append(events, {
+          type: "claim_dirtied",
+          claimId,
+          reason: `Environmental dependency modified: ${impact.affectedDependencies.join(", ")}`,
+          timestamp: new Date().toISOString(),
+        })
+      }
+
+      return impact
     })
+  }
+
+  /**
+   * First-class Epistemic State Query: Allows inspecting memory without raw SQLite queries.
+   */
+  getEpistemicState(scope?: Scope): EpistemicStateSnapshot {
+    const barrier = ValidityEngine.applyReadTimeBarrier(this.hardState, scope)
+    const memoryFrontier = ValidityEngine.compileMemoryFrontier(this.hardState)
+
+    const openObligations: [string, string][] = []
+    for (const [id, desc] of this.hardState.obligations) {
+      openObligations.push([id, desc])
+    }
+
+    const closedObligations: [string, string][] = []
+    for (const [id, rcpt] of this.hardState.closedObligations) {
+      closedObligations.push([id, rcpt])
+    }
+
+    const recentEvidence: [string, string][] = []
+    for (const [id, summary] of this.hardState.evidence) {
+      recentEvidence.push([id, summary])
+    }
+
+    return {
+      revision: this.hardState.revision,
+      goalDescription: this.hardState.goalDescription,
+      activeClaims: barrier.activeClaims,
+      historicalClaims: barrier.historicalClaims,
+      dirtyClaims: barrier.dirtyClaims,
+      supersededClaims: barrier.supersededClaims,
+      rejectedClaims: barrier.rejectedClaims,
+      openObligations,
+      closedObligations,
+      recentEvidence,
+      premiseConflicts: [...this.hardState.premiseConflicts],
+      memoryFrontier,
+    }
   }
 
   completionDecision(proposal: CompletionProposal) {
@@ -325,8 +472,12 @@ export class SessionSemantics {
   cognitiveView(input: {
     readonly repositoryId: string
     readonly goalDescription?: string
+    readonly userPrompt?: string
+    readonly currentEnvironmentLanguage?: string
     readonly relevantFiles?: readonly string[]
     readonly repositorySignals?: readonly string[]
+    readonly focusSymbols?: readonly string[]
+    readonly scope?: Scope
     readonly tokenBudget?: number
     readonly mode?: RepresentationMode
   }) {
@@ -335,11 +486,16 @@ export class SessionSemantics {
       softWorkspace: this.softWorkspace,
       goalDescription: input.goalDescription ?? this.hardState.goalDescription ?? "Continue the current goal",
       repositoryId: input.repositoryId,
+      userPrompt: input.userPrompt,
+      currentEnvironmentLanguage: input.currentEnvironmentLanguage,
       relevantFiles: input.relevantFiles,
       repositorySignals: input.repositorySignals,
+      focusSymbols: input.focusSymbols,
+      scope: input.scope,
       tokenBudget: input.tokenBudget ?? 4000,
       mode: input.mode ?? "HYBRID",
     })
+
     return new CognitiveView({
       hardRevision: compiled.hardRevision,
       repositoryId: compiled.repositoryId,
@@ -354,6 +510,8 @@ export class SessionSemantics {
       activeHypotheses: [...compiled.hypotheses],
       activeFocus: [...compiled.activeFocus],
       relevantFiles: [...compiled.relevantFiles],
+      premiseConflicts: [...compiled.premiseConflicts],
+      memoryFrontier: compiled.memoryFrontier,
       tokenBudgetHint: compiled.omittedSummary.tokenBudget,
     })
   }
@@ -367,6 +525,9 @@ function decodeNoesisEvent(value: unknown): NoesisEvent {
   if (!isRecord(value) || typeof value.type !== "string") throw new Error("Invalid persisted Rivet semantic event")
   const event: Record<string, unknown> = { ...value }
   if ("scope" in event) event.scope = decodeScope(event.scope)
+  if ("validFromRevision" in event && event.validFromRevision !== undefined) {
+    event.validFromRevision = Revision.from(typeof event.validFromRevision === "string" || typeof event.validFromRevision === "number" ? event.validFromRevision : 0)
+  }
   if (event.type === "execution_recorded" && isRecord(event.receipt)) {
     event.receipt = { ...event.receipt, scope: decodeScope(event.receipt.scope) }
   }

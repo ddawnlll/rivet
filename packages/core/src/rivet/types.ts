@@ -85,8 +85,70 @@ export type EpistemicStatus =
   | "hypothetical"
   | "supported"
   | "verified"
-  | "rejected"
+  | "dirty"
+  | "stale"
   | "superseded"
+  | "rejected"
+  | "invalidated"
+
+export type ValidityPolicy =
+  | "HISTORICAL"
+  | "CURRENT_STATE"
+  | "DERIVED_STATE"
+  | "PROCEDURAL"
+  | "EPISTEMIC"
+
+export type DependencyRef =
+  | { readonly type: "file"; readonly path: string }
+  | { readonly type: "file_pattern"; readonly pattern: string }
+  | { readonly type: "manifest"; readonly name: string; readonly path?: string }
+  | { readonly type: "symbol"; readonly symbol: string; readonly file?: string }
+  | { readonly type: "census"; readonly key: string }
+  | { readonly type: "claim"; readonly claimId: ClaimId }
+  | { readonly type: "predicate"; readonly predicate: string }
+  | { readonly type: "config"; readonly key: string }
+
+export interface EvidenceRef {
+  readonly evidenceId: EvidenceId
+  readonly source: string
+  readonly summary: string
+  readonly revision: Revision
+}
+
+export interface Provenance {
+  readonly source: string
+  readonly author?: string
+  readonly timestamp: string
+  readonly derivedFrom?: readonly string[]
+}
+
+export interface PremiseConflict {
+  readonly userPremise: string
+  readonly currentValidState: string
+  readonly conflictingClaimId?: ClaimId
+  readonly supersededAtRevision?: Revision
+  readonly evidenceRefs: readonly EvidenceId[]
+}
+
+export interface MemoryRef {
+  readonly id: string
+  readonly type: "claim" | "observation" | "decision" | "failure" | "procedure"
+  readonly summary: string
+  readonly status?: EpistemicStatus
+  readonly relevanceScore?: number
+  readonly revision?: Revision
+  readonly tags?: readonly string[]
+}
+
+export interface MemoryFrontier {
+  readonly revision: Revision
+  readonly pinned: readonly MemoryRef[]
+  readonly active: readonly MemoryRef[]
+  readonly episodic: readonly MemoryRef[]
+  readonly procedural: readonly MemoryRef[]
+  readonly rejected: readonly MemoryRef[]
+  readonly relatedSymbols: readonly string[]
+}
 
 export interface ScopeInit {
   repository: string
@@ -196,6 +258,16 @@ export function globMatch(pattern: string, text: string): boolean {
   let regexStr = "^"
   let i = 0
   while (i < pattern.length) {
+    if (pattern.slice(i, i + 4) === "/**/") {
+      regexStr += "/(?:.+/)?"
+      i += 4
+      continue
+    }
+    if (pattern.slice(i, i + 3) === "/**") {
+      regexStr += "(?:/.*)?"
+      i += 3
+      continue
+    }
     const c = pattern[i]
     if (c === "*") {
       if (pattern[i + 1] === "*") {

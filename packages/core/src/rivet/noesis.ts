@@ -1,20 +1,26 @@
 import {
   type ClaimId,
   type ActionId,
+  type DependencyRef,
   type EpistemicStatus,
   type EvidenceId,
   type InvocationId,
+  type MemoryFrontier,
   type ObligationId,
+  type PremiseConflict,
+  type Provenance,
   type ReceiptId,
   Revision,
   RivetError,
   type Scope,
   type SessionId,
   type TaskId,
+  type ValidityPolicy,
   type WorkspaceId,
   createWorkspaceId,
 } from "./types"
 import type { ExecutionReceipt, VerificationReceipt } from "./accp"
+import { ValidityGraph } from "./validity"
 
 export interface ClaimRecord {
   readonly id: ClaimId
@@ -22,7 +28,15 @@ export interface ClaimRecord {
   status: EpistemicStatus
   readonly supportingEvidence: readonly EvidenceId[]
   readonly dependsOn: readonly ClaimId[]
+  readonly dependencies: readonly DependencyRef[]
   readonly scope: Scope
+  readonly validFromRevision: Revision
+  validToRevision?: Revision
+  readonly learnedAtRevision: Revision
+  readonly validityPolicy: ValidityPolicy
+  lastValidatedAt?: Revision
+  supersededBy?: ClaimId
+  readonly provenance?: Provenance
   readonly createdAt: string
   updatedAt: string
 }
@@ -93,7 +107,11 @@ export type NoesisEvent =
       readonly status: EpistemicStatus
       readonly evidence: readonly EvidenceId[]
       readonly dependsOn?: readonly ClaimId[]
+      readonly dependencies?: readonly DependencyRef[]
       readonly scope: Scope
+      readonly validFromRevision?: Revision
+      readonly validityPolicy?: ValidityPolicy
+      readonly provenance?: Provenance
       readonly timestamp: string
     }
   | {
@@ -101,6 +119,49 @@ export type NoesisEvent =
       readonly claimId: ClaimId
       readonly newStatus: EpistemicStatus
       readonly reason: string
+      readonly timestamp: string
+    }
+  | {
+      readonly type: "claim_dirtied"
+      readonly claimId: ClaimId
+      readonly reason: string
+      readonly timestamp: string
+    }
+  | {
+      readonly type: "claim_revalidated"
+      readonly claimId: ClaimId
+      readonly status: EpistemicStatus
+      readonly evidence?: readonly EvidenceId[]
+      readonly timestamp: string
+    }
+  | {
+      readonly type: "claim_staled"
+      readonly claimId: ClaimId
+      readonly reason: string
+      readonly timestamp: string
+    }
+  | {
+      readonly type: "claim_superseded"
+      readonly claimId: ClaimId
+      readonly supersededBy: ClaimId
+      readonly reason: string
+      readonly timestamp: string
+    }
+  | {
+      readonly type: "claim_invalidated"
+      readonly claimId: ClaimId
+      readonly reason: string
+      readonly timestamp: string
+    }
+  | {
+      readonly type: "validity_dependency_registered"
+      readonly claimId: ClaimId
+      readonly dependencies: readonly DependencyRef[]
+      readonly timestamp: string
+    }
+  | {
+      readonly type: "premise_conflict_detected"
+      readonly conflict: PremiseConflict
       readonly timestamp: string
     }
   | {
@@ -197,6 +258,8 @@ export class HardState {
   readonly modelInvocations: ModelInvocationRecord[] = []
   readonly processErrorAttributions: ProcessErrorAttributionRecord[] = []
   readonly completedTasks: Map<TaskId, ReceiptId> = new Map()
+  readonly validityGraph: ValidityGraph = new ValidityGraph()
+  readonly premiseConflicts: PremiseConflict[] = []
 
   apply(event: NoesisEvent): void {
     this.revision = this.revision.next()
@@ -207,16 +270,37 @@ export class HardState {
         break
       }
       case "claim_asserted": {
+        const validFrom = event.validFromRevision ?? this.revision
+        const policy = event.validityPolicy ?? "EPISTEMIC"
+        const deps = event.dependencies ? [...event.dependencies] : []
+        const legacyDeps = event.dependsOn ? [...event.dependsOn] : []
+
         this.claims.set(event.claimId, {
           id: event.claimId,
           proposition: event.proposition,
           status: event.status,
           supportingEvidence: [...event.evidence],
-          dependsOn: event.dependsOn ? [...event.dependsOn] : [],
+          dependsOn: legacyDeps,
+          dependencies: deps,
           scope: event.scope,
+          validFromRevision: validFrom,
+          learnedAtRevision: this.revision,
+          validityPolicy: policy,
+          lastValidatedAt: this.revision,
+          provenance: event.provenance,
           createdAt: event.timestamp,
           updatedAt: event.timestamp,
         })
+
+        // Register in validity graph
+        if (deps.length > 0) {
+          this.validityGraph.register(event.claimId, deps)
+        } else if (legacyDeps.length > 0) {
+          this.validityGraph.register(
+            event.claimId,
+            legacyDeps.map((d) => ({ type: "claim", claimId: d })),
+          )
+        }
         break
       }
       case "claim_status_changed": {
@@ -224,13 +308,84 @@ export class HardState {
         if (record) {
           record.status = event.newStatus
           record.updatedAt = event.timestamp
+          if (event.newStatus === "verified" || event.newStatus === "supported") {
+            record.lastValidatedAt = this.revision
+          }
         }
+        break
+      }
+      case "claim_dirtied": {
+        const record = this.claims.get(event.claimId)
+        if (record && record.validityPolicy !== "HISTORICAL" && record.status !== "rejected" && record.status !== "superseded") {
+          record.status = "dirty"
+          record.updatedAt = event.timestamp
+        }
+        break
+      }
+      case "claim_revalidated": {
+        const record = this.claims.get(event.claimId)
+        if (record) {
+          this.claims.set(event.claimId, {
+            ...record,
+            status: event.status,
+            lastValidatedAt: this.revision,
+            updatedAt: event.timestamp,
+            supportingEvidence: event.evidence
+              ? Array.from(new Set([...record.supportingEvidence, ...event.evidence]))
+              : record.supportingEvidence,
+          })
+        }
+        break
+      }
+      case "claim_staled": {
+        const record = this.claims.get(event.claimId)
+        if (record && record.validityPolicy !== "HISTORICAL") {
+          record.status = "stale"
+          record.validToRevision = this.revision
+          record.updatedAt = event.timestamp
+        }
+        break
+      }
+      case "claim_superseded": {
+        const record = this.claims.get(event.claimId)
+        if (record) {
+          record.status = "superseded"
+          record.validToRevision = this.revision
+          record.supersededBy = event.supersededBy
+          record.updatedAt = event.timestamp
+        }
+        break
+      }
+      case "claim_invalidated": {
+        const record = this.claims.get(event.claimId)
+        if (record) {
+          record.status = "invalidated"
+          record.validToRevision = this.revision
+          record.updatedAt = event.timestamp
+        }
+        this.cascadeClaimInvalidation(event.claimId, event.reason)
+        break
+      }
+      case "validity_dependency_registered": {
+        this.validityGraph.register(event.claimId, event.dependencies)
+        const record = this.claims.get(event.claimId)
+        if (record) {
+          this.claims.set(event.claimId, {
+            ...record,
+            dependencies: [...event.dependencies],
+          })
+        }
+        break
+      }
+      case "premise_conflict_detected": {
+        this.premiseConflicts.push(event.conflict)
         break
       }
       case "claim_contradicted": {
         const record = this.claims.get(event.claimId)
         if (record) {
           record.status = "rejected"
+          record.validToRevision = this.revision
           record.updatedAt = event.timestamp
         }
         this.contradictions.set(event.claimId, {
@@ -247,7 +402,7 @@ export class HardState {
         if (!this.evidence.has(event.evidenceId)) {
           throw new RivetError(
             "SemanticViolation",
-            `Unknown evidence reference: ${event.evidenceId}`
+            `Unknown evidence reference: ${event.evidenceId}`,
           )
         }
         const record = this.claims.get(event.claimId)
@@ -256,6 +411,7 @@ export class HardState {
             ...record,
             status: event.status,
             supportingEvidence: [...record.supportingEvidence, event.evidenceId],
+            lastValidatedAt: this.revision,
             updatedAt: event.timestamp,
           })
         }
@@ -265,6 +421,7 @@ export class HardState {
         const record = this.claims.get(event.claimId)
         if (record) {
           record.status = "rejected"
+          record.validToRevision = this.revision
           record.updatedAt = event.timestamp
         }
         this.rejectedClaims.set(event.claimId, {
@@ -307,7 +464,7 @@ export class HardState {
             this.closedObligations.delete(event.receipt.obligationId)
             this.obligations.set(
               event.receipt.obligationId,
-              `Reopened after failed verification receipt ${event.receipt.receiptId} (previously closed by ${prev})`
+              `Reopened after failed verification receipt ${event.receipt.receiptId} (previously closed by ${prev})`,
             )
           }
         }
@@ -337,7 +494,12 @@ export class HardState {
   cascadeClaimInvalidation(sourceClaimId: ClaimId, reason: string): void {
     const toInvalidate: ClaimId[] = []
     for (const [id, record] of this.claims) {
-      if (record.dependsOn.includes(sourceClaimId) && record.status !== "rejected") {
+      if (
+        (record.dependsOn.includes(sourceClaimId) ||
+          record.dependencies.some((d) => d.type === "claim" && d.claimId === sourceClaimId)) &&
+        record.status !== "rejected" &&
+        record.status !== "invalidated"
+      ) {
         toInvalidate.push(id)
       }
     }
@@ -346,6 +508,7 @@ export class HardState {
       const depRecord = this.claims.get(depId)
       if (depRecord) {
         depRecord.status = "rejected"
+        depRecord.validToRevision = this.revision
         depRecord.updatedAt = new Date().toISOString()
       }
       this.rejectedClaims.set(depId, {
@@ -462,6 +625,8 @@ export interface CognitiveViewInit {
   activeHypotheses?: string[]
   activeFocus?: string[]
   relevantFiles?: string[]
+  premiseConflicts?: PremiseConflict[]
+  memoryFrontier?: MemoryFrontier
   tokenBudgetHint?: number
   modelInvocationCount?: number
 }
@@ -480,6 +645,8 @@ export class CognitiveView {
   readonly activeHypotheses: readonly string[]
   readonly activeFocus: readonly string[]
   readonly relevantFiles: readonly string[]
+  readonly premiseConflicts: readonly PremiseConflict[]
+  readonly memoryFrontier?: MemoryFrontier
   readonly tokenBudgetHint: number
   readonly modelInvocationCount: number
 
@@ -497,6 +664,8 @@ export class CognitiveView {
     this.activeHypotheses = init.activeHypotheses ?? []
     this.activeFocus = init.activeFocus ?? []
     this.relevantFiles = init.relevantFiles ?? []
+    this.premiseConflicts = init.premiseConflicts ?? []
+    this.memoryFrontier = init.memoryFrontier
     this.tokenBudgetHint = init.tokenBudgetHint ?? 4096
     this.modelInvocationCount = init.modelInvocationCount ?? 0
   }
@@ -507,10 +676,23 @@ export class CognitiveView {
     lines.push(`Repository: ${this.repositoryId}`)
     lines.push(`${this.goalDescription}\n`)
 
+    if (this.premiseConflicts.length > 0) {
+      lines.push("### DETECTED PREMISE CONFLICTS (User premise contradicts verified state):")
+      for (const pc of this.premiseConflicts) {
+        lines.push(`- [PREMISE CONFLICT] User assumes: "${pc.userPremise}"`)
+        lines.push(`  Current Validated Truth: "${pc.currentValidState}"`)
+        if (pc.conflictingClaimId) {
+          lines.push(`  (Previous claim ${pc.conflictingClaimId} superseded/invalidated at ${pc.supersededAtRevision})`)
+        }
+      }
+      lines.push("")
+    }
+
     if (this.activeClaims.length > 0) {
       lines.push("### AUTHORITATIVE HARD CLAIMS:")
       for (const c of this.activeClaims) {
-        lines.push(`- [${c.status}] ${c.id}: ${c.proposition}`)
+        const policyTag = c.validityPolicy !== "EPISTEMIC" ? ` [${c.validityPolicy}]` : ""
+        lines.push(`- [${c.status}] ${c.id}: ${c.proposition}${policyTag} (valid: ${c.validFromRevision}..${c.validToRevision ?? "now"})`)
       }
       lines.push("")
     }
@@ -524,7 +706,7 @@ export class CognitiveView {
     }
 
     if (this.rejectedClaims.length > 0) {
-      lines.push("### REJECTED / FALSIFIED CLAIMS (Do not re-explore):")
+      lines.push("### REJECTED / SUPERSEDED / FALSIFIED CLAIMS (Do not re-explore):")
       for (const r of this.rejectedClaims) {
         lines.push(`- [x] ${r}`)
       }
@@ -555,6 +737,26 @@ export class CognitiveView {
       lines.push("")
     }
 
+    if (this.memoryFrontier) {
+      const activeMem = this.memoryFrontier.active
+      const episodicMem = this.memoryFrontier.episodic
+      const rejectedMem = this.memoryFrontier.rejected
+
+      if (activeMem.length > 0 || episodicMem.length > 0 || rejectedMem.length > 0) {
+        lines.push("### HARNESS MEMORY FRONTIER (Associative Context):")
+        for (const m of activeMem) {
+          lines.push(`- [active:${m.type}] ${m.summary}`)
+        }
+        for (const m of episodicMem) {
+          lines.push(`- [history:${m.type}] ${m.summary}`)
+        }
+        for (const m of rejectedMem) {
+          lines.push(`- [failure-avoidance:${m.type}] ${m.summary}`)
+        }
+        lines.push("")
+      }
+    }
+
     if (this.unknowns.length > 0) {
       lines.push("### UNRESOLVED UNKNOWNS (not facts):")
       for (const u of this.unknowns) {
@@ -580,7 +782,7 @@ export class CognitiveView {
     }
 
     if (this.repositorySignals.length > 0) {
-      lines.push("### REPOSITORY CENSUS SIGNALS (not semantic decisions):")
+      lines.push("### DERIVED ENVIRONMENT PROJECTIONS (Recomputed live, not fossilized):")
       for (const s of this.repositorySignals) {
         lines.push(`- ${s}`)
       }

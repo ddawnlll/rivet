@@ -250,12 +250,24 @@ const layer = Layer.effect(
                 additionalProperties: false,
               },
             }),
+            new ToolDefinition({
+              name: "query_epistemic_state",
+              description: "Query Rivet's authoritative epistemic state (Noesis HardState, open obligations, active validated claims, memory frontier, and premise conflicts) without executing raw database queries.",
+              inputSchema: {
+                type: "object",
+                properties: {
+                  include_frontier: { type: "boolean", description: "Include associative memory frontier" },
+                },
+                additionalProperties: false,
+              },
+            }),
           ]
       const invocationID = createInvocationId(`${session.id}:${currentStep}`)
       yield* semantics.recordInvocation(events, invocationID, model.id)
       const cognitiveView = semantics.cognitiveView({
         repositoryId: session.location.directory,
         goalDescription: semantics.hardState.goalDescription ?? goal,
+        userPrompt: goal,
       })
       const invocation: ModelInvocation = {
         systemContract: { name: "Rivet Harness", version: "1", authority: "Harness" },
@@ -265,20 +277,27 @@ const layer = Layer.effect(
         invocation: invocationID,
       }
       const gateEvaluation = ModelInvocationGate.evaluate(invocation)
-      // Rivet Identity Recovery: Inject when HardState has claims/evidence/hypotheses or when gate requires diagnosis
+      // Rivet Identity Recovery: Inject when HardState has claims/evidence/hypotheses/conflicts or when gate requires diagnosis
       const hasMeaningfulRivetState =
         cognitiveView.activeClaims.length > 0 ||
         cognitiveView.recentEvidence.length > 0 ||
         cognitiveView.activeHypotheses.length > 0 ||
+        cognitiveView.premiseConflicts.length > 0 ||
         gateEvaluation.reason === "STATE_CONTRADICTION" ||
         gateEvaluation.reason === "HYPOTHESIS_CONFLICT"
       const rivetStateSystem = hasMeaningfulRivetState
         ? [
             `<RivetHardState revision=${cognitiveView.hardRevision.toJSON()}>`,
             `Goal: ${cognitiveView.goalDescription}`,
+            ...(cognitiveView.premiseConflicts.length > 0
+              ? [
+                  `Premise Conflicts (${cognitiveView.premiseConflicts.length}):`,
+                  ...cognitiveView.premiseConflicts.map((pc) => `  - [PREMISE CONFLICT] User assumes: "${pc.userPremise}" vs Valid: "${pc.currentValidState}"`),
+                ]
+              : []),
             `Open Obligations (${cognitiveView.openObligations.length}):`,
             ...cognitiveView.openObligations.map((o) => `  - ${o}`),
-            `Active Claims (${cognitiveView.activeClaims.length}):`,
+            `Active Valid Claims (${cognitiveView.activeClaims.length}):`,
             ...cognitiveView.activeClaims.map((c) => `  - ${c.id}: ${c.proposition} [${c.status}]`),
             `Recent Evidence (${cognitiveView.recentEvidence.length}):`,
             ...cognitiveView.recentEvidence.map((e) => `  - ${e}`),
@@ -433,6 +452,35 @@ const layer = Layer.effect(
                   id: event.id,
                   name: event.name,
                   result: { type: "text", value: "Claim admitted as supported evidence" },
+                }),
+              )
+              return
+            }
+            if (commitment.commitment.type === "epistemic_query") {
+              const snapshot = semantics.getEpistemicState(semantics.scope(session.location.directory))
+              const stateSummary = [
+                `=== RIVET AUTHORITATIVE EPISTEMIC STATE ===`,
+                `Revision: ${snapshot.revision}`,
+                `Goal: ${snapshot.goalDescription ?? "None"}`,
+                `Active Valid Claims (${snapshot.activeClaims.length}):`,
+                ...snapshot.activeClaims.map((c) => `  - [${c.id}] ${c.status}: ${c.proposition}`),
+                `Open Obligations (${snapshot.openObligations.length}):`,
+                ...snapshot.openObligations.map(([id, desc]) => `  - [${id}] ${desc}`),
+                ...(snapshot.premiseConflicts.length > 0
+                  ? [
+                      `Premise Conflicts (${snapshot.premiseConflicts.length}):`,
+                      ...snapshot.premiseConflicts.map((pc) => `  - [PREMISE CONFLICT] User: "${pc.userPremise}" vs Valid: "${pc.currentValidState}"`),
+                    ]
+                  : []),
+                `Recent Evidence (${snapshot.recentEvidence.length}):`,
+                ...snapshot.recentEvidence.map(([id, sum]) => `  - [${id}] ${sum}`),
+              ].join("\n")
+
+              yield* publish(
+                LLMEvent.toolResult({
+                  id: event.id,
+                  name: event.name,
+                  result: { type: "text", value: stateSummary },
                 }),
               )
               return

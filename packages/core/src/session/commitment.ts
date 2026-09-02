@@ -33,6 +33,7 @@ export type CognitiveCommitment =
   | { readonly type: "verification_request"; readonly request: VerificationRequest }
   | { readonly type: "state_transition_proposal"; readonly proposal: StateTransitionProposal }
   | { readonly type: "completion_proposal"; readonly proposal: CompletionProposal }
+  | { readonly type: "epistemic_query"; readonly includeFrontier: boolean }
 
 /**
  * Decode provider-native tool frames into Rivet commitments. This is the
@@ -81,6 +82,12 @@ export function parseProviderToolFrame(frame: ProviderToolFrame, scope: Scope): 
           baseRevision: scope.revision,
           timestamp: new Date().toISOString(),
         },
+      }
+    case "query_epistemic_state":
+    case "query_state":
+      return {
+        type: "epistemic_query",
+        includeFrontier: Boolean(args.include_frontier),
       }
     default:
       return {

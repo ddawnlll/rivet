@@ -9,10 +9,13 @@ import {
   createSessionId,
   type EpistemicStatus,
   type EvidenceId,
+  type MemoryFrontier,
   type ObligationId,
+  type PremiseConflict,
   type Revision,
   Scope,
 } from "./types"
+import { ValidityEngine } from "./validity"
 
 export type RepresentationMode = "RAW_TEXT" | "TRIPLES" | "PATHS" | "HYBRID"
 
@@ -49,6 +52,10 @@ export interface CompilationContext {
   readonly repositoryId: string
   readonly relevantFiles?: readonly string[]
   readonly repositorySignals?: readonly string[]
+  readonly userPrompt?: string
+  readonly currentEnvironmentLanguage?: string
+  readonly focusSymbols?: readonly string[]
+  readonly scope?: Scope
   readonly tokenBudget: number
   readonly mode: RepresentationMode
   readonly deferredTreesCount?: number
@@ -64,12 +71,16 @@ export interface CompiledViewPayload {
   readonly unknowns: readonly string[]
   readonly candidateActions: readonly string[]
   readonly activeClaims: readonly ClaimRecord[]
+  readonly historicalClaims: readonly ClaimRecord[]
+  readonly dirtyClaims: readonly ClaimRecord[]
   readonly contradictions: readonly ContradictionRecord[]
   readonly rejectedClaims: readonly RejectionRecord[]
   readonly openObligations: readonly [ObligationId, string, Scope][]
   readonly recentEvidence: readonly [EvidenceId, string, string][]
   readonly relevantFiles: readonly string[]
   readonly repositorySignals: readonly string[]
+  readonly premiseConflicts: readonly PremiseConflict[]
+  readonly memoryFrontier: MemoryFrontier
   readonly omittedSummary: OmittedSummary
   readonly triples: readonly KnowledgeTriple[]
   readonly provenancePaths: readonly ProvenancePath[]
@@ -92,16 +103,21 @@ export class CognitiveViewCompiler {
       repositorySignals: ctxInput.repositorySignals ?? [],
     }
 
-    // Stage 1: Deterministic Eligibility Filtering
-    const { eligibleClaims, eligibleObligations, eligibleEvidence } =
-      this.stageEligibilityFilter(ctx)
+    // Stage 1: Deterministic Eligibility & Read-Time Validity Barrier
+    const {
+      eligibleClaims,
+      historicalClaims,
+      dirtyClaims,
+      eligibleObligations,
+      eligibleEvidence,
+    } = this.stageEligibilityFilter(ctx)
 
     // Stage 2: Provenance Path Expansion
     const { triples, provenancePaths } = this.stageProvenanceExpansion(
       ctx,
       eligibleClaims,
       eligibleObligations,
-      eligibleEvidence
+      eligibleEvidence,
     )
 
     // Stage 3 & 4: Relevance Ranking & Semantic Compression
@@ -110,13 +126,32 @@ export class CognitiveViewCompiler {
         ctx,
         eligibleClaims,
         eligibleEvidence,
-        ctx.repositorySignals
+        ctx.repositorySignals,
       )
 
     // Stage 5: Contradiction and Rejected Beliefs Inclusion
     const { contradictions, rejectedClaims } = this.stageContradictionInclusion(ctx)
 
-    // Stage 6: Assemble compiled payload (Zero-copy pass-through)
+    // Stage 6: Premise Conflict Detection & Proactive Memory Frontier Compilation
+    const premiseConflict = ctx.userPrompt
+      ? ValidityEngine.detectPremiseConflict(
+          ctx.hardState,
+          ctx.userPrompt,
+          ctx.currentEnvironmentLanguage,
+        )
+      : null
+
+    const premiseConflicts: PremiseConflict[] = [
+      ...ctx.hardState.premiseConflicts,
+      ...(premiseConflict ? [premiseConflict] : []),
+    ]
+
+    const memoryFrontier = ValidityEngine.compileMemoryFrontier(
+      ctx.hardState,
+      ctx.focusSymbols ?? [],
+    )
+
+    // Stage 7: Assemble compiled payload (Zero-copy pass-through)
     return {
       hardRevision: ctx.hardState.revision,
       workspaceRevision: ctx.softWorkspace.baseHardRevision,
@@ -127,12 +162,16 @@ export class CognitiveViewCompiler {
       unknowns: ctx.softWorkspace.unknowns,
       candidateActions: ctx.softWorkspace.candidateActions,
       activeClaims: compressedClaims,
+      historicalClaims,
+      dirtyClaims,
       contradictions,
       rejectedClaims,
       openObligations: eligibleObligations,
       recentEvidence: compressedEvidence,
       relevantFiles: ctx.relevantFiles,
       repositorySignals: compressedSignals,
+      premiseConflicts,
+      memoryFrontier,
       omittedSummary: omitted,
       triples,
       provenancePaths,
@@ -141,13 +180,8 @@ export class CognitiveViewCompiler {
   }
 
   private static stageEligibilityFilter(ctx: ResolvedCompilationContext) {
-    const eligibleClaims: ClaimRecord[] = []
-    for (const c of ctx.hardState.claims.values()) {
-      if (c.status !== "superseded" && c.status !== "rejected") {
-        eligibleClaims.push(c)
-      }
-    }
-    eligibleClaims.sort((a, b) => a.id.localeCompare(b.id))
+    // Enforce Read-Time Validity Barrier: DIRTY, STALE, and SUPERSEDED claims have ZERO operational authority
+    const barrier = ValidityEngine.applyReadTimeBarrier(ctx.hardState, ctx.scope)
 
     const eligibleObligations: [ObligationId, string, Scope][] = []
     for (const [id, desc] of ctx.hardState.obligations) {
@@ -164,14 +198,20 @@ export class CognitiveViewCompiler {
     }
     eligibleEvidence.sort((a, b) => b[0].localeCompare(a[0]))
 
-    return { eligibleClaims, eligibleObligations, eligibleEvidence }
+    return {
+      eligibleClaims: [...barrier.activeClaims],
+      historicalClaims: [...barrier.historicalClaims],
+      dirtyClaims: [...barrier.dirtyClaims],
+      eligibleObligations,
+      eligibleEvidence,
+    }
   }
 
   private static stageProvenanceExpansion(
     ctx: ResolvedCompilationContext,
     claims: readonly ClaimRecord[],
     obligations: readonly [ObligationId, string, Scope][],
-    evidence: readonly [EvidenceId, string, string][]
+    evidence: readonly [EvidenceId, string, string][],
   ) {
     const triples: KnowledgeTriple[] = []
     const provenancePaths: ProvenancePath[] = []
@@ -260,7 +300,7 @@ export class CognitiveViewCompiler {
     ctx: ResolvedCompilationContext,
     claims: ClaimRecord[],
     evidence: [EvidenceId, string, string][],
-    signals: readonly string[]
+    signals: readonly string[],
   ) {
     const goalLower = ctx.goalDescription.toLowerCase()
     const focusLower = ctx.softWorkspace.activeFocus.map((f) => f.toLowerCase())
@@ -311,10 +351,10 @@ export class CognitiveViewCompiler {
 
   private static stageContradictionInclusion(ctx: CompilationContext) {
     const contradictions = Array.from(ctx.hardState.contradictions.values()).sort((a, b) =>
-      a.claimId.localeCompare(b.claimId)
+      a.claimId.localeCompare(b.claimId),
     )
     const rejectedClaims = Array.from(ctx.hardState.rejectedClaims.values()).sort((a, b) =>
-      a.claimId.localeCompare(b.claimId)
+      a.claimId.localeCompare(b.claimId),
     )
     return { contradictions, rejectedClaims }
   }
@@ -338,6 +378,13 @@ export class CognitiveViewCompiler {
     lines.push(`Repository: ${p.repositoryId} | Revision: ${p.hardRevision}`)
     lines.push(`Goal: ${p.goalDescription}\n`)
 
+    if (p.premiseConflicts.length > 0) {
+      lines.push("--- Premise Conflicts ---")
+      for (const pc of p.premiseConflicts) {
+        lines.push(`- Conflict: User premise "${pc.userPremise}" conflicts with "${pc.currentValidState}"`)
+      }
+    }
+
     if (p.activeFocus.length > 0) {
       lines.push(`Active Focus: ${p.activeFocus.join(", ")}`)
     }
@@ -348,10 +395,10 @@ export class CognitiveViewCompiler {
       lines.push(`Unknowns: ${p.unknowns.join("; ")}`)
     }
 
-    lines.push("\n--- Active Claims ---")
+    lines.push("\n--- Active Valid Claims ---")
     for (const c of p.activeClaims) {
       lines.push(
-        `- [${c.id}] ${c.status}: ${c.proposition} (support: ${JSON.stringify(c.supportingEvidence)})`
+        `- [${c.id}] ${c.status}: ${c.proposition} (support: ${JSON.stringify(c.supportingEvidence)})`,
       )
     }
 
@@ -359,7 +406,7 @@ export class CognitiveViewCompiler {
       lines.push("\n--- Contradictions ---")
       for (const c of p.contradictions) {
         lines.push(
-          `- Contradiction on [${c.claimId}]: ${c.reason} (contradicted by: ${JSON.stringify(c.contradictedBy)})`
+          `- Contradiction on [${c.claimId}]: ${c.reason} (contradicted by: ${JSON.stringify(c.contradictedBy)})`,
         )
       }
     }
@@ -368,7 +415,7 @@ export class CognitiveViewCompiler {
       lines.push("\n--- Rejected Beliefs ---")
       for (const r of p.rejectedClaims) {
         lines.push(
-          `- Rejected [${r.claimId}]: ${r.reason} (evidence: ${JSON.stringify(r.evidence)})`
+          `- Rejected [${r.claimId}]: ${r.reason} (evidence: ${JSON.stringify(r.evidence)})`,
         )
       }
     }
@@ -390,7 +437,7 @@ export class CognitiveViewCompiler {
     }
 
     lines.push(
-      `\nOmitted Summary: ${p.omittedSummary.deferredTrees} deferred trees, token budget: ${p.omittedSummary.tokenBudget}`
+      `\nOmitted Summary: ${p.omittedSummary.deferredTrees} deferred trees, token budget: ${p.omittedSummary.tokenBudget}`,
     )
     return lines.join("\n")
   }
@@ -419,7 +466,7 @@ export class CognitiveViewCompiler {
     }
 
     lines.push(
-      `\n[OmittedSummary: deferred_trees=${p.omittedSummary.deferredTrees}, token_budget=${p.omittedSummary.tokenBudget}]`
+      `\n[OmittedSummary: deferred_trees=${p.omittedSummary.deferredTrees}, token_budget=${p.omittedSummary.tokenBudget}]`,
     )
     return lines.join("\n")
   }
@@ -436,6 +483,7 @@ export class CognitiveViewCompiler {
       `  active_claims_count: ${p.activeClaims.length}`,
       `  open_obligations_count: ${p.openObligations.length}`,
       `  contradictions_count: ${p.contradictions.length}`,
+      `  premise_conflicts_count: ${p.premiseConflicts.length}`,
       `  omitted_summary:`,
       `    deferred_trees: ${p.omittedSummary.deferredTrees}`,
       `    token_budget: ${p.omittedSummary.tokenBudget}`,

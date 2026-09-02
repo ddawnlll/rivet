@@ -126,3 +126,15 @@ Current status: the standalone `HarnessCore` runtime and its sidecar fixtures ar
 ### 9.1 Deleted sidecar test runtime
 
 `packages/core/src/rivet/harness.ts`, `test/rivet/harness.test.ts`, and `test/rivet/e2e_cognitive_episodes.test.ts` were intentionally removed together. Those tests instantiated an independent in-memory semantic runtime and therefore could pass while the normal session runner bypassed Rivet. Their guarantees are not accepted as production evidence. The replacement tests must use `SessionRunner`, `ToolRegistry`, durable Session events and `SessionSemantics.load` so the ordinary product path is the tested Harness.
+
+## 10. Validity-Aware Bi-Temporal Epistemic Memory Architecture (Active Constitution)
+
+| Subsystem | Location | Invariants & Semantics | Status |
+|---|---|---|---|
+| `ValidityEngine` & `ValidityGraph` | `packages/core/src/rivet/validity.ts` | 3 Validity Barriers (Write-time, Change-time, Read-time), Reverse dependency lookups, Invalidation fan-out, Memory Frontier compilation | **COMPLETED & VERIFIED** |
+| `EpistemicStatus` & Bi-Temporal Revisions | `packages/core/src/rivet/types.ts` | `validFromRevision` vs `learnedAtRevision`, `ValidityPolicy` (Historical/Current/Derived/Procedural/Epistemic), `DependencyRef` discriminated union | **COMPLETED & VERIFIED** |
+| `HardState` & Noesis Replay | `packages/core/src/rivet/noesis.ts` | `claim_dirtied`, `claim_superseded`, `claim_invalidated`, `premise_conflict_detected` deterministic event sourcing | **COMPLETED & VERIFIED** |
+| `CognitiveViewCompiler` | `packages/core/src/rivet/view-compiler.ts` | Stage 1 Read-time barrier filtering (`DIRTY`/`STALE`/`SUPERSEDED` blocked from active claims), PremiseConflict detection, Proactive Memory Frontier | **COMPLETED & VERIFIED** |
+| Native Epistemic Queries & Dispatch | `packages/core/src/session/semantics.ts` + `packages/core/src/session/runner/llm.ts` | `getEpistemicState()`, `handleEnvironmentChanges()`, `query_epistemic_state` tool handling | **COMPLETED & VERIFIED** |
+| Invariant Test Suites | `packages/core/test/rivet/` | 21 test files, 82 unit/benchmark/scenario tests (including canonical Python → Rust migration scenario) | **100% PASS** |
+

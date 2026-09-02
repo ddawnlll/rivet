@@ -141,3 +141,35 @@ tasks:
     status: "DONE"
     acceptance: ["episode transcripts archived", "adversarial semantic cases pass", "no faked provider success"]
     evidence: "Normal SessionRunner/tool-registry coverage is the replacement; multi-turn Praxis/completion production-path coverage remains queued"
+
+  # PHASE 9 — VALIDITY-AWARE BI-TEMPORAL EPISTEMIC MEMORY
+  - id: "M9-001"
+    phase: 9
+    title: "Validity Engine, Graph, and Bi-Temporal Epistemic Status (P0/P1)"
+    status: "DONE"
+    acceptance:
+      - "Bi-temporal revisions (validTime vs learnedTime) tracked per claim"
+      - "ValidityPolicy (Historical, Current, Derived, Procedural, Epistemic)"
+      - "Reverse dependency indexing with transitive invalidation"
+      - "DIRTY claims have zero operational authority in active knowledge"
+    evidence: "packages/core/src/rivet/validity.ts, packages/core/test/rivet/validity.test.ts, dependency_graph.test.ts"
+  - id: "M9-002"
+    phase: 9
+    title: "Canonical Migration Scenario & Premise Conflict Detection (P0)"
+    status: "DONE"
+    acceptance:
+      - "Python -> Rust migration triggers change-time invalidation to DIRTY"
+      - "Write-time supersession sets validToRevision without deleting history"
+      - "Read-time barrier filters superseded/dirty claims from active knowledge"
+      - "False premise in user prompt generates structured PremiseConflict"
+    evidence: "packages/core/test/rivet/python_to_rust_scenario.test.ts"
+  - id: "M9-003"
+    phase: 9
+    title: "Memory Frontier Compilation & Epistemic State Queries (P2)"
+    status: "DONE"
+    acceptance:
+      - "Proactive memory frontier compiled into CognitiveView"
+      - "First-class query_epistemic_state tool avoids raw SQL"
+      - "Deterministic replay of validity graph and epistemic events"
+    evidence: "packages/core/test/rivet/retrieval_barrier.test.ts, restart_replay.test.ts, benchmark.test.ts"
+
