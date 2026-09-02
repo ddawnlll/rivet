@@ -653,6 +653,7 @@ describe("SessionRunnerLLM", () => {
         "request_completion",
         "request_verification",
         "propose_claim",
+        "query_epistemic_state",
       ])
       expect(requests[0]?.messages.map((message) => ({ role: message.role, content: message.content }))).toEqual([
         { role: "user", content: [{ type: "text", text: "First" }] },
@@ -1366,6 +1367,7 @@ describe("SessionRunnerLLM", () => {
         "request_completion",
         "request_verification",
         "propose_claim",
+        "query_epistemic_state",
       ])
       expect(yield* session.context(sessionID)).toMatchObject([
         { type: "user", text: "Use tools" },
