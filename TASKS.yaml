@@ -172,4 +172,15 @@ tasks:
       - "First-class query_epistemic_state tool avoids raw SQL"
       - "Deterministic replay of validity graph and epistemic events"
     evidence: "packages/core/test/rivet/retrieval_barrier.test.ts, restart_replay.test.ts, benchmark.test.ts"
+  - id: "M9-004"
+    phase: 9
+    title: "Slow Epistemic Maintenance & Production Lifecycle Audit"
+    status: "DONE"
+    acceptance:
+      - "EpistemicMaintenanceEngine detects unresolved DIRTY claims, orphan deps, weak provenance, cyclic supersessions"
+      - "DerivedStateProjector derives live census without fossilization"
+      - "Production SessionRunner lifecycle delivers Rust state and PremiseConflict without requiring query_epistemic_state"
+      - "Leak isolation proves superseded memories never leak into active knowledge"
+    evidence: "packages/core/src/rivet/maintenance.ts, derived-state.ts, packages/core/test/rivet/maintenance.test.ts, derived_state.test.ts, leak_isolation.test.ts, adjudication_contrast.test.ts, python_to_rust_production.test.ts"
+
 
