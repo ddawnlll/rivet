@@ -6,6 +6,8 @@
 **Host Platform:** macOS Darwin (`Staff` / `staff` on Apple Silicon/Unix)  
 **Normative references:** `docs/rivet-research-monograph-v0.3-technical.html`, `IMPLEMENTATION.md`, `docs/decisions/DECISION_REGISTER.md`, and subsystem contracts (`docs/contracts/`).
 
+> Historical audit notice: this document audits the archived Rust reference and predates the native TypeScript cutover. For current semantic ownership and production-path evidence, use `MIGRATION.md` and the `packages/core`/`packages/opencode` test suites. Its Rust `HarnessCore` references are not current runtime architecture.
+
 ## Scope and epistemic status
 
 - [OBSERVATION] The workspace contains 16 member crates in `Cargo.toml`: `rivet-types`, `accp`, `noesis`, `rivet-view`, `praxis`, `hephaestus`, `rivet-store`, `rivet-model`, `rivet-model-genai`, `rivet-model-rig`, `rivet-mcp`, `rivet-runtime`, `rivet-repository`, `rivet-core`, `rivet`, `rivet-eval`.

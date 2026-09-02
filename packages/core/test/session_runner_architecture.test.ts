@@ -1,11 +1,9 @@
 import { describe, expect, test } from "bun:test"
 import {
   AccpSemanticGate,
-  CognitiveActionParser,
+  parseProviderToolFrame,
   CognitiveViewCompiler,
-  HarnessCore,
   HardState,
-  InMemoryStateStore,
   Revision,
   Scope,
   createActionId,
@@ -25,7 +23,7 @@ describe("Rivet Native Harness Core & Architectural Guarantees (1..16)", () => {
       args: { path: "src/main.ts", content: "console.log('hi')" },
     }
     const currentScope = Scope.global("repo", Revision.ZERO)
-    const action = CognitiveActionParser.parseFromToolCall(rawToolCall.name, rawToolCall.args, currentScope)
+    const action = parseProviderToolFrame({ id: "provider-call-1", name: rawToolCall.name, input: rawToolCall.args }, currentScope)
 
     expect(action.type).toBe("action_proposal")
     if (action.type === "action_proposal") {
@@ -209,32 +207,22 @@ describe("Rivet Native Harness Core & Architectural Guarantees (1..16)", () => {
   })
 
   test("13: Restart reconstructs knowledge from Noesis events, not transcript replay", async () => {
-    const store = new InMemoryStateStore()
     const obligationId = createObligationId()
-
-    // Initial session emits events
-    const initialHarness = new HarnessCore({
-      store,
-      model: { invoke: async () => ({ text: "", toolCalls: [] }) },
-      runtime: {
-        execute: async () => ({ success: true, output: "" }),
-        runTest: async () => ({ passedCount: 1, failedCount: 0, skippedCount: 0, rawStdout: "1 pass", rawStderr: "" }),
+    const events = [
+      { type: "goal_set" as const, goal: "Implement feature X", timestamp: new Date().toISOString() },
+      {
+        type: "obligation_created" as const,
+        obligationId,
+        description: "Implement feature X",
+        scope: Scope.global("repo", Revision.ZERO),
+        timestamp: new Date().toISOString(),
       },
-    })
-    initialHarness.initializeGoal("Implement feature X")
+    ]
 
-    // Fresh restart: Reload from store
-    const restartedHarness = new HarnessCore({
-      store,
-      model: { invoke: async () => ({ text: "", toolCalls: [] }) },
-      runtime: {
-        execute: async () => ({ success: true, output: "" }),
-        runTest: async () => ({ passedCount: 1, failedCount: 0, skippedCount: 0, rawStdout: "1 pass", rawStderr: "" }),
-      },
-    })
-    const resumed = await restartedHarness.resume()
-    expect(resumed).toBe(true)
-    expect(restartedHarness.hardState.obligations.size).toBeGreaterThan(0)
+    // A fresh HardState rebuilds from semantic events. No provider transcript is involved.
+    const restarted = HardState.replay(events)
+    expect(restarted.goalDescription).toBe("Implement feature X")
+    expect(restarted.obligations.has(obligationId)).toBe(true)
   })
 
   test("14 & 15: Ordinary session termination or model prose cannot complete goal; open obligations block completion", () => {

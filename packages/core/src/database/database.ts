@@ -41,17 +41,20 @@ export function layerFromPath(filename: string) {
 }
 
 export function path() {
-  if (Flag.OPENCODE_DB) {
-    if (Flag.OPENCODE_DB === ":memory:" || isAbsolute(Flag.OPENCODE_DB)) return Flag.OPENCODE_DB
-    return join(Global.Path.data, Flag.OPENCODE_DB)
+  const dbFlag = Flag.RIVET_DB ?? Flag.OPENCODE_DB
+  if (dbFlag) {
+    if (dbFlag === ":memory:" || isAbsolute(dbFlag)) return dbFlag
+    return join(Global.Path.data, dbFlag)
   }
   if (
     ["latest", "beta", "prod"].includes(InstallationChannel) ||
+    process.env.RIVET_DISABLE_CHANNEL_DB === "1" ||
+    process.env.RIVET_DISABLE_CHANNEL_DB === "true" ||
     process.env.OPENCODE_DISABLE_CHANNEL_DB === "1" ||
     process.env.OPENCODE_DISABLE_CHANNEL_DB === "true"
   )
-    return join(Global.Path.data, "opencode.db")
-  return join(Global.Path.data, `opencode-${InstallationChannel.replace(/[^a-zA-Z0-9._-]/g, "-")}.db`)
+    return join(Global.Path.data, "rivet.db")
+  return join(Global.Path.data, `rivet-${InstallationChannel.replace(/[^a-zA-Z0-9._-]/g, "-")}.db`)
 }
 
 export const node = makeGlobalNode({ service: Service, layer: layerFromPath(path()), deps: [] })

@@ -118,6 +118,8 @@ const appBindingCommands = [
   "variant.list",
   "provider.connect",
   "console.org.switch",
+  "rivet.status",
+  "rivet.debug",
   "opencode.status",
   "opencode.debug",
   "theme.switch",
@@ -454,19 +456,19 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
     if (!terminalTitleEnabled() || Flag.OPENCODE_DISABLE_TERMINAL_TITLE) return
 
     if (route.data.type === "home") {
-      renderer.setTerminalTitle("OpenCode")
+      renderer.setTerminalTitle("Rivet")
       return
     }
 
     if (route.data.type === "session") {
       const session = sync.session.get(route.data.sessionID)
       if (!session || isDefaultTitle(session.title)) {
-        renderer.setTerminalTitle("OpenCode")
+        renderer.setTerminalTitle("Rivet")
         return
       }
 
       const title = session.title.length > 40 ? session.title.slice(0, 37) + "..." : session.title
-      renderer.setTerminalTitle(`OC | ${title}`)
+      renderer.setTerminalTitle(`RIVET | ${title}`)
       return
     }
 
@@ -761,7 +763,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
           ]
         : []),
       {
-        name: "opencode.status",
+        name: "rivet.status",
         title: "View status",
         slashName: "status",
         run: () => {
@@ -770,7 +772,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
         category: "System",
       },
       {
-        name: "opencode.debug",
+        name: "rivet.debug",
         title: "View debug info",
         slashName: "debug",
         run: () => {
@@ -1070,7 +1072,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
     await DialogAlert.show(
       dialog,
       "Update Complete",
-      `Successfully updated to OpenCode v${result.data.version}. Please restart the application.`,
+      `Successfully updated to Rivet v${result.data.version}. Please restart the application.`,
     )
 
     void exit()

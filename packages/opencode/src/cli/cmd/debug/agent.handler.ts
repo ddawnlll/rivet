@@ -14,6 +14,9 @@ import { iife } from "../../../util/iife"
 import { fail } from "../../effect-cmd"
 import { InstanceRef } from "@/effect/instance-ref"
 import type { InstanceContext } from "@/project/instance-context"
+import { Database } from "@opencode-ai/core/database/database"
+import { EventV2Bridge } from "@/event-v2-bridge"
+import { SessionSemantics } from "@opencode-ai/core/session/semantics"
 
 export const debugAgent = Effect.fn("Cli.debug.agent")(function* (args: {
   name: string
@@ -52,7 +55,36 @@ const run = Effect.fn("Cli.debug.agent.body")(function* (
     }
     const params = parseToolParams(args.params)
     const toolCtx = yield* createToolContext(agent, ctx)
-    const result = yield* tool.execute(params, toolCtx)
+    const { db } = yield* Database.Service
+    const events = yield* EventV2Bridge.Service
+    const semantics = yield* SessionSemantics.load(db, toolCtx.sessionID)
+    const scope = semantics.scope(ctx.directory)
+    const admission = semantics.admitProviderCommitment(
+      { id: toolCtx.callID, name: toolID, input: params },
+      scope,
+      {
+        repository: ctx.directory,
+        currentRevision: semantics.hardState.revision,
+        allowedScope: scope,
+        allowedCapabilities: ["file.read", "file.write", "process.exec", "tool.*", "mcp.*"],
+        allowMaterial: true,
+        humanApproved: true,
+      },
+    )
+    if (!admission.authorizedAction) throw new Error(admission.decision?.reason ?? "Debug action was not authorized")
+    const semanticToolCtx = {
+      ...toolCtx,
+      extra: { ...toolCtx.extra, rivetSemantics: semantics, rivetEvents: events },
+    }
+    const executed = yield* semantics.executeAuthorizedAction(
+      admission.authorizedAction,
+      (action) => tool.execute(action.proposal.parameters as typeof params, semanticToolCtx),
+      (value) => value.output,
+    ).pipe(Effect.orDie)
+    yield* semantics.recordExecution(events, executed.receipt)
+    yield* semantics.recordObservation(events, executed.receipt, executed.receipt.outputSummary)
+    yield* semantics.admitEvidence(events, executed.receipt, executed.receipt.capability, executed.receipt.outputSummary)
+    const result = executed.value
     process.stdout.write(JSON.stringify({ tool: toolID, input: params, result }, null, 2) + EOL)
     return
   }
@@ -178,6 +210,7 @@ const createToolContext = Effect.fn("Cli.debug.agent.createToolContext")(functio
     agent: agent.name,
     abort: new AbortController().signal,
     messages: [],
+    extra: {},
     metadata: () => Effect.void,
     ask(req: Omit<PermissionV1.Request, "id" | "sessionID" | "tool">) {
       return Effect.sync(() => {

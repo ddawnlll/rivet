@@ -26,6 +26,11 @@ export function AppHeader({
   return (
     <header className="topbar">
       <div className="projectCluster">
+        <div className="brandLockup" aria-label="Rivet epistemic agent">
+          <span className="brandGlyph" aria-hidden="true"><i /><i /><i /></span>
+          <span className="brandName">Rivet</span>
+          <span className="brandDescriptor">persistent agent</span>
+        </div>
         <DropdownMenu.Root>
           <DropdownMenu.Trigger asChild>
             <button className="projectButton" type="button" aria-label="Project selector">

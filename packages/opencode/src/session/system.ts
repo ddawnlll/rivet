@@ -84,6 +84,7 @@ const layer = Layer.effect(
             `  Epistemic Kernel: Noesis event-sourced HardState is authoritative.`,
             `  ACCP 3.0 Execution Gate: Every tool invocation compiles into ActionProposal -> AuthorizedAction -> ExecutionReceipt.`,
             `  Truth Kernel: Claims require Praxis mechanical verification; model prose cannot mint VERIFIED status.`,
+            `  Language Match: Reply 100% in user's language (Türkçe ise Türkçe konuş).`,
             `  Completion: A goal is complete ONLY when zero open obligations remain and valid verification receipt is produced.`,
             `</rivet_constitution>`,
           ].join("\n"),

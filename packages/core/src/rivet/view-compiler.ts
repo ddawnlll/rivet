@@ -116,22 +116,22 @@ export class CognitiveViewCompiler {
     // Stage 5: Contradiction and Rejected Beliefs Inclusion
     const { contradictions, rejectedClaims } = this.stageContradictionInclusion(ctx)
 
-    // Stage 6: Assemble compiled payload
+    // Stage 6: Assemble compiled payload (Zero-copy pass-through)
     return {
       hardRevision: ctx.hardState.revision,
       workspaceRevision: ctx.softWorkspace.baseHardRevision,
       repositoryId: ctx.repositoryId,
       goalDescription: ctx.goalDescription,
-      activeFocus: [...ctx.softWorkspace.activeFocus],
-      hypotheses: [...ctx.softWorkspace.hypotheses],
-      unknowns: [...ctx.softWorkspace.unknowns],
-      candidateActions: [...ctx.softWorkspace.candidateActions],
+      activeFocus: ctx.softWorkspace.activeFocus,
+      hypotheses: ctx.softWorkspace.hypotheses,
+      unknowns: ctx.softWorkspace.unknowns,
+      candidateActions: ctx.softWorkspace.candidateActions,
       activeClaims: compressedClaims,
       contradictions,
       rejectedClaims,
       openObligations: eligibleObligations,
       recentEvidence: compressedEvidence,
-      relevantFiles: [...ctx.relevantFiles],
+      relevantFiles: ctx.relevantFiles,
       repositorySignals: compressedSignals,
       omittedSummary: omitted,
       triples,

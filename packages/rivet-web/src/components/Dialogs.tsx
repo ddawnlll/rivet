@@ -191,26 +191,33 @@ export function ProviderAuthDialog({
   const [saving, setSaving] = useState(false)
 
   const activeInfo = catalog?.providers.find(p => p.id === selectedProvider)
+  const tokenOptional = selectedProvider === 'custom' || selectedProvider === 'ollama' || selectedProvider === 'local'
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!apiKey.trim()) return
+    if (!apiKey.trim() && !tokenOptional) return
     setSaving(true)
-    await onSaveAuth({
-      provider: selectedProvider,
-      key: apiKey.trim(),
-      base_url: baseUrl.trim() ? baseUrl.trim() : undefined,
-      default_model: defaultModel.trim() ? defaultModel.trim() : undefined,
-      models: defaultModel.trim() ? [defaultModel.trim()] : [],
-    })
-    setSaving(false)
-    setApiKey('')
+    try {
+      await onSaveAuth({
+        provider: selectedProvider,
+        key: apiKey.trim() || 'none',
+        base_url: baseUrl.trim() ? baseUrl.trim() : undefined,
+        default_model: defaultModel.trim() ? defaultModel.trim() : undefined,
+        models: defaultModel.trim() ? [defaultModel.trim()] : [],
+      })
+      setApiKey('')
+    } finally {
+      setSaving(false)
+    }
   }
 
   const handleRemove = async () => {
     setSaving(true)
-    await onRemoveAuth(selectedProvider)
-    setSaving(false)
+    try {
+      await onRemoveAuth(selectedProvider)
+    } finally {
+      setSaving(false)
+    }
   }
 
   return (
@@ -283,7 +290,7 @@ export function ProviderAuthDialog({
                     name="apiKey"
                     type="password"
                     className="dialog-input"
-                    placeholder={activeInfo?.masked_key ? `Configured: ${activeInfo.masked_key}` : 'Enter API Key (e.g. sk-…)…'}
+                    placeholder={activeInfo?.masked_key ? `Configured: ${activeInfo.masked_key}` : tokenOptional ? 'Optional bearer token…' : 'Enter API Key (e.g. sk-…)…'}
                     value={apiKey}
                     onChange={e => setApiKey(e.target.value)}
                     autoComplete="off"
@@ -327,7 +334,7 @@ export function ProviderAuthDialog({
                 </div>
 
                 <div className="dialog-actions" style={{ marginTop: '0.5rem' }}>
-                  <button type="submit" className="primary-action" disabled={!apiKey.trim() || saving}>
+                  <button type="submit" className="primary-action" disabled={(!apiKey.trim() && !tokenOptional) || saving}>
                     {saving ? 'Saving…' : 'Save & Connect'}
                   </button>
                   {activeInfo?.configured && activeInfo.models.length > 0 && (

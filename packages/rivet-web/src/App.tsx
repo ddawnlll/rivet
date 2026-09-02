@@ -1,4 +1,4 @@
-import React, { startTransition, useEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   MessageSquare,
   Layers,
@@ -43,6 +43,7 @@ export function App() {
     activities,
     selected,
     runActive,
+    runOutcome,
     authority,
     focusObject,
     runSummary,
@@ -78,7 +79,7 @@ export function App() {
   const conversationRef = useRef<HTMLElement>(null)
   const autoScrollRef = useRef(true)
 
-  const openInspector = (panel: InspectorPanel) => {
+  const openInspector = useCallback((panel: InspectorPanel) => {
     if (inspectorTimerRef.current !== null) {
       window.clearTimeout(inspectorTimerRef.current)
       inspectorTimerRef.current = null
@@ -86,9 +87,9 @@ export function App() {
     setTab(panel)
     setInspectorMounted(true)
     setInspectorOpen(true)
-  }
+  }, [])
 
-  const closeInspector = () => {
+  const closeInspector = useCallback(() => {
     setInspectorOpen(false)
     if (inspectorTimerRef.current !== null) {
       window.clearTimeout(inspectorTimerRef.current)
@@ -97,20 +98,20 @@ export function App() {
       setInspectorMounted(false)
       inspectorTimerRef.current = null
     }, 240)
-  }
+  }, [])
 
-  const toggleInspector = () => {
+  const toggleInspector = useCallback(() => {
     if (inspectorOpen) {
       closeInspector()
     } else {
       openInspector(tab === 'conversation' ? 'hard' : tab)
     }
-  }
+  }, [closeInspector, inspectorOpen, openInspector, tab])
 
-  const showConversation = () => {
+  const showConversation = useCallback(() => {
     setTab('conversation')
     closeInspector()
-  }
+  }, [closeInspector])
 
   // Initialize store lifecycle & WS connection on mount (run once)
   useEffect(() => {
@@ -148,7 +149,7 @@ export function App() {
     }
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
-  }, [inspectorOpen, tab])
+  }, [closeInspector, inspectorOpen, toggleInspector])
 
   const visibleMessages = useMemo(
     () =>
@@ -292,6 +293,10 @@ export function App() {
                 hardRevision={state?.hard_state.revision}
                 openObligations={state?.hard_state.open_obligations.length ?? 0}
                 onStart={() => document.querySelector<HTMLTextAreaElement>('#composerInput')?.focus()}
+                onPrompt={nextPrompt => {
+                  setPrompt(nextPrompt)
+                  window.setTimeout(() => document.querySelector<HTMLTextAreaElement>('#composerInput')?.focus(), 0)
+                }}
                 onInspect={() => openInspector('hard')}
               />
             ) : (
@@ -301,6 +306,7 @@ export function App() {
               <ActivitySpine
                 activities={activities}
                 runActive={runActive}
+                runOutcome={runOutcome}
                 selected={selected}
                 onSelect={setSelected}
                 onCancel={() => void cancel()}
@@ -321,6 +327,7 @@ export function App() {
             value={prompt}
             attachments={attachments}
             runActive={runActive}
+            connection={connection}
             revision={project?.revision}
             census={census}
             diff={diff}
@@ -434,6 +441,7 @@ function IdleWorkspace({
   hardRevision,
   openObligations,
   onStart,
+  onPrompt,
   onInspect,
 }: {
   projectName: string
@@ -441,6 +449,7 @@ function IdleWorkspace({
   hardRevision?: number
   openObligations: number
   onStart: () => void
+  onPrompt: (prompt: string) => void
   onInspect: () => void
 }) {
   return (
@@ -471,6 +480,24 @@ function IdleWorkspace({
         <span>Scope bounded</span>
         <span>Evidence visible</span>
         <span>Verification explicit</span>
+      </div>
+
+      <div className="quickStart" aria-label="Suggested starting points">
+        <button type="button" onClick={() => onPrompt('Map this repository and identify the three most relevant areas for the next engineering task.') }>
+          <span className="quickStartIndex">01</span>
+          <span><b>Map the repository</b><small>Induce structure before acting</small></span>
+          <span className="quickStartArrow">↗</span>
+        </button>
+        <button type="button" onClick={() => onPrompt('Inspect the current working tree and tell me what changed, what is risky, and what should be verified first.') }>
+          <span className="quickStartIndex">02</span>
+          <span><b>Read the working tree</b><small>Separate observation from claim</small></span>
+          <span className="quickStartArrow">↗</span>
+        </button>
+        <button type="button" onClick={() => onPrompt('Find the current project bottleneck. Explore only what is needed, explain the evidence, and propose the smallest verified next step.') }>
+          <span className="quickStartIndex">03</span>
+          <span><b>Find the bottleneck</b><small>Let Rivet choose a bounded probe</small></span>
+          <span className="quickStartArrow">↗</span>
+        </button>
       </div>
     </section>
   )

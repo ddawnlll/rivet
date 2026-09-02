@@ -980,7 +980,21 @@ impl RivetService for RivetServiceImpl {
     }
 
     async fn cancel(&self) -> RivetResult<()> {
-        if let Some(cancel) = self.active_cancel.lock().await.take() {
+        let cancel = self.active_cancel.lock().await.take();
+        let active_run = self
+            .active_run_id
+            .read()
+            .ok()
+            .is_some_and(|run_id| run_id.is_some());
+
+        // A stale Stop action must not leave the shared Harness in Cancelled.
+        // This is especially important with multiple browser tabs: a tab can
+        // outlive the run it was showing and still issue a cancellation.
+        if cancel.is_none() && !active_run {
+            return Ok(());
+        }
+
+        if let Some(cancel) = cancel {
             let _ = cancel.send(());
         }
         let harness = self.harness.read().await.clone();

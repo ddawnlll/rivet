@@ -93,6 +93,7 @@ footer{border-top:3px double #333;margin-top:60px;padding-top:18px;color:var(--m
 <li class="toc-h2"><a href="#llm-led-hierarchical-repository-relevance">LLM-led Hierarchical Repository Relevance</a></li>
 <li class="toc-h2"><a href="#project-induction-loop">Project Induction Loop</a></li>
 <li class="toc-h2"><a href="#deterministic-census-probe-boundary">Deterministic Census + Probe Boundary</a></li>
+<li class="toc-h2"><a href="#empty-repository-initiation-greenfield">Empty Repository Initiation (Greenfield) and Initial State Extraction on First Run</a></li>
 <li class="toc-h1"><a href="#generalist-control-plane-vs-project-specific-specialization">Generalist control plane vs project-specific specialization</a></li>
 <li class="toc-h1"><a href="#project-graph-repositorynin-derived-structural-modeli">Project Graph: repository&#x27;nin derived structural model&#x27;i</a></li>
 <li class="toc-h1"><a href="#capability-graph">Capability Graph</a></li>
@@ -1315,6 +1316,21 @@ NOESIS soft state → promotion candidate
 <p>Census hiçbir ecosystem için canonical dosya listesi dayatmaz. <code>Cargo.toml</code>, <code>package.json</code>, <code>pyproject.toml</code>, CI config veya language-server metadata yalnız gözlenebilen high-signal artifacts olabilir; bunların yokluğu veya yeni bir build system Rivet Core’da branch eklenmesini gerektirmemelidir.</p>
 <p><strong>Probe semantics:</strong> LLM veya mevcut project state bir capability/provider adayı kurduğunda runtime düşük-risk bir probe ile yalnız o provider contract’ını sınar. Örneğin “bu workspace’te <code>cargo test</code> canonical verification’dır” sonucu yalnız <code>Cargo.toml</code> görülerek mint edilmez; probe ve project authority/evidence ile scope-bound state olur.</p>
 <p><strong>Boundary rule:</strong> deterministic census “ne var?” sorusunun mekanik kısmını cevaplar; LLM-led induction “ne önemli, neye bağlı, hangi artifact authoritative olabilir?” sorularını cevaplar; Praxis/ACCP ise hangi sonuçların hard state’e hangi authority ile geçebileceğini sınırlar. Environment Compiler bu üç rolü tekrar kendi içinde kopyalamaz.</p>
+<h2 id="empty-repository-initiation-greenfield">Empty Repository Initiation (Greenfield) and Initial State Extraction on First Run<a class="anchor" href="#empty-repository-initiation-greenfield">¶</a></h2>
+<p><span class="badge project">PROJECT_DESIGN</span> Boş repository özel bir mode değildir. İlk çalıştırmada aynı machinery ters yönde çalışır: <code>INTENT → provisional STATE → WORLD/artifacts</code>. Pre-index veya canonical dosya listesi yoktur.</p>
+<pre><code class="language-text">First run — empty directory (greenfield):
+  cheap census → 0 files, 0 bytes, no manifests
+  → Noesis HardState revision 0 (no claims, no evidence)
+  → GoalCompiler → initial obligations (e.g., init workspace)
+  → CognitiveView → LLM frontier = empty (nothing to DESCEND)
+  → Harness awaits bounded outcome, no indexing
+
+First run — existing repository:
+  cheap census (ignore::WalkBuilder, globset) → counts/sizes/tracked ratio
+  → LLM relevance → selective descent (e.g., src/ DESCEND, node_modules/ DEFER)
+  → targeted probes → observations → soft state → promotion → HardState
+</code></pre>
+<p><strong>Initial state extraction</strong> her iki durumda da <code>Noesis HardState revision 0</code>’dan başlar; hard state yalnızca <code>GoalCompiler</code>’ın ürettiği obligations ve sonraki <code>ExecutionReceipt → Observation → Evidence</code> zinciri ile dolar. Census asla “tüm repository’yi indexle” yapmaz; <code>DEFER ≠ IRRELEVANT</code> kuralı ilk run’da da geçerlidir. Bu nedenle boş repoda da aynı hard/soft semantics, aynı <code>Cognitive View Compiler</code> ve aynı <code>ACCP/Praxis</code> gate’leri geçerlidir — ayrı greenfield ontology gerekmez.</p>
 <h1 id="generalist-control-plane-vs-project-specific-specialization">Generalist control plane vs project-specific specialization<a class="anchor" href="#generalist-control-plane-vs-project-specific-specialization">¶</a></h1>
 <p><strong>v0.2 rule:</strong> Generalist control plane'in görevi project'in nasıl çalıştığını önceden bilmek değil, project hakkında bilinmeyeni temsil edebilmek ve LLM-led induction'ı güvenli biçimde persistent state'e çevirmektir. Core yalnız <code>Entity/Relation/Observation/Claim/Hypothesis/Unknown/Evidence/Obligation/Capability/Verification</code> gibi meta-ontology primitives taşıyabilir; <code>RustWorkspace</code>, <code>ReactComponent</code>, <code>V8EvaluationGate</code> gibi project ontology classes runtime'da öğrenilir.</p>
 <p>Bu mimarinin ana ayrımı:</p>

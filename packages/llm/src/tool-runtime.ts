@@ -1,3 +1,8 @@
+/**
+ * Provider/substrate compatibility runtime. Rivet production sessions must
+ * not use this raw ToolCall dispatcher; they authorize a ProviderToolFrame via
+ * SessionSemantics before entering a tool mechanism.
+ */
 import { Effect } from "effect"
 import {
   LLMEvent,

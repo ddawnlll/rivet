@@ -8,7 +8,7 @@ import { SessionV2 } from "@opencode-ai/core/session"
 import { SessionMessage } from "@opencode-ai/core/session/message"
 import { ToolOutputStore } from "@opencode-ai/core/tool-output-store"
 import { ToolRegistry } from "@opencode-ai/core/tool/registry"
-import { executeTool, settleTool, toolDefinitions } from "./lib/tool"
+import { authorizedExecution, executeTool, settleTool, toolDefinitions } from "./lib/tool"
 import { Cause, Deferred, Effect, Exit, Fiber, Layer, Option, Schema, SchemaGetter, SchemaIssue, Scope } from "effect"
 import { testEffect } from "./lib/effect"
 
@@ -16,7 +16,8 @@ const bounds: ToolOutputStore.BoundInput[] = []
 const retentionFailure = new ToolOutputStore.StorageError({ operation: "write", cause: new Error("disk full") })
 const outputStore = Layer.mock(ToolOutputStore.Service, {
   bound: (input) => {
-    if (input.toolCallID === "call-retention-failure") return Effect.fail(retentionFailure)
+    if (input.toolCallID === "call-retention-failure" || input.toolCallID === "test-call-retention-failure")
+      return Effect.fail(retentionFailure)
     return Effect.sync(() => bounds.push(input)).pipe(
       Effect.as(
         input.toolCallID === "call-bounded"
@@ -41,7 +42,7 @@ const identity = {
   assistantMessageID: SessionMessage.ID.make("msg_registry"),
 }
 const sessionID = SessionV2.ID.make("ses_registry")
-const call = (name: string, id = `call-${name}`): ToolRegistry.ExecuteInput => ({
+const call = (name: string, id = `call-${name}`): ToolRegistry.AuthorizedExecution => authorizedExecution({
   sessionID,
   ...identity,
   call: { type: "tool-call", id, name, input: { text: name } },
@@ -178,7 +179,7 @@ describe("ToolRegistry", () => {
           ...identity,
           call: { type: "tool-call", id: "missing", name: "missing", input: {} },
         }),
-      ).toEqual({ type: "error", value: "Unknown tool: missing" })
+      ).toEqual({ type: "error", value: "Unknown action provider: missing" })
 
       yield* service.register({
         defect: Tool.make({
@@ -191,11 +192,13 @@ describe("ToolRegistry", () => {
       expect(
         yield* service.materialize().pipe(
           Effect.flatMap((materialized) =>
-            materialized.settle({
-              sessionID,
-              ...identity,
-              call: { type: "tool-call", id: "defect", name: "defect", input: {} },
-            }),
+            materialized.settle(
+              authorizedExecution({
+                sessionID,
+                ...identity,
+                call: { type: "tool-call", id: "defect", name: "defect", input: {} },
+              }),
+            ),
           ),
           Effect.catchDefect(Effect.succeed),
         ),
@@ -343,6 +346,23 @@ describe("ToolRegistry", () => {
     }),
   )
 
+  it.effect("normal settlement returns an execution receipt without minting verification", () =>
+    Effect.gen(function* () {
+      const service = yield* ToolRegistry.Service
+      yield* service.register({ echo: make() })
+      const materialized = yield* service.materialize()
+      const settlement = yield* materialized.settle(call("echo", "call-semantic-receipt"))
+
+      expect(settlement.receipt).toMatchObject({
+        actionId: "test-call-semantic-receipt",
+        idempotencyKey: "call-semantic-receipt",
+        success: true,
+      })
+      expect(settlement.receipt?.evidenceId).toBeDefined()
+      expect("verifiedScope" in (settlement.receipt ?? {})).toBe(false)
+    }),
+  )
+
   it.effect("rejects a call when its advertised registration was removed", () =>
     Effect.gen(function* () {
       const service = yield* ToolRegistry.Service
@@ -353,7 +373,7 @@ describe("ToolRegistry", () => {
 
       expect((yield* materialized.settle(call("echo"))).result).toEqual({
         type: "error",
-        value: "Stale tool call: echo",
+        value: "Stale action provider: echo",
       })
     }),
   )
@@ -367,7 +387,7 @@ describe("ToolRegistry", () => {
 
       expect((yield* materialized.settle(call("first"))).result).toEqual({
         type: "error",
-        value: "Stale tool call: first",
+        value: "Stale action provider: first",
       })
       expect((yield* materialized.settle(call("second"))).result).toEqual({ type: "text", value: "second" })
     }),
@@ -384,7 +404,7 @@ describe("ToolRegistry", () => {
 
       expect((yield* materialized.settle(call("echo"))).result).toEqual({
         type: "error",
-        value: "Stale tool call: echo",
+        value: "Stale action provider: echo",
       })
     }),
   )
@@ -399,7 +419,7 @@ describe("ToolRegistry", () => {
 
       expect((yield* materialized.settle(call("echo"))).result).toEqual({
         type: "error",
-        value: "Stale tool call: echo",
+        value: "Stale action provider: echo",
       })
     }),
   )
@@ -416,7 +436,7 @@ describe("ToolRegistry", () => {
 
       expect((yield* materialized.settle(call("echo"))).result).toEqual({
         type: "error",
-        value: "Stale tool call: echo",
+        value: "Stale action provider: echo",
       })
     }),
   )

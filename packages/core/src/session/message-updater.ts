@@ -146,6 +146,7 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
             time: { created: event.data.timestamp },
           }),
         ),
+      "session.next.semantic": () => Effect.void,
       "session.next.synthetic": (event) => {
         return adapter.appendMessage(
           SessionMessage.Synthetic.make({

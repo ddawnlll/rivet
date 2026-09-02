@@ -579,6 +579,13 @@ describe("session.llm-native.request", () => {
         llmClient,
         messages: [],
         tools: { lookup },
+        executeTool: (call, abort) =>
+          Effect.promise(async () => {
+            const value = await lookup.execute!(call.input, {
+              toolCallId: call.id,
+            })
+            return [LLMEvent.toolResult({ id: call.id, name: call.name, result: { type: "text", value: String(value.output) } })]
+          }),
         headers: {},
         abort: new AbortController().signal,
       })

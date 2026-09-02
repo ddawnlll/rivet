@@ -109,6 +109,18 @@ export const ContextUpdated = Event.define({
 })
 export type ContextUpdated = typeof ContextUpdated.Type
 
+/** Opaque durable carrier for Rivet semantic events; core owns their meaning. */
+export const Semantic = Event.define({
+  type: "session.next.semantic",
+  ...options,
+  schema: {
+    ...Base,
+    version: Schema.Literal(1),
+    event: Schema.Unknown,
+  },
+})
+export type Semantic = typeof Semantic.Type
+
 export const Synthetic = Event.define({
   type: "session.next.synthetic",
   ...options,
@@ -452,6 +464,7 @@ export const DurableDefinitions = Event.inventory(
   Prompted,
   PromptAdmitted,
   ContextUpdated,
+  Semantic,
   Synthetic,
   Shell.Started,
   Shell.Ended,
@@ -483,6 +496,7 @@ export const Definitions = Event.inventory(
   Prompted,
   PromptAdmitted,
   ContextUpdated,
+  Semantic,
   Synthetic,
   Shell.Started,
   Shell.Ended,

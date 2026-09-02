@@ -41,6 +41,13 @@ describe("CommandV2", () => {
       )
       expect(yield* command.list()).toEqual([
         CommandV2.Info.make({
+          name: "goal",
+          description:
+            "Initialize and execute an autonomous Rivet goal with ACCP governance and Praxis verification",
+          template:
+            "[RIVET GOAL EXECUTION]\nGoal: $ARGUMENTS\nObligations: Compile GoalSpec and establish mechanical Praxis verification.",
+        }),
+        CommandV2.Info.make({
           name: "review",
           template: "Second",
           description: "Review code",

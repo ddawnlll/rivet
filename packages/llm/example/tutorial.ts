@@ -1,5 +1,6 @@
 import { Config, Effect, Formatter, Layer, Schema, Stream } from "effect"
-import { LLM, LLMClient, Message, ProviderID, Tool, ToolRuntime } from "@opencode-ai/llm"
+import { LLM, LLMClient, Message, ProviderID, Tool } from "@opencode-ai/llm"
+import { ToolRuntime } from "../src/tool-runtime"
 import { Route, Auth, Endpoint, Framing, Protocol, RequestExecutor, WebSocketExecutor } from "@opencode-ai/llm/route"
 import { OpenAI } from "@opencode-ai/llm/providers"
 

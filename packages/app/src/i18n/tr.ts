@@ -1,8 +1,37 @@
 import { dict as en } from "./en"
+import { dict as rivet } from "./rivet"
 
-type Keys = keyof typeof en
+type Keys = keyof typeof en | keyof typeof rivet
 
 export const dict = {
+  "rivet.surface.label": "Rivet",
+  "rivet.surface.description": "Bu oturum için kalıcı kontrol düzlemi",
+  "rivet.panel.open": "Rivet kontrol düzlemini aç",
+  "rivet.panel.close": "Rivet kontrol düzlemini kapat",
+  "rivet.panel.state": "Sabit durum",
+  "rivet.panel.workspace": "Geçici çalışma alanı",
+  "rivet.panel.praxis": "Praxis",
+  "rivet.state.goal": "Mevcut hedef",
+  "rivet.state.noGoal": "Henüz hedef kabul edilmedi",
+  "rivet.state.revision": "Gözlemlenen revizyon",
+  "rivet.state.claims": "İddialar",
+  "rivet.state.obligations": "Açık yükümlülükler",
+  "rivet.state.awaiting": "İlk anlamsal taahhüt bekleniyor",
+  "rivet.workspace.project": "Proje",
+  "rivet.workspace.directory": "Dizin",
+  "rivet.workspace.provider": "Sağlayıcı",
+  "rivet.workspace.messages": "Mesajlar",
+  "rivet.workspace.tools": "Araç çalıştırmaları",
+  "rivet.workspace.connected": "Bağlı",
+  "rivet.workspace.local": "Yerel çalışma alanı",
+  "rivet.praxis.verification": "Doğrulama makbuzları",
+  "rivet.praxis.execution": "Çalıştırma makbuzları",
+  "rivet.praxis.passed": "Başarılı",
+  "rivet.praxis.pending": "Bekliyor",
+  "rivet.praxis.none": "Bu oturumda henüz Praxis makbuzu kaydedilmedi.",
+  "rivet.status.idle": "Hazır",
+  "rivet.status.busy": "Çalışıyor",
+  "rivet.status.retry": "Yeniden deneniyor",
   "desktop.menu.app": "OpenCode",
   "desktop.menu.file": "Dosya",
   "desktop.menu.edit": "Düzen",

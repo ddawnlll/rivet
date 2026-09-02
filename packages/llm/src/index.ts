@@ -10,8 +10,8 @@ export type {
 } from "./route/client"
 export * from "./schema"
 export { Tool, ToolFailure, toDefinitions } from "./tool"
-export { ToolRuntime } from "./tool-runtime"
-export type { DispatchResult as ToolDispatchResult, ToolSettlement } from "./tool-runtime"
+// Raw ToolRuntime remains available only to provider/substrate fixtures. Rivet
+// session execution enters through SessionSemantics and never uses this path.
 export type {
   AnyExecutableTool,
   AnyTool,

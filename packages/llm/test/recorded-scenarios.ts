@@ -5,7 +5,6 @@ import {
   LLMEvent,
   LLMResponse,
   Message,
-  ToolRuntime,
   ToolChoice,
   ToolDefinition,
   toDefinitions,
@@ -14,6 +13,7 @@ import {
   type LLMRequest,
   type Model,
 } from "../src"
+import { ToolRuntime } from "../src/tool-runtime"
 import { LLMClient } from "../src/route"
 import { Tool } from "../src/tool"
 

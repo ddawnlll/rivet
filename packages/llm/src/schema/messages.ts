@@ -281,6 +281,10 @@ export class LLMRequest extends Schema.Class<LLMRequest>("LLM.Request")({
   responseFormat: Schema.optional(ResponseFormat),
   cache: Schema.optional(CachePolicy),
   metadata: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
+  /** Rivet-owned cognitive projection; provider adapters may serialize it. */
+  cognitiveView: Schema.optional(Schema.Unknown),
+  /** Full Harness-owned invocation contract; transport adapters may inspect it. */
+  invocation: Schema.optional(Schema.Unknown),
 }) {}
 
 export namespace LLMRequest {
@@ -299,6 +303,8 @@ export namespace LLMRequest {
     responseFormat: request.responseFormat,
     cache: request.cache,
     metadata: request.metadata,
+    cognitiveView: request.cognitiveView,
+    invocation: request.invocation,
   })
 
   export const update = (request: LLMRequest, patch: Partial<Input>) => {

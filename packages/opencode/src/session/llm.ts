@@ -29,6 +29,8 @@ import * as OtelTracer from "@effect/opentelemetry/Tracer"
 import { LLMAISDK } from "./llm/ai-sdk"
 import { LLMNativeRuntime } from "./llm/native-runtime"
 import { LLMRequestPrep } from "./llm/request"
+import type { CognitiveView } from "@opencode-ai/core/rivet/noesis"
+import type { ModelInvocation } from "@opencode-ai/core/session/invocation"
 
 export const OUTPUT_TOKEN_MAX = ProviderTransform.OUTPUT_TOKEN_MAX
 
@@ -45,6 +47,15 @@ export type StreamInput = {
   tools: Record<string, Tool>
   retries?: number
   toolChoice?: "auto" | "required" | "none"
+  /** Harness-compiled semantic context; provider adapters may serialize it. */
+  cognitiveView?: CognitiveView
+  /** The complete Harness invocation contract carried alongside the view. */
+  invocation?: ModelInvocation
+  /** Rivet's Harness-owned semantic executor for provider tool frames. */
+  executeTool?: (
+    call: Extract<LLMEvent, { readonly type: "tool-call" }>,
+    abort: AbortSignal,
+  ) => Effect.Effect<ReadonlyArray<LLMEvent>, unknown>
 }
 
 export type StreamRequest = StreamInput & {
@@ -110,11 +121,12 @@ const live: Layer.Layer<
         plugin,
         flags,
         isWorkflow,
+        cognitiveView: input.cognitiveView,
+        invocation: input.invocation,
       })
 
-      // Wire up toolExecutor for DWS workflow models so that tool calls
-      // from the workflow service are executed via opencode's tool system
-      // and results sent back over the WebSocket.
+      // Workflow provider tool calls still return through the Rivet action
+      // boundary before any result is sent back over the WebSocket.
       const bridge = yield* EffectBridge.make()
       if (language instanceof GitLabWorkflowLanguageModel) {
         const workflowModel = language as GitLabWorkflowLanguageModel & {
@@ -232,6 +244,9 @@ const live: Layer.Layer<
           messages: prepared.messages,
           tools: prepared.tools,
           toolChoice: input.toolChoice,
+          executeTool: input.executeTool,
+          cognitiveView: prepared.cognitiveView,
+          invocation: prepared.invocation,
           temperature: prepared.params.temperature,
           topP: prepared.params.topP,
           topK: prepared.params.topK,
@@ -273,8 +288,8 @@ const live: Layer.Layer<
         "llm.provider": input.model.providerID,
         "llm.model": input.model.id,
       })
-      // Default runtime path: AI SDK owns provider execution and tool dispatch;
-      // LLMAISDK.toLLMEvents below normalizes fullStream parts for the processor.
+      // The provider adapter runs the prepared SessionTools semantic boundary;
+      // LLMAISDK.toLLMEvents only normalizes provider output for the processor.
       return {
         type: "ai-sdk" as const,
         result: streamText({
@@ -322,6 +337,7 @@ const live: Layer.Layer<
           headers: prepared.headers,
           maxRetries: input.retries ?? 0,
           messages: prepared.messages,
+          experimental_context: { cognitiveView: prepared.cognitiveView, invocation: prepared.invocation },
           model: wrapLanguageModel({
             model: language,
             middleware: [

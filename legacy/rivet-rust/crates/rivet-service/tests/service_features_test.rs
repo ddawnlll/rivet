@@ -215,3 +215,32 @@ async fn step_events_are_correlated_and_plain_text_uses_one_turn() {
     assert_eq!(deltas, 1);
     assert_eq!(completed, 1);
 }
+
+#[tokio::test]
+async fn cancelling_when_idle_does_not_poison_the_next_run() {
+    let tmp = tempfile::tempdir().unwrap();
+    let auth_store = AuthStore::with_path(tmp.path().join("auth.json"));
+    let config = ResolvedProviderConfig {
+        provider: "mock".into(),
+        model_id: "mock-model".into(),
+        api_key: None,
+        base_url: None,
+    };
+    let service = RivetServiceImpl::from_dir(tmp.path(), config, auth_store)
+        .await
+        .unwrap();
+
+    service.cancel().await.unwrap();
+    assert_eq!(service.current_phase().await.unwrap(), rivet_core::RunPhase::Idle);
+
+    let response = service
+        .step(StepRequest {
+            prompt: "Selam".into(),
+            goal: None,
+            attachments: vec![],
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(response.text, "Step completed successfully");
+}

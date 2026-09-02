@@ -8,6 +8,8 @@ import { Agent } from "@/agent/agent"
 import { Session } from "@/session/session"
 import { Permission } from "@/permission"
 import { Plugin } from "@/plugin"
+import { EventV2 } from "@opencode-ai/core/event"
+import { SessionSemantics } from "@opencode-ai/core/session/semantics"
 
 export const CODE_MODE_TOOL = "execute"
 
@@ -137,13 +139,16 @@ const invokeChildTool = Effect.fn("CodeMode.invokeChildTool")(function* (input: 
   args: Record<string, unknown>
   callID: string
   ctx: Tool.Context
+  semantics?: SessionSemantics
+  events?: EventV2.Interface
+  repository: string
 }) {
   yield* input.plugin.trigger(
     "tool.execute.before",
     { tool: input.entry.key, sessionID: input.ctx.sessionID, callID: input.callID },
     { args: input.args },
   )
-  const result: CallToolResult = yield* Effect.gen(function* () {
+  const execute = Effect.gen(function* () {
     yield* input.ctx.ask({ permission: input.entry.key, metadata: {}, patterns: ["*"], always: ["*"] })
     // Deliberately mirrors McpCatalog.convertTool's transport call so the MCP service stays free of tool-loop concerns.
     return yield* Effect.promise(async () => {
@@ -177,6 +182,41 @@ const invokeChildTool = Effect.fn("CodeMode.invokeChildTool")(function* (input: 
       },
     }),
   )
+  // Direct CodeModeTool tests can exercise the sandbox without a Session. All
+  // registered session/debug entry points inject these semantic dependencies.
+  const result: CallToolResult = yield* Effect.gen(function* () {
+    if (!input.semantics || !input.events) return yield* execute
+    const semantics = input.semantics
+    const events = input.events
+    const scope = semantics.scope(input.repository)
+    const admission = semantics.admitProviderCommitment(
+      { id: input.callID, name: input.entry.key, input: input.args },
+      scope,
+      {
+        repository: input.repository,
+        currentRevision: semantics.hardState.revision,
+        allowedScope: scope,
+        allowedCapabilities: ["mcp.*", "tool.*"],
+        allowMaterial: true,
+        humanApproved: true,
+      },
+    )
+    if (!admission.authorizedAction) throw new Error(admission.decision?.reason ?? "MCP action was not authorized")
+    const executed = yield* semantics.executeAuthorizedAction(
+      admission.authorizedAction,
+      () => execute,
+      (value) => JSON.stringify(value).slice(0, 500),
+    )
+    yield* semantics.recordExecution(events, executed.receipt)
+    yield* semantics.recordObservation(events, executed.receipt, executed.receipt.outputSummary)
+    yield* semantics.admitEvidence(
+      events,
+      executed.receipt,
+      executed.receipt.capability,
+      executed.receipt.outputSummary,
+    )
+    return executed.value
+  })
   yield* input.plugin.trigger(
     "tool.execute.after",
     { tool: input.entry.key, sessionID: input.ctx.sessionID, callID: input.callID, args: input.args },
@@ -226,6 +266,9 @@ export const CodeModeTool = Tool.define(
               args: (input ?? {}) as Record<string, unknown>,
               callID: `${ctx.callID ?? entry.key}/${childCalls}`,
               ctx,
+              semantics: ctx.extra?.rivetSemantics as SessionSemantics | undefined,
+              events: ctx.extra?.rivetEvents as EventV2.Interface | undefined,
+              repository: session.directory,
             })
             return projectMcpResult(result, (attachment: Attachment) => void attachments.push(attachment))
           }).pipe(

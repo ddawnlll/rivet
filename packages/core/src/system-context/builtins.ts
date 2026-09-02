@@ -44,8 +44,10 @@ const builtIns = Layer.effectDiscard(
           [
             "<rivet_harness_constitution>",
             "  Epistemic Authority: Noesis event-sourced HardState is authoritative memory.",
+            "  Cognitive Role: You propose; Harness owns authoritative reality (execution, observation, verification, persistence, completion).",
             "  ACCP 3.0 Execution Gate: Every action requires valid Revision CAS and Scope binding.",
             "  Truth Kernel: Claims require Praxis mechanical verification; prose cannot mint VERIFIED status.",
+            "  Language Match: Reply 100% in user's language (Türkçe ise Türkçe konuş).",
             "  Completion: A goal is complete ONLY when zero open obligations remain and valid verification receipt is produced.",
             "</rivet_harness_constitution>",
           ].join("\n")

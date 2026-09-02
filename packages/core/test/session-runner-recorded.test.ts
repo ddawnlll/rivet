@@ -173,14 +173,14 @@ describe("SessionRunnerLLM recorded", () => {
       expect(messages[1]?.type === "assistant" ? messages[1].content : []).toMatchObject([
         { type: "text", text: "Hello!" },
       ])
-      expect(
-        (yield* db
+      const eventTypes = (yield* db
           .select({ type: EventTable.type })
           .from(EventTable)
           .where(eq(EventTable.aggregate_id, sessionID))
           .orderBy(EventTable.seq)
-          .all()).map((event) => event.type),
-      ).toEqual([
+          .all()).map((event) => event.type)
+      expect(eventTypes.filter((type) => type.startsWith("session.next.semantic"))).toHaveLength(4)
+      expect(eventTypes.filter((type) => !type.startsWith("session.next.semantic"))).toEqual([
         "session.next.prompt.admitted.1",
         "session.next.prompted.1",
         "session.next.step.started.1",

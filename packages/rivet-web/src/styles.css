@@ -3716,3 +3716,183 @@ body,
 
   .modelPickerFooter span:first-child { display: none; }
 }
+
+/* ==========================================================================
+   Rivet field notes — task surface, transport truth, and quiet affordances
+   ========================================================================== */
+.brandLockup {
+  min-width: 174px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-right: 10px;
+  white-space: nowrap;
+}
+
+.brandGlyph {
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  border: 1px solid rgba(241, 240, 233, 0.38);
+  border-radius: 50%;
+  transform: rotate(-24deg);
+}
+
+.brandGlyph i {
+  width: 2px;
+  height: 7px;
+  display: block;
+  border-radius: 2px;
+  background: #d9d7cf;
+}
+
+.brandGlyph i:nth-child(2) { height: 11px; background: #9aa8ad; }
+.brandGlyph i:nth-child(3) { height: 5px; background: #7e977f; }
+
+.brandName {
+  color: #eceae2;
+  font-size: 13px;
+  font-variation-settings: "wght" 650, "wdth" 96, "opsz" 15;
+  letter-spacing: -0.035em;
+}
+
+.brandDescriptor {
+  padding-left: 8px;
+  border-left: 1px solid rgba(255, 255, 255, 0.1);
+  color: #5e5c56;
+  font: 500 8px/1 var(--font-mono);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.quickStart {
+  position: relative;
+  z-index: 1;
+  width: min(100%, 690px);
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 58px;
+}
+
+.quickStart button {
+  min-width: 0;
+  min-height: 100px;
+  padding: 13px 12px 12px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 9px;
+  border: 1px solid rgba(255, 255, 255, 0.075);
+  border-radius: 12px;
+  background: linear-gradient(145deg, rgba(255, 255, 255, 0.034), rgba(255, 255, 255, 0.012));
+  color: #aaa89f;
+  text-align: left;
+  transition: transform var(--motion-fast) var(--ease-rivet), border-color var(--motion-fast) ease, background var(--motion-fast) ease;
+}
+
+.quickStart button:hover,
+.quickStart button:focus-visible {
+  transform: translateY(-3px);
+  border-color: rgba(255, 255, 255, 0.18);
+  background: linear-gradient(145deg, rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0.018));
+}
+
+.quickStartIndex {
+  padding-top: 2px;
+  color: #68665f;
+  font: 500 8px/1 var(--font-mono);
+}
+
+.quickStart button > span:nth-child(2) {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.quickStart b {
+  overflow: hidden;
+  color: #d1cfc7;
+  font-size: 11px;
+  font-variation-settings: "wght" 570, "wdth" 98, "opsz" 13;
+  line-height: 1.15;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.quickStart small {
+  color: #77756e;
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.quickStartArrow {
+  color: #77756e;
+  font: 500 14px/1 var(--font-mono);
+  transition: color var(--motion-fast) ease, transform var(--motion-fast) var(--ease-rivet);
+}
+
+.quickStart button:hover .quickStartArrow {
+  color: #d3d1c9;
+  transform: translate(2px, -2px);
+}
+
+.composerConnection {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: #6f6d66;
+  font: 500 8px/1 var(--font-mono);
+  white-space: nowrap;
+}
+
+.composerConnection > span {
+  width: 5px;
+  height: 5px;
+  border: 1px solid #62615b;
+  border-radius: 50%;
+}
+
+.composerConnection.live { color: #829984; }
+.composerConnection.live > span { border-color: #829984; background: #829984; box-shadow: 0 0 0 3px rgba(138, 166, 142, 0.07); }
+.composerConnection.connecting > span { border-top-color: transparent; animation: thinkingSpin 760ms linear infinite; }
+.composerConnection.offline { color: #987979; }
+.composerConnection.offline > span { border-color: #987979; }
+
+.composerCount {
+  color: #56544f;
+  font: 500 8px/1 var(--font-mono);
+  white-space: nowrap;
+}
+
+.composerHelp {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 4px 0;
+  color: #55534e;
+  font: 500 8px/1.35 var(--font-mono);
+}
+
+.composerHelp span:last-child { text-align: right; }
+
+@media (max-width: 820px) {
+  .brandLockup { min-width: auto; margin-right: 2px; }
+  .brandDescriptor { display: none; }
+  .quickStart { margin-top: 38px; }
+}
+
+@media (max-width: 650px) {
+  .brandName { display: none; }
+  .brandLockup { margin-right: 0; }
+  .quickStart { grid-template-columns: 1fr; margin-top: 34px; }
+  .quickStart button { min-height: 68px; align-items: center; }
+  .quickStart button > span:nth-child(2) { gap: 4px; }
+  .composerHelp { display: none; }
+  .composerConnection { display: none; }
+  .composerCount { display: none; }
+}

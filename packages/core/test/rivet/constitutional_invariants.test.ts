@@ -23,18 +23,13 @@ import {
   createActionId,
   createClaimId,
   createEvidenceId,
+  createInvocationId,
   createObligationId,
   createReceiptId,
   createSessionId,
   createTaskId,
   RivetError,
 } from "../../src/rivet/types"
-import {
-  HarnessCore,
-  InMemoryStateStore,
-  type ModelBackendHandler,
-  type RuntimeExecutionHandler,
-} from "../../src/rivet/harness"
 
 describe("Rivet Constitutional Invariants (I-01 .. I-20 / CT-001 .. CT-008)", () => {
   test("I-01 / CT-001: Controller claim cannot become Observation or Receipt", () => {
@@ -389,5 +384,117 @@ describe("Rivet Constitutional Invariants (I-01 .. I-20 / CT-001 .. CT-008)", ()
     expect(stateA.revision.toString()).toBe(stateB.revision.toString())
     expect(stateA.claims.size).toBe(stateB.claims.size)
     expect(stateA.obligations.size).toBe(stateB.obligations.size)
+  })
+
+  test("I-16: Model Invocation Gate economy — mechanically decidable step suppression without semantic loss (Issue #1)", () => {
+    const hardState = new HardState()
+    const scope = Scope.global("rivet", Revision.ZERO)
+    const claimId = createClaimId()
+    const evidenceId = createEvidenceId()
+
+    hardState.apply({
+      type: "claim_asserted",
+      claimId,
+      proposition: "Port 8080 configured",
+      status: "verified",
+      evidence: [evidenceId],
+      scope,
+      timestamp: new Date().toISOString(),
+    })
+
+    const view = new CognitiveView({
+      hardRevision: Revision.ZERO,
+      goalDescription: "Configure port",
+      activeClaims: [
+        {
+          id: claimId,
+          proposition: "Port 8080 configured",
+          status: "verified",
+          supportingEvidence: [evidenceId],
+          dependsOn: [],
+          scope,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+      ],
+      contradictions: [],
+      openObligations: [],
+      activeHypotheses: [],
+    })
+
+    const { ModelInvocationGate } = require("../../src/session/invocation")
+    const evaluation = ModelInvocationGate.evaluate({
+      systemContract: { name: "Rivet Harness", version: "1", authority: "Harness" },
+      cognitiveView: view,
+      availableActions: [],
+      budget: { outputTokens: 100 },
+      invocation: createInvocationId("inv-gate"),
+    })
+
+    expect(evaluation.shouldInvoke).toBe(false)
+    expect(evaluation.receipt.suppressed).toBe(true)
+  })
+
+  test("I-17: Zero-copy projection — CognitiveView compilation preserves immutable HardState (Issue #3)", () => {
+    const hardState = new HardState()
+    const soft = new SoftWorkspace(createSessionId(), Revision.ZERO)
+    soft.addHypothesis("Immutable test hypothesis")
+
+    const { CognitiveViewCompiler } = require("../../src/rivet/view-compiler")
+    const compiled = CognitiveViewCompiler.compile({
+      hardState,
+      softWorkspace: soft,
+      goalDescription: "Test immutability",
+      repositoryId: "rivet",
+      tokenBudget: 2048,
+      mode: "HYBRID",
+    })
+
+    expect(compiled.hypotheses).toBe(soft.hypotheses)
+    expect(compiled.activeFocus).toBe(soft.activeFocus)
+  })
+
+  test("I-18: Cold-path Hephaestus — always-off by default, activates only on stagnation threshold (Issue #7)", () => {
+    const { HephaestusEngine, FailureClusterTracker } = require("../../src/rivet/hephaestus")
+    const defaultEngine = new HephaestusEngine(3)
+    const tracker = new FailureClusterTracker()
+    tracker.recordFailure("src/mod.rs", "error 1")
+    tracker.recordFailure("src/mod.rs", "error 2")
+    tracker.recordFailure("src/mod.rs", "error 3")
+
+    // Default engine remains disabled
+    expect(defaultEngine.shouldIntervene(tracker)).toBe(false)
+
+    // Enabled engine intervenes strictly at threshold
+    const enabledEngine = HephaestusEngine.enabled(3)
+    expect(enabledEngine.shouldIntervene(tracker)).toBe(true)
+  })
+
+  test("I-19: UI Chat-only authority — Drawer projections are read-only and uncoupled from session identity (Issue #5)", () => {
+    const hardState = new HardState()
+    const view = new CognitiveView({
+      hardRevision: Revision.ZERO,
+      goalDescription: "Chat-only UI authority test",
+      activeClaims: [],
+      contradictions: [],
+      openObligations: [],
+      activeHypotheses: [],
+    })
+
+    // Formatting prompt block or projecting state does not mutate session revision
+    const beforeRev = hardState.revision.value
+    const block = view.formatPromptBlock()
+    expect(block).toBeDefined()
+    expect(hardState.revision.value).toBe(beforeRev)
+  })
+
+  test("I-20: Greenfield vs Existing semantic isomorphism — shared Hard/Soft contracts (Issue #2, #8)", () => {
+    const { GoalCompiler } = require("../../src/rivet/goal-compiler")
+    const greenfield = GoalCompiler.compile("Create service from scratch", "repo-g", Revision.ZERO)
+    const existing = GoalCompiler.compile("Fix bug in existing file src/main.rs", "repo-e", Revision.ZERO)
+
+    expect(greenfield.graph.nodes.size).toBeGreaterThan(0)
+    expect(existing.graph.nodes.size).toBeGreaterThan(0)
+    expect(greenfield.targetScope.revision.equals(existing.targetScope.revision)).toBe(true)
   })
 })

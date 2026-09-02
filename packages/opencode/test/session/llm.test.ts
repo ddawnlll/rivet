@@ -10,6 +10,7 @@ import { HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
 import z from "zod"
 import { LLM } from "../../src/session/llm"
 import { LLMClient, RequestExecutor } from "@opencode-ai/llm/route"
+import { LLMEvent } from "@opencode-ai/llm"
 import { Provider } from "@/provider/provider"
 import { ProviderTransform } from "@/provider/transform"
 import { ModelsDev } from "@opencode-ai/core/models-dev"
@@ -56,7 +57,25 @@ const openAIConfig = (model: ModelsDev.Provider["models"][string], baseURL: stri
 const it = testEffect(AppNodeBuilder.build(LayerNode.group([LLM.node, Provider.node])))
 
 // LLM.stream returns a Stream, not an Effect, so we can't use the serviceUse proxy.
-const drain = (input: LLM.StreamInput) => LLM.Service.use((svc) => svc.stream(input).pipe(Stream.runDrain))
+const withSemanticExecutor = (input: LLM.StreamInput): LLM.StreamInput => ({
+  ...input,
+  executeTool:
+    input.executeTool ??
+    ((call, abort) =>
+      Effect.promise(async () => {
+        const item = input.tools[call.name]
+        if (!item?.execute)
+          return [LLMEvent.toolResult({ id: call.id, name: call.name, result: { type: "error", value: "unknown tool" } })]
+        const value = await item.execute(call.input, {
+          toolCallId: call.id,
+          messages: [],
+          abortSignal: abort,
+        })
+        return [LLMEvent.toolResult({ id: call.id, name: call.name, result: { type: "text", value: String(value.output) } })]
+      })),
+})
+
+const drain = (input: LLM.StreamInput) => LLM.Service.use((svc) => svc.stream(withSemanticExecutor(input)).pipe(Stream.runDrain))
 
 // drainWith builds an isolated runtime so custom replacements fully own LLM and
 // its transitive deps.
@@ -66,7 +85,7 @@ const drainWith = (layer: Layer.Layer<LLM.Service>, input: LLM.StreamInput) =>
     if (!ctx) return yield* Effect.die("InstanceRef not provided")
     return yield* Effect.promise(() =>
       Effect.runPromise(
-        LLM.Service.use((svc) => svc.stream(input).pipe(Stream.runDrain)).pipe(
+        LLM.Service.use((svc) => svc.stream(withSemanticExecutor(input)).pipe(Stream.runDrain)).pipe(
           Effect.provide(layer),
           Effect.provideService(InstanceRef, ctx),
         ),

@@ -1,12 +1,13 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import Fuse from 'fuse.js'
-import type { Attachment, Census, Diff } from '../types'
+import type { Attachment, Census, ConnectionState, Diff } from '../types'
 import { useSessionStore } from '../store/useSessionStore'
 
 type Props = {
   value: string
   attachments: Attachment[]
   runActive: boolean
+  connection: ConnectionState
   revision?: string | null
   census?: Census | null
   diff?: Diff | null
@@ -21,6 +22,7 @@ export function Composer({
   value,
   attachments,
   runActive,
+  connection,
   revision,
   census,
   diff,
@@ -35,6 +37,13 @@ export function Composer({
   const [mentionActive, setMentionActive] = useState(false)
   const [mentionFilter, setMentionFilter] = useState('')
   const [highlightIndex, setHighlightIndex] = useState(0)
+
+  useEffect(() => {
+    const textarea = textareaRef.current
+    if (!textarea) return
+    textarea.style.height = 'auto'
+    textarea.style.height = `${Math.min(180, Math.max(52, textarea.scrollHeight))}px`
+  }, [value])
 
   // Trigger census loading if empty
   useEffect(() => {
@@ -245,6 +254,7 @@ export function Composer({
         autoComplete="off"
         spellCheck={false}
         aria-label="Prompt Rivet"
+        aria-describedby="composer-help"
         value={value}
         onChange={event => handleInputChange(event.target.value)}
         onKeyDown={onKeyDown}
@@ -285,7 +295,11 @@ export function Composer({
         </div>
 
         <div className="composerRight">
-          <span className="meta">{runActive ? 'steer run' : 'message'}</span>
+          <span className={`composerConnection ${connection}`}>
+            <span aria-hidden="true" />
+            {connection === 'live' ? 'live' : connection === 'connecting' ? 'connecting' : 'offline · retrying'}
+          </span>
+          <span className="composerCount">{value.length > 0 ? `${value.length} chars` : '⌘ ↵ send'}</span>
           {runActive && (
             <button
               type="button"
@@ -321,6 +335,10 @@ export function Composer({
         aria-label="Upload files"
         onChange={event => { void readFiles(event.target.files); event.target.value = '' }}
       />
+      <div id="composer-help" className="composerHelp">
+        <span>{runActive ? 'Your message becomes a steer at the next safe boundary.' : 'Enter sends · Shift+Enter adds a line · @ references repository paths'}</span>
+        <span>{runActive ? 'Stop keeps the last admitted evidence.' : 'Rivet keeps chat as the authoritative surface.'}</span>
+      </div>
     </form>
   )
 }

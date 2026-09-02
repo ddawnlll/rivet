@@ -14,6 +14,8 @@ import { Effect, Record } from "effect"
 import { jsonSchema, tool as aiTool, type ModelMessage, type Tool } from "ai"
 import type { Plugin } from "@/plugin"
 import { mergeDeep } from "remeda"
+import type { CognitiveView } from "@opencode-ai/core/rivet/noesis"
+import type { ModelInvocation } from "@opencode-ai/core/session/invocation"
 
 const USER_AGENT = `opencode/${InstallationVersion}`
 
@@ -28,6 +30,8 @@ type PrepareInput = {
   readonly messages: ModelMessage[]
   readonly small?: boolean
   readonly tools: Record<string, Tool>
+  readonly cognitiveView?: CognitiveView
+  readonly invocation?: ModelInvocation
   readonly provider: Provider.Info
   readonly auth: Auth.Info | undefined
   readonly plugin: Plugin.Interface
@@ -39,6 +43,8 @@ export type Prepared = {
   readonly system: string[]
   readonly messages: ModelMessage[]
   readonly tools: Record<string, Tool>
+  readonly cognitiveView?: CognitiveView
+  readonly invocation?: ModelInvocation
   readonly params: {
     readonly temperature?: number
     readonly topP?: number
@@ -182,6 +188,8 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
     system,
     messages,
     tools: Object.fromEntries(Object.entries(tools).toSorted(([a], [b]) => a.localeCompare(b))),
+    cognitiveView: input.cognitiveView,
+    invocation: input.invocation,
     params,
     messageTransformOptions: options,
     headers: {

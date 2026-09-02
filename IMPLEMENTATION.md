@@ -1,7 +1,9 @@
 # IMPLEMENTATION.md — Rivet Operational Engineering Roadmap & Baseline
 
-**Status:** ACTIVE IMPLEMENTATION PLAN (Edition v0.3 / ACCP 3.0 / Research Monograph Alignment)  
+**Status:** ARCHIVED PRE-MIGRATION REFERENCE (Edition v0.3 / ACCP 3.0 / Research Monograph Alignment)
 **Rule:** Architecture invention is CLOSED. Implement against typed contracts and monograph invariants only.
+
+> This Rust-oriented roadmap describes the archived reference implementation. The active product is the TypeScript Rivet runtime under `packages/core` and `packages/opencode`; its semantic owner is `SessionSemantics` and the normal `SessionRunner`/`SessionPrompt` lifecycle. The archived `HarnessCore` names below are provenance only and must not be reintroduced as a parallel runtime.
 
 ---
 

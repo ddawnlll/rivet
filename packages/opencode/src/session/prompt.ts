@@ -10,7 +10,7 @@ import { Session } from "./session"
 import { Agent } from "../agent/agent"
 import { Provider } from "@/provider/provider"
 
-import { type Tool as AITool, tool, jsonSchema } from "ai"
+import { type Tool as AITool, tool, jsonSchema, asSchema } from "ai"
 import type { JSONSchema7 } from "@ai-sdk/provider"
 import { SessionCompaction } from "./compaction"
 import { SystemPrompt } from "./system"
@@ -48,6 +48,7 @@ import { TaskTool, type TaskPromptOps } from "@/tool/task"
 import { SessionRunState } from "./run-state"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { EventV2Bridge } from "@/event-v2-bridge"
+import { EventV2 } from "@opencode-ai/core/event"
 import { Database } from "@opencode-ai/core/database/database"
 import { ModelV2 } from "@opencode-ai/core/model"
 import { ProviderV2 } from "@opencode-ai/core/provider"
@@ -55,7 +56,10 @@ import { eq } from "drizzle-orm"
 import { SessionTable } from "@opencode-ai/core/session/sql"
 import { SessionReminders } from "./reminders"
 import { SessionTools } from "./tools"
-import { LLMEvent } from "@opencode-ai/llm"
+import { LLMEvent, ToolDefinition, type JsonSchema } from "@opencode-ai/llm"
+import { SessionSemantics } from "@opencode-ai/core/session/semantics"
+import { createInvocationId } from "@opencode-ai/core/rivet/types"
+import type { ModelInvocation } from "@opencode-ai/core/session/invocation"
 
 // @ts-ignore
 globalThis.AI_SDK_LOG_WARNINGS = false
@@ -259,8 +263,10 @@ const layer = Layer.effect(
       sessionID: SessionID
       session: Session.Info
       msgs: SessionV1.WithParts[]
+      semantics: SessionSemantics
+      events: EventV2.Interface
     }) {
-      const { task, model, lastUser, sessionID, session, msgs } = input
+      const { task, model, lastUser, sessionID, session, msgs, semantics, events } = input
       const ctx = yield* InstanceState.context
       const promptOps = yield* ops()
       const { task: taskTool } = yield* registry.named()
@@ -304,6 +310,22 @@ const layer = Layer.effect(
         subagent_type: task.agent,
         command: task.command,
       }
+      const scope = semantics.scope(session.directory)
+      const admission = semantics.admitProviderCommitment(
+        { id: part.callID, name: TaskTool.id, input: taskArgs },
+        scope,
+        {
+          repository: session.directory,
+          currentRevision: semantics.hardState.revision,
+          allowedScope: scope,
+          allowedCapabilities: ["tool.*"],
+          allowMaterial: true,
+          humanApproved: true,
+        },
+      )
+      if (!admission.authorizedAction) {
+        throw new Error(admission.decision?.reason ?? "Task action was not authorized by Rivet")
+      }
       yield* plugin.trigger(
         "tool.execute.before",
         { tool: TaskTool.id, sessionID, callID: part.id },
@@ -321,33 +343,46 @@ const layer = Layer.effect(
 
       let error: Error | undefined
       const taskAbort = new AbortController()
-      const result = yield* taskTool
-        .execute(taskArgs, {
-          agent: task.agent,
-          messageID: assistantMessage.id,
-          sessionID,
-          abort: taskAbort.signal,
-          callID: part.callID,
-          extra: { bypassAgentCheck: true, promptOps },
-          messages: msgs,
-          metadata: (val: { title?: string; metadata?: Record<string, any> }) =>
-            Effect.gen(function* () {
-              part = yield* sessions.updatePart({
-                ...part,
-                type: "tool",
-                state: { ...part.state, ...val },
-              } satisfies SessionV1.ToolPart)
+      const result = yield* semantics
+        .executeAuthorizedAction(
+          admission.authorizedAction,
+          () =>
+            taskTool.execute(taskArgs, {
+              agent: task.agent,
+              messageID: assistantMessage.id,
+              sessionID,
+              abort: taskAbort.signal,
+              callID: part.callID,
+              extra: { bypassAgentCheck: true, promptOps },
+              messages: msgs,
+              metadata: (val: { title?: string; metadata?: Record<string, any> }) =>
+                Effect.gen(function* () {
+                  part = yield* sessions.updatePart({
+                    ...part,
+                    type: "tool",
+                    state: { ...part.state, ...val },
+                  } satisfies SessionV1.ToolPart)
+                }),
+              ask: (req: any) =>
+                permission
+                  .ask({
+                    ...req,
+                    sessionID,
+                    ruleset: Permission.merge(taskAgent.permission, session.permission ?? []),
+                  })
+                  .pipe(Effect.orDie),
             }),
-          ask: (req: any) =>
-            permission
-              .ask({
-                ...req,
-                sessionID,
-                ruleset: Permission.merge(taskAgent.permission, session.permission ?? []),
-              })
-              .pipe(Effect.orDie),
-        })
+          (value) => value.output,
+        )
         .pipe(
+          Effect.tap(({ receipt }) =>
+            Effect.gen(function* () {
+              yield* semantics.recordExecution(events, receipt)
+              yield* semantics.recordObservation(events, receipt, receipt.outputSummary)
+              yield* semantics.admitEvidence(events, receipt, receipt.capability, receipt.outputSummary)
+            }),
+          ),
+          Effect.map(({ value }) => value),
           Effect.catchCause((cause) => {
             const defect = Cause.squash(cause)
             error = defect instanceof Error ? defect : new Error(String(defect))
@@ -1084,6 +1119,7 @@ const layer = Layer.effect(
         let structured: unknown
         let step = 0
         const session = yield* sessions.get(sessionID).pipe(Effect.orDie)
+        const semantics = yield* SessionSemantics.load(db, sessionID)
 
         while (true) {
           yield* status.set(sessionID, { type: "busy" })
@@ -1096,6 +1132,16 @@ const layer = Layer.effect(
           const { user: lastUser, assistant: lastAssistant, finished: lastFinished, tasks } = MessageV2.latest(msgs)
 
           if (!lastUser) throw new Error("No user message found in stream. This should never happen.")
+          const lastUserMessage = msgs.findLast((message) => message.info.role === "user")
+          const goal = lastUserMessage?.parts
+            .filter((part): part is SessionV1.TextPart => part.type === "text")
+            .map((part) => part.text)
+            .join("\n")
+          if (goal) yield* semantics.ensureGoal(events, goal, session.directory)
+          const cognitiveView = semantics.cognitiveView({
+            repositoryId: session.directory,
+            goalDescription: semantics.hardState.goalDescription ?? goal,
+          })
 
           const lastAssistantMsg = msgs.findLast(
             (msg) => msg.info.role === "assistant" && msg.info.id === lastAssistant?.id,
@@ -1142,7 +1188,7 @@ const layer = Layer.effect(
           const task = tasks.pop()
 
           if (task?.type === "subtask") {
-            yield* handleSubtask({ task, model, lastUser, sessionID, session, msgs })
+            yield* handleSubtask({ task, model, lastUser, sessionID, session, msgs, semantics, events })
             continue
           }
 
@@ -1231,6 +1277,8 @@ const layer = Layer.effect(
               bypassAgentCheck,
               messages: msgs,
               promptOps,
+              semantics,
+              events,
             }).pipe(
               Effect.provideService(Plugin.Service, plugin),
               Effect.provideService(Permission.Service, permission),
@@ -1247,6 +1295,23 @@ const layer = Layer.effect(
                   structured = output
                 },
               })
+            }
+
+            const invocationID = createInvocationId(`${sessionID}:${step}`)
+            yield* semantics.recordInvocation(events, invocationID, model.id)
+            const invocation: ModelInvocation = {
+              systemContract: { name: "Rivet Harness", version: "1", authority: "Harness" },
+              cognitiveView,
+              availableActions: Object.entries(tools).map(
+                ([name, item]) =>
+                  new ToolDefinition({
+                    name,
+                    description: item.description ?? "",
+                    inputSchema: asSchema(item.inputSchema).jsonSchema as JsonSchema,
+                  }),
+              ),
+              budget: { outputTokens: agent.steps },
+              invocation: invocationID,
             }
 
             if (step === 1)
@@ -1281,6 +1346,32 @@ const layer = Layer.effect(
                 ...(isLastStep ? [{ role: "assistant" as const, content: MAX_STEPS_PROMPT }] : []),
               ],
               tools,
+              cognitiveView,
+              invocation,
+              executeTool: (call, abort) =>
+                Effect.promise(async () => {
+                  const item = tools[call.name]
+                  if (!item?.execute)
+                    return [
+                      LLMEvent.toolResult({
+                        id: call.id,
+                        name: call.name,
+                        result: { type: "error", value: `Unknown authorized action: ${call.name}` },
+                      }),
+                    ]
+                  const value = await item.execute(call.input, {
+                    toolCallId: call.id,
+                    messages: [],
+                    abortSignal: abort,
+                  })
+                  const output =
+                    value && typeof value === "object" && "output" in value
+                      ? String(value.output)
+                      : typeof value === "string"
+                        ? value
+                        : JSON.stringify(value)
+                  return [LLMEvent.toolResult({ id: call.id, name: call.name, result: { type: "text", value: output } })]
+                }),
               model,
               toolChoice: format.type === "json_schema" ? "required" : undefined,
             })
@@ -1291,6 +1382,8 @@ const layer = Layer.effect(
               yield* sessions.updateMessage(handle.message)
               return "break" as const
             }
+
+            if (semantics.hardState.completedTasks.size > 0) return "break" as const
 
             const finished = handle.message.finish && !["tool-calls", "unknown"].includes(handle.message.finish)
             if (finished && !handle.message.error) {

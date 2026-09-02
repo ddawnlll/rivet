@@ -21,9 +21,10 @@ import { PartID } from "./schema"
 import { EffectBridge } from "@/effect/bridge"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
+import { EventV2 } from "@opencode-ai/core/event"
+import { SessionSemantics } from "@opencode-ai/core/session/semantics"
 import { isRecord } from "@/util/record"
 import { RuntimeFlags } from "@/effect/runtime-flags"
-import { AccpSemanticGate, CognitiveActionParser, Revision, Scope as RivetScope } from "@opencode-ai/core/rivet"
 
 const MCP_RESOURCE_TOOLS = {
   list: "list_mcp_resources",
@@ -47,6 +48,8 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
   bypassAgentCheck: boolean
   messages: SessionV1.WithParts[]
   promptOps: TaskPromptOps
+  semantics: SessionSemantics
+  events: EventV2.Interface
 }) {
   const tools: Record<string, AITool> = {}
   const run = yield* EffectBridge.make()
@@ -62,7 +65,13 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
     abort: options.abortSignal!,
     messageID: input.processor.message.id,
     callID: options.toolCallId,
-    extra: { model: input.model, bypassAgentCheck: input.bypassAgentCheck, promptOps: input.promptOps },
+    extra: {
+      model: input.model,
+      bypassAgentCheck: input.bypassAgentCheck,
+      promptOps: input.promptOps,
+      rivetSemantics: input.semantics,
+      rivetEvents: input.events,
+    },
     agent: input.agent.name,
     messages: input.messages,
     metadata: (val) =>
@@ -90,6 +99,24 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
         .pipe(Effect.orDie),
   })
 
+  const admit = (name: string, args: unknown, callID: string) => {
+    const scope = input.semantics.scope(input.session.directory)
+    const result = input.semantics.admitProviderCommitment(
+      { id: callID, name, input: isRecord(args) ? args : {} },
+      scope,
+      {
+        repository: input.session.directory,
+        currentRevision: input.semantics.hardState.revision,
+        allowedScope: scope,
+        allowedCapabilities: ["file.read", "file.write", "process.exec", "tool.*", "mcp.*"],
+        allowMaterial: true,
+        humanApproved: true,
+      },
+    )
+    if (!result.authorizedAction) throw new Error(result.decision?.reason ?? "Provider commitment was not authorized")
+    return result.authorizedAction
+  }
+
   for (const item of yield* registry.tools({
     modelID: ModelV2.ID.make(input.model.api.id),
     providerID: input.model.providerID,
@@ -105,43 +132,24 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
           Effect.gen(function* () {
             const ctx = context(args, options)
 
-            // Enforce Rivet ACCP 3.0 Semantic Authority Gate
-            const rawInput = isRecord(args) ? args : {}
-            const rivetScope = RivetScope.global("repo", Revision.ZERO)
-            const action = CognitiveActionParser.parseFromToolCall(item.id, rawInput, rivetScope)
-
-            if (action.type === "action_proposal") {
-              const policy = {
-                repository: "repo",
-                currentRevision: Revision.ZERO,
-                allowedScope: rivetScope,
+            const scope = input.semantics.scope(input.session.directory)
+            const admission = input.semantics.admitProviderCommitment(
+              { id: options.toolCallId, name: item.id, input: isRecord(args) ? args : {} },
+              scope,
+              {
+                repository: input.session.directory,
+                currentRevision: input.semantics.hardState.revision,
+                allowedScope: scope,
                 allowedCapabilities: ["file.read", "file.write", "process.exec", "tool.*"],
                 allowMaterial: true,
                 humanApproved: true,
-              }
-              const { authorizedAction, decision } = AccpSemanticGate.authorize(action.proposal, policy)
-              if (!authorizedAction || decision.verdict !== "allow") {
-                const rejectionOutput = {
-                  title: item.id,
-                  metadata: {},
-                  output: `ACCP Authority Rejection: ${decision.reason}`,
-                }
-                if (options.abortSignal?.aborted) {
-                  yield* input.processor.completeToolCall(options.toolCallId, rejectionOutput)
-                }
-                return rejectionOutput
-              }
-            } else if (action.type === "claim_proposal") {
-              try {
-                AccpSemanticGate.validateClaimProposal(action.proposal)
-              } catch (err: any) {
-                const rejectionOutput = {
-                  title: item.id,
-                  metadata: {},
-                  output: `ACCP Claim Rejection: ${err.message}`,
-                }
-                return rejectionOutput
-              }
+              },
+            )
+            if (!admission.authorizedAction) {
+              const reason = admission.decision?.reason ?? "Only ACCP action commitments may execute"
+              const rejectionOutput = { title: item.id, metadata: {}, output: `ACCP authority rejection: ${reason}` }
+              if (options.abortSignal?.aborted) yield* input.processor.completeToolCall(options.toolCallId, rejectionOutput)
+              return rejectionOutput
             }
 
             yield* plugin.trigger(
@@ -149,7 +157,20 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
               { tool: item.id, sessionID: ctx.sessionID, callID: ctx.callID },
               { args },
             )
-            const result = yield* item.execute(args, ctx)
+            const executed = yield* input.semantics.executeAuthorizedAction(
+              admission.authorizedAction,
+              (action) => item.execute(action.proposal.parameters as typeof args, ctx),
+              (value) => value.output,
+            )
+            yield* input.semantics.recordExecution(input.events, executed.receipt)
+            yield* input.semantics.recordObservation(input.events, executed.receipt, executed.receipt.outputSummary)
+            yield* input.semantics.admitEvidence(
+              input.events,
+              executed.receipt,
+              executed.receipt.capability,
+              executed.receipt.outputSummary,
+            )
+            const result = executed.value
             const output = {
               ...result,
               attachments: result.attachments?.map((attachment) => ({
@@ -174,6 +195,99 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
     })
   }
 
+  tools.request_completion = tool({
+    description: "Propose completion only after Rivet obligations have been verified.",
+    inputSchema: jsonSchema(
+      ProviderTransform.schema(input.model, {
+        type: "object",
+        properties: { summary: { type: "string" } },
+        required: ["summary"],
+        additionalProperties: false,
+      }),
+    ),
+    execute(args, opts) {
+      return run.promise(
+        Effect.gen(function* () {
+          const summary = isRecord(args) && typeof args.summary === "string" ? args.summary : "Completed task"
+          const decision = yield* input.semantics.proposeCompletion(input.events, { summary })
+          return {
+            title: "Rivet completion",
+            metadata: { completed: decision.completed, obligations: decision.unclosedObligations },
+            output: decision.completed
+              ? "Rivet completion accepted"
+              : `Rivet completion rejected: ${decision.unclosedObligations.length ? "open obligations remain" : "verification is required"}`,
+          }
+        }),
+      )
+    },
+  })
+
+  tools.request_verification = tool({
+    description: "Ask Praxis to verify the latest observed test execution.",
+    inputSchema: jsonSchema(
+      ProviderTransform.schema(input.model, {
+        type: "object",
+        properties: {
+          predicate: { type: "string" },
+          obligation_id: { type: "string" },
+        },
+        required: ["predicate"],
+        additionalProperties: false,
+      }),
+    ),
+    execute(args) {
+      return run.promise(
+        Effect.gen(function* () {
+          const values = isRecord(args) ? args : {}
+          const predicate = typeof values.predicate === "string" ? values.predicate : "bun test"
+          const obligationId = typeof values.obligation_id === "string" ? values.obligation_id : undefined
+          const verification = yield* input.semantics.proposeVerification(input.events, {
+            repository: input.session.directory,
+            predicate,
+            obligationId,
+          })
+          return {
+            title: "Praxis verification",
+            metadata: { passed: verification.passed, receiptId: verification.receiptId },
+            output: verification.passed ? "Praxis verification passed" : "Praxis verification failed",
+          }
+        }),
+      )
+    },
+  })
+
+  tools.propose_claim = tool({
+    description: "Propose a supported claim backed by already admitted evidence.",
+    inputSchema: jsonSchema(
+      ProviderTransform.schema(input.model, {
+        type: "object",
+        properties: {
+          proposition: { type: "string" },
+          supporting_evidence: { type: "array", items: { type: "string" } },
+        },
+        required: ["proposition"],
+        additionalProperties: false,
+      }),
+    ),
+    execute(args) {
+      return run.promise(
+        Effect.gen(function* () {
+          const values = isRecord(args) ? args : {}
+          const proposition = typeof values.proposition === "string" ? values.proposition : ""
+          const supportingEvidence = Array.isArray(values.supporting_evidence)
+            ? values.supporting_evidence.filter((value): value is string => typeof value === "string")
+            : []
+          yield* input.semantics.proposeClaim(input.events, {
+            repository: input.session.directory,
+            proposition,
+            supportingEvidence,
+          })
+          return { title: "Rivet claim", metadata: {}, output: "Claim admitted as supported evidence" }
+        }),
+      )
+    },
+  })
+
   const hasMcpResourceServer = Object.values(yield* mcp.clients()).some(
     (client) => !!client.getServerCapabilities()?.resources,
   )
@@ -196,22 +310,23 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
       execute(args, opts) {
         return run.promise(
           Effect.gen(function* () {
-            const parsed = parseListMcpResourcesArgs(args)
             const ctx = context(toRecord(args), opts)
+            const action = admit(MCP_RESOURCE_TOOLS.list, args, opts.toolCallId)
+            const normalized = parseListMcpResourcesArgs(action.proposal.parameters)
             const clients = yield* mcp.clients()
             const resourceServers = Object.entries(clients)
               .filter((entry) => !!entry[1].getServerCapabilities()?.resources)
               .map((entry) => entry[0])
               .sort((a, b) => a.localeCompare(b))
-            if (parsed.server && !resourceServers.includes(parsed.server)) {
+            if (normalized.server && !resourceServers.includes(normalized.server)) {
               throw new Error(
                 resourceServers.length === 0
-                  ? `MCP server "${parsed.server}" does not support resources`
-                  : `MCP server "${parsed.server}" does not support resources. Available resource servers: ${resourceServers.join(", ")}`,
+                  ? `MCP server "${normalized.server}" does not support resources`
+                  : `MCP server "${normalized.server}" does not support resources. Available resource servers: ${resourceServers.join(", ")}`,
               )
             }
-            const permissionPatterns = parsed.server
-              ? [`mcp:${parsed.server}:*`]
+            const permissionPatterns = normalized.server
+              ? [`mcp:${normalized.server}:*`]
               : resourceServers.map((server) => `mcp:${server}:*`)
             yield* plugin.trigger(
               "tool.execute.before",
@@ -220,14 +335,22 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
             )
             yield* ctx.ask({
               permission: "read",
-              metadata: parsed.server ? { server: parsed.server } : {},
+              metadata: normalized.server ? { server: normalized.server } : {},
               patterns: permissionPatterns,
               always: permissionPatterns,
             })
 
-            const resources = Object.values(yield* mcp.resources(parsed.server))
+            const executed = yield* input.semantics.executeAuthorizedAction(
+              action,
+              () => mcp.resources(normalized.server),
+              (value) => `${Object.keys(value).length} MCP resources listed`,
+            )
+            yield* input.semantics.recordExecution(input.events, executed.receipt)
+            yield* input.semantics.recordObservation(input.events, executed.receipt, executed.receipt.outputSummary)
+            yield* input.semantics.admitEvidence(input.events, executed.receipt, executed.receipt.capability, executed.receipt.outputSummary)
+            const resources = Object.values(executed.value)
             const filtered = resources
-              .filter((resource) => !parsed.server || resource.client === parsed.server)
+              .filter((resource) => !normalized.server || resource.client === normalized.server)
               .toSorted((a, b) =>
                 (a.client + "\u0000" + a.name + "\u0000" + a.uri).localeCompare(
                   b.client + "\u0000" + b.name + "\u0000" + b.uri,
@@ -236,11 +359,11 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
             const content = JSON.stringify({ resources: filtered.map(formatMcpResource) }, null, 2)
             const truncated = yield* truncate.output(content, {}, input.agent)
             const output = {
-              title: parsed.server ? `MCP resources: ${parsed.server}` : "MCP resources",
+              title: normalized.server ? `MCP resources: ${normalized.server}` : "MCP resources",
               metadata: {
                 count: filtered.length,
                 servers: resourceServers,
-                ...(parsed.server ? { server: parsed.server } : {}),
+                ...(normalized.server ? { server: normalized.server } : {}),
                 truncated: truncated.truncated,
                 ...(truncated.truncated && { outputPath: truncated.outputPath }),
               },
@@ -279,22 +402,23 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
       execute(args, opts) {
         return run.promise(
           Effect.gen(function* () {
-            const parsed = parseListMcpResourcesArgs(args)
             const ctx = context(toRecord(args), opts)
+            const action = admit(MCP_RESOURCE_TOOLS.listTemplates, args, opts.toolCallId)
+            const normalized = parseListMcpResourcesArgs(action.proposal.parameters)
             const clients = yield* mcp.clients()
             const resourceServers = Object.entries(clients)
               .filter((entry) => !!entry[1].getServerCapabilities()?.resources)
               .map((entry) => entry[0])
               .sort((a, b) => a.localeCompare(b))
-            if (parsed.server && !resourceServers.includes(parsed.server)) {
+            if (normalized.server && !resourceServers.includes(normalized.server)) {
               throw new Error(
                 resourceServers.length === 0
-                  ? `MCP server "${parsed.server}" does not support resources`
-                  : `MCP server "${parsed.server}" does not support resources. Available resource servers: ${resourceServers.join(", ")}`,
+                  ? `MCP server "${normalized.server}" does not support resources`
+                  : `MCP server "${normalized.server}" does not support resources. Available resource servers: ${resourceServers.join(", ")}`,
               )
             }
-            const permissionPatterns = parsed.server
-              ? [`mcp:${parsed.server}:*`]
+            const permissionPatterns = normalized.server
+              ? [`mcp:${normalized.server}:*`]
               : resourceServers.map((server) => `mcp:${server}:*`)
             yield* plugin.trigger(
               "tool.execute.before",
@@ -303,14 +427,22 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
             )
             yield* ctx.ask({
               permission: "read",
-              metadata: parsed.server ? { server: parsed.server } : {},
+              metadata: normalized.server ? { server: normalized.server } : {},
               patterns: permissionPatterns,
               always: permissionPatterns,
             })
 
-            const templates = Object.values(yield* mcp.resourceTemplates(parsed.server))
+            const executed = yield* input.semantics.executeAuthorizedAction(
+              action,
+              () => mcp.resourceTemplates(normalized.server),
+              (value) => `${Object.keys(value).length} MCP resource templates listed`,
+            )
+            yield* input.semantics.recordExecution(input.events, executed.receipt)
+            yield* input.semantics.recordObservation(input.events, executed.receipt, executed.receipt.outputSummary)
+            yield* input.semantics.admitEvidence(input.events, executed.receipt, executed.receipt.capability, executed.receipt.outputSummary)
+            const templates = Object.values(executed.value)
             const filtered = templates
-              .filter((template) => !parsed.server || template.client === parsed.server)
+              .filter((template) => !normalized.server || template.client === normalized.server)
               .toSorted((a, b) =>
                 (a.client + "\u0000" + a.name + "\u0000" + a.uriTemplate).localeCompare(
                   b.client + "\u0000" + b.name + "\u0000" + b.uriTemplate,
@@ -319,11 +451,11 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
             const content = JSON.stringify({ resourceTemplates: filtered.map(formatMcpResourceTemplate) }, null, 2)
             const truncated = yield* truncate.output(content, {}, input.agent)
             const output = {
-              title: parsed.server ? `MCP resource templates: ${parsed.server}` : "MCP resource templates",
+              title: normalized.server ? `MCP resource templates: ${normalized.server}` : "MCP resource templates",
               metadata: {
                 count: filtered.length,
                 servers: resourceServers,
-                ...(parsed.server ? { server: parsed.server } : {}),
+                ...(normalized.server ? { server: normalized.server } : {}),
                 truncated: truncated.truncated,
                 ...(truncated.truncated && { outputPath: truncated.outputPath }),
               },
@@ -366,8 +498,9 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
       execute(args, opts) {
         return run.promise(
           Effect.gen(function* () {
-            const parsed = parseReadMcpResourceArgs(args)
             const ctx = context(toRecord(args), opts)
+            const action = admit(MCP_RESOURCE_TOOLS.read, args, opts.toolCallId)
+            const parsed = parseReadMcpResourceArgs(action.proposal.parameters)
             const clients = yield* mcp.clients()
             const client = clients[parsed.server]
             if (!client) {
@@ -388,7 +521,15 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
               always: [`mcp:${parsed.server}:*`],
             })
 
-            const content = yield* mcp.readResource(parsed.server, parsed.uri)
+            const executed = yield* input.semantics.executeAuthorizedAction(
+              action,
+              () => mcp.readResource(parsed.server, parsed.uri),
+              (value) => `MCP resource ${parsed.uri} returned ${JSON.stringify(value).length} bytes`,
+            )
+            yield* input.semantics.recordExecution(input.events, executed.receipt)
+            yield* input.semantics.recordObservation(input.events, executed.receipt, executed.receipt.outputSummary)
+            yield* input.semantics.admitEvidence(input.events, executed.receipt, executed.receipt.capability, executed.receipt.outputSummary)
+            const content = executed.value
             if (!content) throw new Error(`Failed to read MCP resource: ${parsed.server}/${parsed.uri}`)
 
             const formatted = formatMcpResourceContent(parsed.server, parsed.uri, content)
@@ -440,24 +581,52 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
       run.promise(
         Effect.gen(function* () {
           const ctx = context(args, opts)
+          const scope = input.semantics.scope(input.session.directory)
+          const admission = input.semantics.admitProviderCommitment(
+            { id: opts.toolCallId, name: key, input: isRecord(args) ? args : {} },
+            scope,
+            {
+              repository: input.session.directory,
+              currentRevision: input.semantics.hardState.revision,
+              allowedScope: scope,
+              allowedCapabilities: ["file.read", "file.write", "process.exec", "tool.*", "mcp.*"],
+              allowMaterial: true,
+              humanApproved: true,
+            },
+          )
+          if (!admission.authorizedAction) throw new Error(admission.decision?.reason ?? "MCP action was not authorized")
           yield* plugin.trigger(
             "tool.execute.before",
             { tool: key, sessionID: ctx.sessionID, callID: opts.toolCallId },
             { args },
           )
-          const result: Awaited<ReturnType<NonNullable<typeof execute>>> = yield* Effect.gen(function* () {
-            yield* ctx.ask({ permission: key, metadata: {}, patterns: ["*"], always: ["*"] })
-            return yield* Effect.promise(() => execute(args, opts))
-          }).pipe(
-            Effect.withSpan("Tool.execute", {
-              attributes: {
-                "tool.name": key,
-                "tool.call_id": opts.toolCallId,
-                "session.id": ctx.sessionID,
-                "message.id": input.processor.message.id,
-              },
-            }),
+          const executed = yield* input.semantics.executeAuthorizedAction(
+            admission.authorizedAction,
+            (action) =>
+              Effect.gen(function* () {
+                yield* ctx.ask({ permission: key, metadata: {}, patterns: ["*"], always: ["*"] })
+                return yield* Effect.promise(() => execute(action.proposal.parameters as typeof args, opts))
+              }).pipe(
+                Effect.withSpan("Tool.execute", {
+                  attributes: {
+                    "tool.name": key,
+                    "tool.call_id": opts.toolCallId,
+                    "session.id": ctx.sessionID,
+                    "message.id": input.processor.message.id,
+                  },
+                }),
+              ),
+            (value) => JSON.stringify(value).slice(0, 500),
           )
+          yield* input.semantics.recordExecution(input.events, executed.receipt)
+          yield* input.semantics.recordObservation(input.events, executed.receipt, executed.receipt.outputSummary)
+          yield* input.semantics.admitEvidence(
+            input.events,
+            executed.receipt,
+            executed.receipt.capability,
+            executed.receipt.outputSummary,
+          )
+          const result: Awaited<ReturnType<NonNullable<typeof execute>>> = executed.value
           yield* plugin.trigger(
             "tool.execute.after",
             { tool: key, sessionID: ctx.sessionID, callID: opts.toolCallId, args },

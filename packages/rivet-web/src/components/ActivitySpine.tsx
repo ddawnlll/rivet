@@ -1,9 +1,11 @@
 import { useState } from 'react'
 import type { Activity } from '../types'
+import type { RunOutcome } from '../store/useSessionStore'
 
 type Props = {
   activities: Activity[]
   runActive: boolean
+  runOutcome: RunOutcome | null
   selected: Activity | null
   onSelect: (activity: Activity) => void
   onCancel: () => void
@@ -53,6 +55,7 @@ const stepLabel = (activity: Activity) => {
 export function ActivitySpine({
   activities,
   runActive,
+  runOutcome,
   selected,
   onSelect,
   onCancel,
@@ -69,6 +72,17 @@ export function ActivitySpine({
 
   if (!runActive && !summary && steps.length === 0) return null
 
+  const outcomeLabel = runOutcome === 'failed'
+    ? 'Run failed'
+    : runOutcome === 'cancelled'
+      ? 'Run cancelled'
+      : 'Run complete'
+  const settledText = runOutcome === 'failed'
+    ? 'Adapter or runtime reported an error'
+    : runOutcome === 'cancelled'
+      ? 'Stopped by user'
+      : summary || 'Work settled'
+
   const visibleSteps = showAll ? steps.slice(-12) : steps.slice(-4)
   const hiddenCount = Math.max(0, steps.length - visibleSteps.length)
   const currentText = focusObject?.title || plainText(steps.at(-1)?.body ?? '')
@@ -78,9 +92,9 @@ export function ActivitySpine({
       <header className="progressHeader">
         <div className="progressTitle">
           <span className={`progressOrb ${runActive ? 'spinning' : ''}`} aria-hidden="true" />
-          <strong>{runActive ? 'Thinking' : 'Run complete'}</strong>
+          <strong>{runActive ? 'Thinking' : outcomeLabel}</strong>
           <span className="progressCurrent">
-            {runActive ? (currentText || 'Working through the request…') : (summary || 'Work settled')}
+            {runActive ? (currentText || 'Working through the request…') : settledText}
           </span>
         </div>
 

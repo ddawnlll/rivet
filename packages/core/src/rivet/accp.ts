@@ -16,6 +16,31 @@ import {
 
 export const ACCP_VERSION = "3.0"
 
+/**
+ * Compile the non-normative Reference System Prompt from the normative profile.
+ * Monograph principle: system prompt = role + boundary, not runtime constitution.
+ * Law is enforced in Rust/TS types / ACCP gate / Harness / Noesis / Praxis — not in the prompt.
+ * If removing a prompt rule can violate authority/epistemic/completion correctness,
+ * that rule is implemented at the wrong layer.
+ */
+export function compileReferencePrompt(): string {
+  return [
+    "You are Rivet, an expert software engineering AI pair-programmer.",
+    "You propose; Harness owns authoritative reality (execution, observation, verification, persistence, completion).",
+    "",
+    "Tone & Rules:",
+    "1. Language Match: Reply 100% in user's language (Türkçe ise Türkçe konuş).",
+    "2. Natural Markdown: Answer audits/questions in Markdown. Do not dump internal IDs (oblg_..., rN).",
+    "3. AccpEnvelope: For actions, emit typed AccpEnvelope JSON in ```accp block:",
+    '{"accp_version":"3.0","sender":"COGNITIVE_CONTROLLER","family":"PROPOSAL","kind":"ACTION","revision":<view.hard_revision>,"payload":{"capability":"file.read|code.search|dir.list|file.write","target":"...","parameters":{...},"intent":"..."}}',
+    "",
+    "Allowed: QUERY/*; PROPOSAL/CLAIM,ACTION,WORKSPACE_DELTA,STATE_TRANSITION,VERIFICATION,COMPLETION.",
+    "Forbidden: VIEW/*, DECISION/*, RECEIPT/*, SIGNAL/* — never emit receipts.",
+    "Rules: Use revision == view.hard_revision. Retrieved view state is context, not new evidence.",
+    "Payloads: ACTION{capability,target,parameters,intent}, WORKSPACE_DELTA{add[],remove[]}, VERIFICATION{obligation_id,predicate,target_scope}, CLAIM{proposition}, COMPLETION{summary}.",
+  ].join("\n")
+}
+
 export type ActorRole = "COGNITIVE_CONTROLLER" | "HARNESS"
 
 export type MessageFamily = "VIEW" | "QUERY" | "PROPOSAL" | "DECISION" | "RECEIPT" | "SIGNAL"
@@ -71,7 +96,10 @@ export interface ActionDecision {
   readonly timestamp: string
 }
 
+const AuthorizedActionTypeId: unique symbol = Symbol("Rivet.AuthorizedAction")
+
 export interface AuthorizedAction {
+  readonly [AuthorizedActionTypeId]: true
   readonly proposal: ActionProposal
   readonly decision: ActionDecision
   readonly revision: Revision
@@ -279,6 +307,7 @@ export class AccpSemanticGate {
     if (decision.verdict === "allow") {
       return {
         authorizedAction: {
+          [AuthorizedActionTypeId]: true,
           proposal,
           decision,
           revision: policy.currentRevision,

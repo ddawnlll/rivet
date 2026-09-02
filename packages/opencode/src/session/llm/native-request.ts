@@ -12,6 +12,8 @@ import {
 import type { ModelMessage } from "ai"
 import type { Provider } from "@/provider/provider"
 import { isRecord } from "@/util/record"
+import type { CognitiveView } from "@opencode-ai/core/rivet/noesis"
+import type { ModelInvocation } from "@opencode-ai/core/session/invocation"
 
 type ToolInput = {
   readonly description?: string
@@ -25,6 +27,8 @@ export type RequestInput = {
   readonly system?: readonly string[]
   readonly messages: readonly ModelMessage[]
   readonly tools?: Record<string, ToolInput>
+  readonly cognitiveView?: CognitiveView
+  readonly invocation?: ModelInvocation
   readonly toolChoice?: "auto" | "required" | "none"
   readonly temperature?: number
   readonly topP?: number
@@ -190,6 +194,8 @@ export const request = (input: RequestInput) => {
     toolChoice: input.toolChoice,
     generation: generation(input),
     providerOptions: input.providerOptions,
+    cognitiveView: input.cognitiveView,
+    invocation: input.invocation,
   })
 }
 

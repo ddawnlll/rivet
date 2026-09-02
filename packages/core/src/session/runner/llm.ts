@@ -5,10 +5,11 @@ import {
   LLMEvent,
   Message,
   SystemPart,
+  ToolDefinition,
   isContextOverflowFailure,
   type ProviderErrorEvent,
 } from "@opencode-ai/llm"
-import { Cause, DateTime, Effect, FiberSet, Layer, Option, Semaphore, Stream } from "effect"
+import { Cause, DateTime, Effect, Exit, FiberSet, Layer, Option, Semaphore, Stream } from "effect"
 import { AgentV2 } from "../../agent"
 import { Config } from "../../config"
 import { Database } from "../../database/database"
@@ -31,6 +32,7 @@ import { SessionHistory } from "../history"
 import { SessionInput } from "../input"
 import { SessionSchema } from "../schema"
 import { SessionStore } from "../store"
+import { SessionSemantics } from "../semantics"
 import { type RunError, Service } from "./index"
 import { SessionRunnerModel } from "./model"
 import { createLLMEventPublisher } from "./publish-llm-event"
@@ -39,16 +41,11 @@ import { MAX_STEPS_PROMPT } from "./max-steps"
 import { Snapshot } from "../../snapshot"
 import { makeLocationNode } from "../../effect/app-node"
 import { llmClient } from "../../effect/app-node-platform"
-import {
-  AccpSemanticGate,
-  CognitiveActionParser,
-  Revision,
-  Scope as RivetScope,
-  createActionId,
-} from "../../rivet/index"
+import { createInvocationId } from "../../rivet/types"
+import { type ModelInvocation, ModelInvocationGate, type ModelInvocationReceipt } from "../invocation"
 
 /**
- * Runs one durable coding-agent Session until it settles.
+ * Runs one durable Rivet Session until its Harness-owned continuation settles.
  *
  * Keep this as orchestration over smaller collaborators rather than rebuilding the legacy
  * `SessionPrompt` monolith. Implement the unchecked items in small reviewed slices:
@@ -67,7 +64,7 @@ import {
  * - One provider turn
  *   - [x] Translate every projected V2 Session message variant into canonical
  *     `@opencode-ai/llm` messages.
- *   - [ ] Resolve policy-filtered built-in, MCP, plugin, and structured-output tool definitions.
+ *   - [x] Resolve policy-filtered built-in, MCP, plugin, and structured-output action definitions.
  *   - [x] Stream exactly one `llm.stream(request)` provider turn.
  *   - [x] Persist assistant text and usage events incrementally as they arrive.
  *   - [ ] Persist snapshots, patches, and retry notices incrementally as they arrive.
@@ -75,7 +72,7 @@ import {
  *
  * - Tool settlement and continuation
  *   - [x] Durably record each tool call before side effects begin.
- *   - [x] Authorize and execute recorded local calls through a core-owned registry hook.
+ *   - [x] Authorize and execute provider commitments through the Rivet-owned action boundary.
  *   - [x] Persist typed success, failure, and provider-executed tool outcomes.
  *   - [x] Start each recorded local call eagerly and await all settlements before continuation.
  *   - [ ] Add scoped runtime context, progress updates, attachment normalization,
@@ -93,8 +90,8 @@ import {
  * Durable continuation recovery remains a separate future slice with an explicit retry policy.
  *
  * The current slice loads V2 history, translates it, resolves a model through a core service, and persists one
- * provider turn. Registry definitions are advertised, local tool calls are settled durably, and an
- * explicit loop starts the next provider turn after local settlement. Configured agent step limits bound the loop.
+ * provider turn. Action schemas are advertised, authorized actions are settled durably, and an
+ * explicit loop starts the next provider turn after settlement. Configured agent step limits bound the loop.
  */
 
 const layer = Layer.effect(
@@ -186,10 +183,12 @@ const layer = Layer.effect(
       const session = yield* getSession(sessionID)
       if (session.location.directory !== location.directory || session.location.workspaceID !== location.workspaceID)
         return yield* Effect.interrupt
+      const semantics = yield* SessionSemantics.load(db, session.id)
       const agent = yield* agents.select(session.agent)
       const initialized = yield* SessionContextEpoch.initialize(db, loadSystemContext(agent), session.id)
       const toolFibers = yield* FiberSet.make<void, ToolOutputStore.Error>()
       let needsContinuation = false
+      let completionAccepted = false
       let currentStep = step
       if (promotion) {
         const cutoff = yield* EventV2.latestSequence(db, session.id)
@@ -206,10 +205,93 @@ const layer = Layer.effect(
       const model = yield* models.resolve(session)
       const entries = yield* SessionHistory.entriesForRunner(db, session.id, system.baselineSeq)
       const context = entries.map((entry) => entry.message)
+      const goal = context.findLast((message) => message.type === "user")?.text
+      if (goal) yield* semantics.ensureGoal(events, goal, session.location.directory)
       const isLastStep = agent.info?.steps !== undefined && currentStep >= agent.info.steps
       const toolMaterialization = isLastStep ? undefined : yield* tools.materialize(agent.info?.permissions)
       const promptCacheKey = /^ses_[0-9a-f]{64}$/.test(session.id) ? session.id.slice(4) : session.id
-      const rivetContextBlock = `[RIVET COGNITIVE VIEW]\nAuthority: ACCP 3.0 Enforced (All actions require valid revision CAS and scope binding)\nTruth Kernel: Praxis Scoped Mechanical Verification Active`
+      const availableActions = isLastStep || !toolMaterialization || toolMaterialization.definitions.length === 0
+        ? []
+        : [
+            ...toolMaterialization.definitions,
+            new ToolDefinition({
+              name: "request_completion",
+              description: "Propose completion only after all required work is verified.",
+              inputSchema: {
+                type: "object",
+                properties: { summary: { type: "string" } },
+                required: ["summary"],
+                additionalProperties: false,
+              },
+            }),
+            new ToolDefinition({
+              name: "request_verification",
+              description: "Ask Praxis to verify the latest observed test execution.",
+              inputSchema: {
+                type: "object",
+                properties: {
+                  predicate: { type: "string" },
+                  obligation_id: { type: "string" },
+                },
+                required: ["predicate"],
+                additionalProperties: false,
+              },
+            }),
+            new ToolDefinition({
+              name: "propose_claim",
+              description: "Propose a supported claim backed by already admitted evidence.",
+              inputSchema: {
+                type: "object",
+                properties: {
+                  proposition: { type: "string" },
+                  supporting_evidence: { type: "array", items: { type: "string" } },
+                },
+                required: ["proposition"],
+                additionalProperties: false,
+              },
+            }),
+          ]
+      const invocationID = createInvocationId(`${session.id}:${currentStep}`)
+      yield* semantics.recordInvocation(events, invocationID, model.id)
+      const cognitiveView = semantics.cognitiveView({
+        repositoryId: session.location.directory,
+        goalDescription: semantics.hardState.goalDescription ?? goal,
+      })
+      const invocation: ModelInvocation = {
+        systemContract: { name: "Rivet Harness", version: "1", authority: "Harness" },
+        cognitiveView,
+        availableActions,
+        budget: { outputTokens: agent.info?.steps },
+        invocation: invocationID,
+      }
+      const gateEvaluation = ModelInvocationGate.evaluate(invocation)
+      // Rivet Identity Recovery: Inject when HardState has claims/evidence/hypotheses or when gate requires diagnosis
+      const hasMeaningfulRivetState =
+        cognitiveView.activeClaims.length > 0 ||
+        cognitiveView.recentEvidence.length > 0 ||
+        cognitiveView.activeHypotheses.length > 0 ||
+        gateEvaluation.reason === "STATE_CONTRADICTION" ||
+        gateEvaluation.reason === "HYPOTHESIS_CONFLICT"
+      const rivetStateSystem = hasMeaningfulRivetState
+        ? [
+            `<RivetHardState revision=${cognitiveView.hardRevision.toJSON()}>`,
+            `Goal: ${cognitiveView.goalDescription}`,
+            `Open Obligations (${cognitiveView.openObligations.length}):`,
+            ...cognitiveView.openObligations.map((o) => `  - ${o}`),
+            `Active Claims (${cognitiveView.activeClaims.length}):`,
+            ...cognitiveView.activeClaims.map((c) => `  - ${c.id}: ${c.proposition} [${c.status}]`),
+            `Recent Evidence (${cognitiveView.recentEvidence.length}):`,
+            ...cognitiveView.recentEvidence.map((e) => `  - ${e}`),
+            `Contradictions: ${cognitiveView.contradictions.join("; ") || "none"}`,
+            `</RivetHardState>`,
+            `<RivetSoftWorkspace>`,
+            `Focus: ${cognitiveView.activeFocus.join(", ") || "none"}`,
+            `Hypotheses (${cognitiveView.activeHypotheses.length}):`,
+            ...cognitiveView.activeHypotheses.map((h) => `  - ${h}`),
+            `Unknowns: ${cognitiveView.unknowns.join(", ") || "none"}`,
+            `</RivetSoftWorkspace>`,
+          ].join("\n")
+        : undefined
       const request = LLM.request({
         model,
         http: {
@@ -220,11 +302,21 @@ const layer = Layer.effect(
           },
         },
         providerOptions: { openai: { promptCacheKey } },
-        system: [agent.info?.system, system.baseline, rivetContextBlock]
+        system: [agent.info?.system, system.baseline, rivetStateSystem]
           .filter((part): part is string => part !== undefined && part.length > 0)
           .map(SystemPart.make),
+        cognitiveView,
+        invocation,
+        metadata: {
+          rivet: {
+            invocation: invocation.invocation,
+            hardRevision: cognitiveView.hardRevision.toJSON(),
+            goal: cognitiveView.goalDescription,
+            receipt: gateEvaluation.receipt,
+          },
+        },
         messages: [...toLLMMessages(context, model), ...(isLastStep ? [Message.assistant(MAX_STEPS_PROMPT)] : [])],
-        tools: toolMaterialization?.definitions ?? [],
+        tools: availableActions,
         toolChoice: isLastStep ? "none" : undefined,
       })
       if (yield* compaction.compactIfNeeded({ sessionID: session.id, entries, model, request }))
@@ -241,6 +333,7 @@ const layer = Layer.effect(
         snapshot: startSnapshot,
       })
       const withPublication = Semaphore.makeUnsafe(1).withPermit
+      const withSemanticCommit = Semaphore.makeUnsafe(1).withPermit
       const publish = (event: LLMEvent, outputPaths: ReadonlyArray<string> = []) =>
         withPublication(publisher.publish(event, outputPaths))
       let overflowFailure: ProviderErrorEvent | undefined
@@ -255,48 +348,115 @@ const layer = Layer.effect(
               }
             }
             yield* publish(event)
-            if (event.type !== "tool-call" || event.providerExecuted) return
+            if (event.type !== "tool-call") return
+            // Provider-hosted calls remain transport history. They do not
+            // become local execution authority without a Rivet decision.
+            if (event.providerExecuted) return
             if (!toolMaterialization) {
               yield* withPublication(publisher.failUnsettledTools("Tools are disabled after the maximum agent steps"))
               return
             }
             needsContinuation = true
             const assistantMessageID = yield* publisher.assistantMessageID(event.id)
-            const rawInput =
-              typeof event.input === "object" && event.input !== null
-                ? (event.input as Record<string, unknown>)
-                : {}
-            const rivetScope = RivetScope.global("repo", Revision.ZERO)
-            const action = CognitiveActionParser.parseFromToolCall(event.name, rawInput, rivetScope)
-            const policy = {
-              repository: "repo",
-              currentRevision: Revision.ZERO,
-              allowedScope: rivetScope,
-              allowedCapabilities: ["file.read", "file.write", "process.exec", "tool.*"],
-              allowMaterial: true,
-              humanApproved: true,
+            const rivetScope = semantics.scope(session.location.directory)
+            const commitment = semantics.admitProviderCommitment(
+              { id: event.id, name: event.name, input: event.input },
+              rivetScope,
+              {
+                repository: session.location.directory,
+                currentRevision: semantics.hardState.revision,
+                allowedScope: rivetScope,
+                allowedCapabilities: ["file.read", "file.write", "process.exec", "tool.*"],
+                allowMaterial: true,
+                humanApproved: true,
+              },
+            )
+            if (commitment.commitment.type === "completion_proposal") {
+              const decision = yield* semantics.proposeCompletion(events, {
+                summary: commitment.commitment.proposal.summary,
+                taskId: commitment.commitment.proposal.taskId,
+                baseRevision: commitment.commitment.proposal.baseRevision,
+              })
+              completionAccepted = decision.completed
+              yield* publish(
+                LLMEvent.toolResult({
+                  id: event.id,
+                  name: event.name,
+                  result: {
+                    type: decision.completed ? "text" : "error",
+                    value: decision.completed
+                      ? "Rivet completion accepted"
+                      : `Rivet completion rejected: ${decision.unclosedObligations.length ? "open obligations remain" : "verification is required"}`,
+                  },
+                }),
+              )
+              return
             }
-            const proposal =
-              action.type === "action_proposal"
-                ? action.proposal
-                : {
-                    actionId: createActionId(),
-                    capability: event.name,
-                    target: "global",
-                    parameters: rawInput,
-                    estimatedRisk: "material" as const,
-                    intent: `Execute ${event.name}`,
-                    scope: rivetScope,
-                    providerName: event.name,
-                    idempotencyKey: event.id,
-                    timestamp: new Date().toISOString(),
-                  }
-            const auth = AccpSemanticGate.authorize(proposal, policy)
-            const authorizedAction = auth.authorizedAction ?? {
-              proposal,
-              decision: auth.decision,
-              revision: Revision.ZERO,
-              scope: rivetScope,
+            if (commitment.commitment.type === "verification_request") {
+              const verification = yield* semantics.verifyLastExecution(events, commitment.commitment.request).pipe(Effect.exit)
+              if (Exit.isFailure(verification)) {
+                yield* publish(
+                  LLMEvent.toolResult({
+                    id: event.id,
+                    name: event.name,
+                    result: { type: "error", value: `Praxis verification rejected: ${String(Cause.squash(verification.cause))}` },
+                  }),
+                )
+                return
+              }
+              yield* publish(
+                LLMEvent.toolResult({
+                  id: event.id,
+                  name: event.name,
+                  result: {
+                    type: verification.value.passed ? "text" : "error",
+                    value: verification.value.passed ? "Praxis verification passed" : "Praxis verification failed",
+                  },
+                }),
+              )
+              return
+            }
+            if (commitment.commitment.type === "claim_proposal") {
+              const claim = yield* semantics.admitClaim(events, commitment.commitment.proposal).pipe(Effect.exit)
+              if (Exit.isFailure(claim)) {
+                yield* publish(
+                  LLMEvent.toolResult({
+                    id: event.id,
+                    name: event.name,
+                    result: { type: "error", value: `Claim admission rejected: ${String(Cause.squash(claim.cause))}` },
+                  }),
+                )
+                return
+              }
+              yield* publish(
+                LLMEvent.toolResult({
+                  id: event.id,
+                  name: event.name,
+                  result: { type: "text", value: "Claim admitted as supported evidence" },
+                }),
+              )
+              return
+            }
+            if (commitment.commitment.type !== "action_proposal") {
+              yield* publish(
+                LLMEvent.toolResult({
+                  id: event.id,
+                  name: event.name,
+                  result: { type: "error", value: "Only ACCP action commitments can enter the tool executor" },
+                }),
+              )
+              return
+            }
+            const authorizedAction = commitment.authorizedAction
+            if (!authorizedAction) {
+              yield* publish(
+                LLMEvent.toolResult({
+                  id: event.id,
+                  name: event.name,
+                  result: { type: "error", value: `ACCP action rejected: ${commitment.decision?.reason ?? "not authorized"}` },
+                }),
+              )
+              return
             }
 
             yield* Effect.uninterruptibleMask((restore) =>
@@ -308,6 +468,17 @@ const layer = Layer.effect(
                   action: authorizedAction,
                 }),
               ).pipe(
+                Effect.tap((settlement) => {
+                  if (!settlement.receipt) return Effect.void
+                  const receipt = settlement.receipt
+                  return withSemanticCommit(
+                    Effect.gen(function* () {
+                      yield* semantics.recordExecution(events, receipt)
+                      yield* semantics.recordObservation(events, receipt, receipt.outputSummary)
+                      yield* semantics.admitEvidence(events, receipt, receipt.capability, receipt.outputSummary)
+                    }),
+                  )
+                }),
                 Effect.flatMap((settlement) =>
                   publish(
                     LLMEvent.toolResult({
@@ -394,7 +565,10 @@ const layer = Layer.effect(
           if (stream._tag === "Failure") return yield* Effect.failCause(stream.cause)
           if (settled._tag === "Failure" && Cause.hasInterrupts(settled.cause))
             return yield* Effect.failCause(settled.cause)
-          return { needsContinuation: !publisher.hasProviderError() && needsContinuation, step: currentStep }
+          return {
+            needsContinuation: !completionAccepted && !publisher.hasProviderError() && needsContinuation,
+            step: currentStep,
+          }
         }),
       )
     }, Effect.scoped)

@@ -38,6 +38,7 @@ export interface Provider { id: string; name: string; models: string[]; configur
 export interface ModelCatalog { active_provider: string; active_model: string; providers: Provider[] }
 export interface HistoryEntry { id: string; prompt: string; status: string; revision?: number; created_at: string }
 export interface StepResponse { text: string; phase: RunPhase; revision: number }
+export interface GoalSummary { summary: string; obligations_created: number; graph_nodes: string[] }
 export interface Diff { status: string; text: string; files: string[] }
 export interface McpToolInfo { capability_id: string; tool_name: string; description: string; input_schema: unknown; is_verified_provider: boolean }
 export interface McpServerInfo { name: string; command: string; args: string[]; disabled: boolean; tools_count: number; tools: McpToolInfo[]; status: string }

@@ -100,14 +100,6 @@ export function parseProviderToolFrame(frame: ProviderToolFrame, scope: Scope): 
   }
 }
 
-/** Compatibility name for callers that already speak in cognitive actions. */
-export const CognitiveActionParser = {
-  parseProviderToolFrame,
-  parseFromToolCall(name: string, input: unknown, scope: Scope): CognitiveCommitment {
-    return parseProviderToolFrame({ id: "call", name, input }, scope)
-  },
-}
-
 function capabilityFor(name: string) {
   if (["read", "view_file", "grep", "find"].includes(name)) return "file.read"
   if (["edit", "write", "replace_file_content", "write_to_file"].includes(name)) return "file.write"

@@ -1,7 +1,9 @@
 import {
   type ClaimId,
+  type ActionId,
   type EpistemicStatus,
   type EvidenceId,
+  type InvocationId,
   type ObligationId,
   type ReceiptId,
   Revision,
@@ -60,7 +62,7 @@ export type InvocationReason =
   | "REVIEW_SEMANTICS"
 
 export interface ModelInvocationRecord {
-  readonly invocationId: ReceiptId
+  readonly invocationId: InvocationId
   readonly modelId: string
   readonly reason: InvocationReason
   readonly inputTokens: number
@@ -69,7 +71,21 @@ export interface ModelInvocationRecord {
   readonly timestamp: string
 }
 
+/** Mechanical output observed after an authorized action; not evidence or verification. */
+export interface Observation {
+  readonly observationId: string
+  readonly actionId: ActionId
+  readonly scope: Scope
+  readonly summary: string
+  readonly timestamp: string
+}
+
 export type NoesisEvent =
+  | {
+      readonly type: "goal_set"
+      readonly goal: string
+      readonly timestamp: string
+    }
   | {
       readonly type: "claim_asserted"
       readonly claimId: ClaimId
@@ -98,6 +114,10 @@ export type NoesisEvent =
       readonly type: "execution_recorded"
       readonly receipt: ExecutionReceipt
       readonly timestamp: string
+    }
+  | {
+      readonly type: "observation_recorded"
+      readonly observation: Observation
     }
   | {
       readonly type: "obligation_created"
@@ -162,6 +182,7 @@ export type NoesisEvent =
 
 export class HardState {
   revision: Revision = Revision.ZERO
+  goalDescription: string | null = null
   activeTaskId: TaskId | null = null
   readonly claims: Map<ClaimId, ClaimRecord> = new Map()
   readonly contradictions: Map<ClaimId, ContradictionRecord> = new Map()
@@ -171,6 +192,7 @@ export class HardState {
   readonly closedObligations: Map<ObligationId, ReceiptId> = new Map()
   readonly evidence: Map<EvidenceId, string> = new Map()
   readonly executionReceipts: ExecutionReceipt[] = []
+  readonly observations: Map<string, Observation> = new Map()
   readonly verificationReceipts: Map<ObligationId, VerificationReceipt> = new Map()
   readonly modelInvocations: ModelInvocationRecord[] = []
   readonly processErrorAttributions: ProcessErrorAttributionRecord[] = []
@@ -180,6 +202,10 @@ export class HardState {
     this.revision = this.revision.next()
 
     switch (event.type) {
+      case "goal_set": {
+        this.goalDescription = event.goal
+        break
+      }
       case "claim_asserted": {
         this.claims.set(event.claimId, {
           id: event.claimId,
@@ -256,6 +282,10 @@ export class HardState {
       }
       case "execution_recorded": {
         this.executionReceipts.push(event.receipt)
+        break
+      }
+      case "observation_recorded": {
+        this.observations.set(event.observation.observationId, event.observation)
         break
       }
       case "obligation_created": {
