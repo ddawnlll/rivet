@@ -127,14 +127,18 @@ Current status: the standalone `HarnessCore` runtime and its sidecar fixtures ar
 
 `packages/core/src/rivet/harness.ts`, `test/rivet/harness.test.ts`, and `test/rivet/e2e_cognitive_episodes.test.ts` were intentionally removed together. Those tests instantiated an independent in-memory semantic runtime and therefore could pass while the normal session runner bypassed Rivet. Their guarantees are not accepted as production evidence. The replacement tests must use `SessionRunner`, `ToolRegistry`, durable Session events and `SessionSemantics.load` so the ordinary product path is the tested Harness.
 
-## 10. Validity-Aware Bi-Temporal Epistemic Memory Architecture (Active Constitution)
+## 10. Validity-Aware Bi-Temporal Epistemic Memory Architecture (Audit & Migration Record)
 
-| Subsystem | Location | Invariants & Semantics | Status |
+| Subsystem Component | Location | Invariants & Semantics | Audited Status |
 |---|---|---|---|
-| `ValidityEngine` & `ValidityGraph` | `packages/core/src/rivet/validity.ts` | 3 Validity Barriers (Write-time, Change-time, Read-time), Reverse dependency lookups, Invalidation fan-out, Memory Frontier compilation | **COMPLETED & VERIFIED** |
-| `EpistemicStatus` & Bi-Temporal Revisions | `packages/core/src/rivet/types.ts` | `validFromRevision` vs `learnedAtRevision`, `ValidityPolicy` (Historical/Current/Derived/Procedural/Epistemic), `DependencyRef` discriminated union | **COMPLETED & VERIFIED** |
-| `HardState` & Noesis Replay | `packages/core/src/rivet/noesis.ts` | `claim_dirtied`, `claim_superseded`, `claim_invalidated`, `premise_conflict_detected` deterministic event sourcing | **COMPLETED & VERIFIED** |
-| `CognitiveViewCompiler` | `packages/core/src/rivet/view-compiler.ts` | Stage 1 Read-time barrier filtering (`DIRTY`/`STALE`/`SUPERSEDED` blocked from active claims), PremiseConflict detection, Proactive Memory Frontier | **COMPLETED & VERIFIED** |
-| Native Epistemic Queries & Dispatch | `packages/core/src/session/semantics.ts` + `packages/core/src/session/runner/llm.ts` | `getEpistemicState()`, `handleEnvironmentChanges()`, `query_epistemic_state` tool handling | **COMPLETED & VERIFIED** |
-| Invariant Test Suites | `packages/core/test/rivet/` | 21 test files, 82 unit/benchmark/scenario tests (including canonical Python → Rust migration scenario) | **100% PASS** |
+| **1. Validity-Aware Noesis Core** | `packages/core/src/rivet/validity.ts`, `types.ts`, `derived-state.ts` | 3 Validity Barriers (Write-time, Change-time, Read-time), `EpistemicStatus` (`dirty`, `stale`, `superseded`, `invalidated`), `ValidityPolicy` (including live `DERIVED_STATE` projections), Premise Conflict detection. Write-time adjudication strictly distinguishes deterministic temporal supersession from unresolved contradiction. | **PROVEN COMPLETE** |
+| **2. Persistence & Deterministic Replay** | `packages/core/src/rivet/noesis.ts`, `session/semantics.ts` | Bi-temporal metadata (`validFromRevision`, `validToRevision`, `learnedAtRevision`), dependency graph, supersession lineage, DIRTY states, and provenance references persist to Drizzle SQLite and deterministically reconstruct on restart. | **PROVEN COMPLETE** |
+| **3. Proactive MemoryFrontier** | `packages/core/src/rivet/view-compiler.ts`, `validity.ts` | First-class CognitiveView delivery: Active validated claims, historical episodic records, and rejected claims (for failure avoidance) compile directly into the prompt without requiring manual `query_epistemic_state` tool calls. | **PROVEN COMPLETE** |
+| **4. Slow Epistemic Maintenance** | `packages/core/src/rivet/maintenance.ts` | `EpistemicMaintenanceEngine` audits HardState for unresolved DIRTY claims, orphan file/claim dependencies, weak/missing provenance, and broken/cyclic supersessions, emitting non-authoritative `MaintenanceProposal`s rather than mutating state directly. | **PROVEN COMPLETE** |
+| **5. Associative Recall Store** | *Planned Substrate* | External dense vector embeddings and cross-session associative retrieval substrate. Retained strictly as an optional, rebuildable projection that can never mint evidence or override HardState authority. | **PLANNED / SEPARATE SUBSTRATE** |
+
+### Complexity Specification (Audited)
+- **Direct Reverse-Index Dependency Lookup:** $\mathcal{O}(K)$ where $K$ is the number of claims registered under the modified dependency key (`DependencyKey \to \text{Set}\langle\text{ClaimId}\rangle$).
+- **Transitive Dependency Invalidation Closure:** $\mathcal{O}(V + E)$ Breadth-First Search traversal over the dependency sub-graph, where $V$ is the number of reachable dependent claims and $E$ is the dependency edge count.
+- **CognitiveView Compilation:** $\mathcal{O}(N)$ linear scan over $N$ HardState claim records for eligibility filtering, premise conflict detection, and ranking.
 

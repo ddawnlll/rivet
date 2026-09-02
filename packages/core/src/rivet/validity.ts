@@ -328,50 +328,63 @@ export class ValidityEngine {
   /**
    * Write-Time Barrier: Evaluates new claim proposal against existing Hard State.
    * Distinguishes between legitimate temporal supersession and ambiguous contradiction.
+   * A mere contradiction against an active, valid claim does NOT arbitrarily supersede it.
    */
   static adjudicateWriteTime(
     hardState: HardState,
     proposal: ClaimProposal,
     validityPolicy: ValidityPolicy = "EPISTEMIC",
   ): WriteTimeAdjudicationResult {
-    // 1. Check if an existing active claim covers the same scope and subject
     for (const [existingId, existing] of hardState.claims) {
       if (existing.status === "rejected" || existing.status === "superseded") continue
 
-      const sameScope = existing.scope.repository === proposal.scope.repository &&
+      const sameScope =
+        existing.scope.repository === proposal.scope.repository &&
         existing.scope.pathPattern === proposal.scope.pathPattern
 
-      if (sameScope) {
-        // Normalize propositions for semantic comparison
-        const normProp = proposal.proposition.trim().toLowerCase()
-        const normExist = existing.proposition.trim().toLowerCase()
+      if (!sameScope) continue
 
-        // Check for direct replacement pattern (e.g. "Primary language is Rust" replacing "Primary language is Python")
-        const isLanguagePattern =
-          normProp.includes("primary implementation language is") &&
-          normExist.includes("primary implementation language is")
+      const normProp = proposal.proposition.trim().toLowerCase()
+      const normExist = existing.proposition.trim().toLowerCase()
 
-        const isArchitecturePattern =
-          normProp.startsWith("architecture:") && normExist.startsWith("architecture:")
+      if (normProp === normExist) {
+        // Re-asserting identical proposition with potentially fresh evidence
+        return { action: "admit" }
+      }
 
-        if (isLanguagePattern || isArchitecturePattern || normProp === normExist) {
-          if (normProp !== normExist) {
-            return {
-              action: "supersede",
-              supersededClaimId: existingId,
-            }
+      // Check if propositions conflict on the same property slot
+      const slotConflict = extractPropertySlotConflict(normProp, normExist)
+
+      // Check if propositions are logical negations/contradictions
+      const isDirectNegation =
+        (normProp.includes(" not ") && normProp.replace(/\bnot\s+/g, "") === normExist.replace(/\bnot\s+/g, "")) ||
+        (normExist.includes(" not ") && normExist.replace(/\bnot\s+/g, "") === normProp.replace(/\bnot\s+/g, ""))
+
+      if (slotConflict.hasConflict || isDirectNegation) {
+        // 1. DETERMINISTIC TEMPORAL SUPERSESSION:
+        // Allowed if:
+        // a) The existing claim was already marked DIRTY or STALE by the Change-Time Barrier, OR
+        // b) The new proposal provides fresh valid evidence and represents a functional slot update
+        if (existing.status === "dirty" || existing.status === "stale") {
+          return {
+            action: "supersede",
+            supersededClaimId: existingId,
           }
         }
 
-        // Check for explicit contradiction
-        if (
-          (normProp.includes(" not ") && normProp.replace(" not ", " ") === normExist) ||
-          (normExist.includes(" not ") && normExist.replace(" not ", " ") === normProp)
-        ) {
+        if (slotConflict.isFunctionalSlot && proposal.supportingEvidence.length > 0) {
           return {
-            action: "contradict",
-            contradictionReason: `Proposal '${proposal.proposition}' directly contradicts existing claim '${existing.proposition}'`,
+            action: "supersede",
+            supersededClaimId: existingId,
           }
+        }
+
+        // 2. UNRESOLVED CONTRADICTION:
+        // If existing claim is actively verified/supported (not dirty) and no dependency invalidation occurred,
+        // we must NOT arbitrarily supersede. It is an unresolved contradiction.
+        return {
+          action: "contradict",
+          contradictionReason: `Proposal '${proposal.proposition}' contradicts active valid claim '${existing.proposition}' (${existingId}) without prior dependency invalidation`,
         }
       }
     }
@@ -537,3 +550,42 @@ export class ValidityEngine {
     }
   }
 }
+
+function extractPropertySlotConflict(
+  normProp: string,
+  normExist: string,
+): { readonly hasConflict: boolean; readonly isFunctionalSlot: boolean } {
+  const functionalPrefixes = [
+    "primary implementation language is",
+    "primary language is",
+    "project language is",
+    "architecture:",
+    "build system is",
+    "framework:",
+    "default port is",
+    "database is",
+    "auth mechanism is",
+  ]
+
+  for (const prefix of functionalPrefixes) {
+    if (normProp.includes(prefix) && normExist.includes(prefix)) {
+      return {
+        hasConflict: normProp !== normExist,
+        isFunctionalSlot: true,
+      }
+    }
+  }
+
+  // Key-value or config pattern (e.g. "config.port is 8080" vs "config.port is 9090")
+  const kvMatchA = normProp.match(/^([a-z0-9_.-]+)\s*(?:=|:|is)\s*(.+)$/)
+  const kvMatchB = normExist.match(/^([a-z0-9_.-]+)\s*(?:=|:|is)\s*(.+)$/)
+  if (kvMatchA && kvMatchB && kvMatchA[1] === kvMatchB[1]) {
+    return {
+      hasConflict: kvMatchA[2] !== kvMatchB[2],
+      isFunctionalSlot: true,
+    }
+  }
+
+  return { hasConflict: false, isFunctionalSlot: false }
+}
+

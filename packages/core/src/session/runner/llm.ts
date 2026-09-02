@@ -277,40 +277,15 @@ const layer = Layer.effect(
         invocation: invocationID,
       }
       const gateEvaluation = ModelInvocationGate.evaluate(invocation)
-      // Rivet Identity Recovery: Inject when HardState has claims/evidence/hypotheses/conflicts or when gate requires diagnosis
       const hasMeaningfulRivetState =
         cognitiveView.activeClaims.length > 0 ||
         cognitiveView.recentEvidence.length > 0 ||
         cognitiveView.activeHypotheses.length > 0 ||
         cognitiveView.premiseConflicts.length > 0 ||
+        cognitiveView.contradictions.length > 0 ||
         gateEvaluation.reason === "STATE_CONTRADICTION" ||
         gateEvaluation.reason === "HYPOTHESIS_CONFLICT"
-      const rivetStateSystem = hasMeaningfulRivetState
-        ? [
-            `<RivetHardState revision=${cognitiveView.hardRevision.toJSON()}>`,
-            `Goal: ${cognitiveView.goalDescription}`,
-            ...(cognitiveView.premiseConflicts.length > 0
-              ? [
-                  `Premise Conflicts (${cognitiveView.premiseConflicts.length}):`,
-                  ...cognitiveView.premiseConflicts.map((pc) => `  - [PREMISE CONFLICT] User assumes: "${pc.userPremise}" vs Valid: "${pc.currentValidState}"`),
-                ]
-              : []),
-            `Open Obligations (${cognitiveView.openObligations.length}):`,
-            ...cognitiveView.openObligations.map((o) => `  - ${o}`),
-            `Active Valid Claims (${cognitiveView.activeClaims.length}):`,
-            ...cognitiveView.activeClaims.map((c) => `  - ${c.id}: ${c.proposition} [${c.status}]`),
-            `Recent Evidence (${cognitiveView.recentEvidence.length}):`,
-            ...cognitiveView.recentEvidence.map((e) => `  - ${e}`),
-            `Contradictions: ${cognitiveView.contradictions.join("; ") || "none"}`,
-            `</RivetHardState>`,
-            `<RivetSoftWorkspace>`,
-            `Focus: ${cognitiveView.activeFocus.join(", ") || "none"}`,
-            `Hypotheses (${cognitiveView.activeHypotheses.length}):`,
-            ...cognitiveView.activeHypotheses.map((h) => `  - ${h}`),
-            `Unknowns: ${cognitiveView.unknowns.join(", ") || "none"}`,
-            `</RivetSoftWorkspace>`,
-          ].join("\n")
-        : undefined
+      const rivetStateSystem = hasMeaningfulRivetState ? cognitiveView.formatPromptBlock() : undefined
       const request = LLM.request({
         model,
         http: {
