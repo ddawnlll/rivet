@@ -3435,7 +3435,7 @@ describe("SessionRunnerLLM", () => {
       expect(restarted.hardState.executionReceipts).toHaveLength(1)
       expect(restarted.hardState.observations.size).toBe(1)
       expect(restarted.hardState.evidence.size).toBe(1)
-      expect(restarted.cognitiveView({ repositoryId: "/project" }).recentEvidence).toHaveLength(1)
+      expect((yield* restarted.cognitiveView({ repositoryId: "/project" })).recentEvidence).toHaveLength(1)
     }),
   )
 

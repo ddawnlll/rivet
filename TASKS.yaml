@@ -228,8 +228,52 @@ tasks:
     acceptance:
       - "5-session long-horizon scenario with cluster refactor, process restart, and state recovery"
       - "Multi-trial empirical evaluation measuring Recall@5, Precision@5, latency, and zero stale leakage"
-      - "Cross-session Turn-1 automatic delivery without tool queries"
-    evidence: "packages/core/test/rivet/recall/long_horizon_campaign.test.ts, empirical_evaluation.test.ts, killer_e2e_cross_session.test.ts"
+  # PHASE 11 — EMBEDDED SURREALDB PRODUCTION RECALL MIGRATION
+  - id: "M11-001"
+    phase: 11
+    title: "Implement SurrealRecallStore with RocksDB, Native HNSW Vector & BM25 Indexes"
+    status: "DONE"
+    acceptance:
+      - "Embedded SurrealDB backend using official @surrealdb/node native engine with RocksDB persistence"
+      - "Native in-database HNSW vector indexing (<|k, 40|>) over cosine distance on Float32Array embeddings"
+      - "Native BM25 full-text indexing (@@ operator) with search::score() ranking"
+      - "Native typed graph relations (RELATE ->recall_relation->) and bounded multi-hop neighborhood traversal"
+      - "100% disposable and rebuildable from canonical Noesis HardState without touching epistemic state"
+    evidence: "packages/core/src/rivet/recall/surreal-store.ts, tested in test/rivet/recall/surreal_store.test.ts"
+  - id: "M11-002"
+    phase: 11
+    title: "Scale Stress Benchmark & Exhaustive SQLite Correctness Oracle (1k, 5k, 10k)"
+    status: "DONE"
+    acceptance:
+      - "SqliteRecallStore repurposed as deterministic exhaustive cosine reference oracle"
+      - "Comparative scale benchmarks executed across 1,000, 5,000, and 10,000 document corpora"
+      - "Measured ingestion throughput, latency breakdown (vector, lexical, hybrid), and disk footprint"
+      - "Measured ANN Recall@5 against exhaustive oracle (0.80 at 10k)"
+    evidence: "packages/core/test/rivet/recall/scale_benchmark.test.ts"
+  - id: "M11-003"
+    phase: 11
+    title: "10 Adversarial Scenarios & Symptom Collision Torture Suite against SurrealDB"
+    status: "DONE"
+    acceptance:
+      - "10 adversarial scenarios: symptom collision (mutex vs redis pool), symbol collision, foreign scope, stale memory vector trap, failure avoidance, contradictory decisions, orthogonal graph distractor, isolated vector, degraded mode, corrupt index recovery"
+      - "Zero leakage of stale or superseded authority into active MemoryFrontier"
+    evidence: "packages/core/test/rivet/recall/surreal_adversarial.test.ts"
+  - id: "M11-004"
+    phase: 11
+    title: "Cross-Session Production E2E with Persistent RocksDB and Process Restart"
+    status: "DONE"
+    acceptance:
+      - "Cross-session auth bug recovery with process termination and state recovery"
+      - "Turn-1 automatic episode, decision, and rejected approach delivery into CognitiveView without tool queries"
+    evidence: "packages/core/test/rivet/recall/killer_e2e_cross_session.test.ts, surreal_store.test.ts"
+  - id: "M11-005"
+    phase: 11
+    title: "Constitutional Governance & Architecture Documentation Update"
+    status: "DONE"
+    acceptance:
+      - "Update site/index.html to document SurrealDB as production associative recall default and SQLite as reference oracle"
+      - "Update MIGRATION.md Section 12 with honest empirical scale benchmark data and audited component classifications"
+    evidence: "site/index.html, MIGRATION.md, TASKS.yaml"
 
 
 

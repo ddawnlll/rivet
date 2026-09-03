@@ -16,6 +16,13 @@ import { AssociativeRetrievalEngine, type RetrievalWeights, DEFAULT_RETRIEVAL_WE
 import { NoesisRecallProjector } from "./projector"
 import { Revision, Scope, createWorkspaceId } from "../types"
 
+/**
+ * SqliteRecallStore serves exclusively as a DETERMINISTIC REFERENCE ORACLE and compatibility fallback.
+ * It uses SQLite FTS5 for lexical matching and linear brute-force cosine scanning over BLOB float arrays
+ * to provide an exhaustive ground-truth baseline against which approximate ANN retrieval is measured.
+ *
+ * NOT for primary production vector recall (use SurrealRecallStore).
+ */
 export class SqliteRecallStore implements RecallStore {
   private db: BunSqlite
 

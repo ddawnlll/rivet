@@ -494,56 +494,55 @@ export class SessionSemantics {
     readonly scope?: Scope
     readonly tokenBudget?: number
     readonly mode?: RepresentationMode
-  }) {
-    let memoryFrontier: MemoryFrontier | undefined
-    if (input.userPrompt) {
-      const recallEffect = AutomaticRecallAdmissionHook.admitRecall({
-        hardState: this.hardState,
-        recallStore: this.recallStore,
-        userPrompt: input.userPrompt,
-        goalDescription: input.goalDescription ?? this.hardState.goalDescription ?? "Continue the current goal",
-        repositoryId: input.repositoryId,
-        focusSymbols: input.focusSymbols,
-      })
-      const result = Effect.runSyncExit(recallEffect)
-      if (result._tag === "Success") {
-        memoryFrontier = result.value
+  }): Effect.Effect<CognitiveView> {
+    const self = this
+    return Effect.gen(function* () {
+      let memoryFrontier: MemoryFrontier | undefined
+      if (input.userPrompt) {
+        memoryFrontier = yield* AutomaticRecallAdmissionHook.admitRecall({
+          hardState: self.hardState,
+          recallStore: self.recallStore,
+          userPrompt: input.userPrompt,
+          goalDescription: input.goalDescription ?? self.hardState.goalDescription ?? "Continue the current goal",
+          repositoryId: input.repositoryId,
+          focusSymbols: input.focusSymbols,
+        }).pipe(Effect.orElseSucceed(() => undefined))
       }
-    }
 
-    const compiled = CognitiveViewCompiler.compile({
-      hardState: this.hardState,
-      softWorkspace: this.softWorkspace,
-      goalDescription: input.goalDescription ?? this.hardState.goalDescription ?? "Continue the current goal",
-      repositoryId: input.repositoryId,
-      userPrompt: input.userPrompt,
-      currentEnvironmentLanguage: input.currentEnvironmentLanguage,
-      relevantFiles: input.relevantFiles,
-      repositorySignals: input.repositorySignals,
-      focusSymbols: input.focusSymbols,
-      memoryFrontier,
-      scope: input.scope,
-      tokenBudget: input.tokenBudget ?? 4000,
-      mode: input.mode ?? "HYBRID",
-    })
+      const compiled = CognitiveViewCompiler.compile({
+        hardState: self.hardState,
+        softWorkspace: self.softWorkspace,
+        goalDescription: input.goalDescription ?? self.hardState.goalDescription ?? "Continue the current goal",
+        repositoryId: input.repositoryId,
+        userPrompt: input.userPrompt,
+        currentEnvironmentLanguage: input.currentEnvironmentLanguage,
+        relevantFiles: input.relevantFiles,
+        repositorySignals: input.repositorySignals,
+        focusSymbols: input.focusSymbols,
+        memoryFrontier,
+        scope: input.scope,
+        tokenBudget: input.tokenBudget ?? 4000,
+        mode: input.mode ?? "HYBRID",
+      })
 
-    return new CognitiveView({
-      hardRevision: compiled.hardRevision,
-      repositoryId: compiled.repositoryId,
-      goalDescription: compiled.goalDescription,
-      activeClaims: [...compiled.activeClaims],
-      contradictions: compiled.contradictions.map((item) => `${item.claimId}: ${item.reason}`),
-      rejectedClaims: compiled.rejectedClaims.map((item) => `${item.claimId}: ${item.reason}`),
-      openObligations: compiled.openObligations.map(([id, description]) => `${id}: ${description}`),
-      recentEvidence: compiled.recentEvidence.map(([id, source, summary]) => `${id} [${source}]: ${summary}`),
-      repositorySignals: [...compiled.repositorySignals],
-      unknowns: [...compiled.unknowns],
-      activeHypotheses: [...compiled.hypotheses],
-      activeFocus: [...compiled.activeFocus],
-      relevantFiles: [...compiled.relevantFiles],
-      premiseConflicts: [...compiled.premiseConflicts],
-      memoryFrontier: compiled.memoryFrontier,
-      tokenBudgetHint: compiled.omittedSummary.tokenBudget,
+      return new CognitiveView({
+        hardRevision: compiled.hardRevision,
+        repositoryId: compiled.repositoryId,
+        goalDescription: compiled.goalDescription,
+        activeClaims: [...compiled.activeClaims],
+        contradictions: compiled.contradictions.map((item) => `${item.claimId}: ${item.reason}`),
+        rejectedClaims: compiled.rejectedClaims.map((item) => `${item.claimId}: ${item.reason}`),
+        openObligations: compiled.openObligations.map(([id, description]) => `${id}: ${description}`),
+        recentEvidence: compiled.recentEvidence.map(([id, source, summary]) => `${id} [${source}]: ${summary}`),
+        repositorySignals: [...compiled.repositorySignals],
+        unknowns: [...compiled.unknowns],
+        activeHypotheses: [...compiled.hypotheses],
+        activeFocus: [...compiled.activeFocus],
+        relevantFiles: [...compiled.relevantFiles],
+        premiseConflicts: [...compiled.premiseConflicts],
+        memoryFrontier: compiled.memoryFrontier,
+        tokenBudgetHint: compiled.omittedSummary.tokenBudget,
+      })
     })
   }
 }

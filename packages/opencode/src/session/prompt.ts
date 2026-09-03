@@ -1138,7 +1138,7 @@ const layer = Layer.effect(
             .map((part) => part.text)
             .join("\n")
           if (goal) yield* semantics.ensureGoal(events, goal, session.directory)
-          const cognitiveView = semantics.cognitiveView({
+          const cognitiveView = yield* semantics.cognitiveView({
             repositoryId: session.directory,
             goalDescription: semantics.hardState.goalDescription ?? goal,
           })

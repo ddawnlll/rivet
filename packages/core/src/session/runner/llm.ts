@@ -264,7 +264,7 @@ const layer = Layer.effect(
           ]
       const invocationID = createInvocationId(`${session.id}:${currentStep}`)
       yield* semantics.recordInvocation(events, invocationID, model.id)
-      const cognitiveView = semantics.cognitiveView({
+      const cognitiveView = yield* semantics.cognitiveView({
         repositoryId: session.location.directory,
         goalDescription: semantics.hardState.goalDescription ?? goal,
         userPrompt: goal,

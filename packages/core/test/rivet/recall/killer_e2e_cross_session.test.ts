@@ -39,7 +39,7 @@ import { Effect, Layer, Schema, Stream } from "effect"
 import { testEffect } from "../../lib/effect"
 import { createClaimId, createEvidenceId } from "../../../src/rivet/types"
 import { CognitiveView } from "../../../src/rivet/noesis"
-import { InMemoryRecallStore, DeterministicHashEmbeddingProvider } from "../../../src/rivet/recall"
+import { SurrealRecallStore, DeterministicHashEmbeddingProvider } from "../../../src/rivet/recall"
 
 const requests: LLMRequest[] = []
 let response: LLMEvent[] = []
@@ -162,8 +162,8 @@ const it = testEffect(
   ),
 )
 
-// Global shared recall store across sessions
-const globalRecallStore = new InMemoryRecallStore(new DeterministicHashEmbeddingProvider(128))
+// Global shared recall store across sessions backed by embedded SurrealDB
+const globalRecallStore = new SurrealRecallStore("mem://", new DeterministicHashEmbeddingProvider(128))
 
 describe("Associative Recall Killer E2E: Cross-Session Automatic Recall on Turn 1", () => {
   it.effect("Session 1 learns auth bug -> Session 5 automatically receives prior episode, rejected hypothesis & decision on Turn 1 without tool queries", () =>
