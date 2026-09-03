@@ -896,7 +896,7 @@ export class Noesis {
         }
       } else if (canonicalClaim.status === "rejected") {
         role = "rejected"
-      } else if (canonicalClaim.status === "stale" || canonicalClaim.status === "dirty") {
+      } else if (canonicalClaim.status === "stale" || canonicalClaim.status === "dirty" || canonicalClaim.status === "superseded") {
         role = "superseded"
       } else {
         role = "episodic"

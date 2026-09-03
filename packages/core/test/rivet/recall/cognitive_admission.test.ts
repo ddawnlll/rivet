@@ -216,4 +216,82 @@ describe("Noesis Cognitive Admission Policy & Epistemic-Temporal Gatekeeper", ()
     const admittedFix = frontier.episodic.find((m) => m.id === "mem_c2_s1_leak")
     expect(admittedFix).toBeDefined()
   })
+
+  it("Architecture Migration: Python to Rust migration suppresses legacy Python asyncio memories in implementation", () => {
+    const hardState = new HardState()
+
+    // Rev 10: Python architecture (superseded at Rev 50)
+    hardState.claims.set("claim_lang_py" as any, {
+      id: "claim_lang_py" as any,
+      proposition: "Core engine runs on Python 3.11 with asyncio event loop",
+      status: "superseded",
+      supersededBy: "claim_lang_rust" as any,
+      validityPolicy: "EPISTEMIC",
+      validFromRevision: Revision.from(10),
+      validToRevision: Revision.from(50),
+      learnedAtRevision: Revision.from(10),
+      dependencies: [],
+      dependsOn: [],
+      supportingEvidence: [],
+      scope,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    })
+
+    // Rev 50: Rust architecture (current verified truth)
+    hardState.claims.set("claim_lang_rust" as any, {
+      id: "claim_lang_rust" as any,
+      proposition: "Core engine is completely rewritten in Rust with Tokio async runtime and zero-cost abstractions",
+      status: "verified",
+      validityPolicy: "EPISTEMIC",
+      validFromRevision: Revision.from(50),
+      learnedAtRevision: Revision.from(50),
+      dependencies: [],
+      dependsOn: [],
+      supportingEvidence: [],
+      scope,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    })
+
+    const candidatePy = {
+      id: "mem_py_concurrency",
+      sourceRefs: ["claim_lang_py"],
+      content: "Use Python threading and asyncio.gather for concurrent worker execution",
+      score: 0.88,
+      revision: Revision.from(10),
+      relatedSymbols: ["asyncio", "gather"],
+    }
+
+    const candidateRust = {
+      id: "mem_rust_concurrency",
+      sourceRefs: ["claim_lang_rust"],
+      content: "Core engine is completely rewritten in Rust with Tokio async runtime and zero-cost abstractions",
+      score: 0.95,
+      revision: Revision.from(50),
+      relatedSymbols: ["tokio", "spawn"],
+    }
+
+    const ctxImpl = {
+      hardState,
+      taskPhase: "implementation" as TaskPhase,
+      currentRevision: Revision.from(100),
+      scope,
+      activeSymbols: ["tokio", "spawn"],
+    }
+
+    // In implementation phase: Python memory MUST be SUPPRESSED
+    const decPy = Noesis.admitMemory(candidatePy, ctxImpl)
+    expect(decPy.kind).toBe("SUPPRESS")
+    if (decPy.kind === "SUPPRESS") {
+      expect(decPy.reason).toContain("Superseded architectural facts are suppressed during implementation")
+    }
+
+    // In implementation phase: Rust memory MUST be ADMITTED with verified status
+    const decRust = Noesis.admitMemory(candidateRust, ctxImpl)
+    expect(decRust.kind).toBe("ADMIT_CURRENT")
+    if (decRust.kind === "ADMIT_CURRENT") {
+      expect(decRust.ref.status).toBe("verified")
+    }
+  })
 })
