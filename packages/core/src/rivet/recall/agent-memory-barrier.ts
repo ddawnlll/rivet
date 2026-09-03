@@ -12,6 +12,12 @@ export interface AgentRecallAdmissionContext {
 
 export function inferTaskPhase(query: MemoryQuery): TaskPhase {
   const text = `${query.prompt} ${query.goal}`.toLowerCase()
+  if (text.includes("orient") || text.includes("overview") || text.includes("onboard") || text.includes("explain repo") || text.includes("explain architecture")) {
+    return "orientation"
+  }
+  if (text.includes("plan") || text.includes("rfc") || text.includes("roadmap") || text.includes("design spec")) {
+    return "planning"
+  }
   if (text.includes("brainstorm") || text.includes("hypothes") || text.includes("explore possible")) {
     return "brainstorming"
   }
@@ -40,7 +46,7 @@ export function inferTaskPhase(query: MemoryQuery): TaskPhase {
  *
  * Invariants Enforced:
  * 1. Retrievable != Admissible
- * 2. Memory engine cannot report authority; authority is derived via HardState canonical lookup.
+ * 2. Memory engine cannot report authority; authority is derived strictly via canonical sourceRefs in HardState.
  * 3. Memory candidates never mint "verified" status.
  * 4. SoftWorkspace provisional hypotheses are strictly SUPPRESSED during active diagnosis & implementation.
  * 5. Long-term memory (H2/H3) requires stronger evidence or matching active symbols.
@@ -64,13 +70,15 @@ export class AgentMemoryValidityBarrier {
           }
         }
 
+        const candidateSourceRefs = candidate.metadata?.sourceRefs as string[] | undefined
+
         // Delegate to Noesis Cognitive Admission Policy
         const decision = Noesis.admitMemory(
           {
             id: candidate.id,
             content: candidate.content,
             score: candidate.score,
-            sourceRefs: (candidate.metadata?.sourceRefs as string[]) ?? [candidate.id],
+            sourceRefs: candidateSourceRefs ?? [],
             proposedKind: candidate.kind,
             revision: candidate.revision,
             scope: candidate.scope,

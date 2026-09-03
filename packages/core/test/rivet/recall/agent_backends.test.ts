@@ -23,6 +23,7 @@ describe("Rivet Agent Memory Backends: Hindsight & agentmemory Adapters with Val
       scope,
       timestamp: 1000,
       relatedSymbols: ["rpcAuth", "spiffeToken"],
+      metadata: { sourceRefs: ["mem_hard_1"] },
     },
     {
       id: "mem_rej_2",

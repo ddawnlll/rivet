@@ -242,6 +242,15 @@ export type NoesisEvent =
       readonly timestamp: string
     }
 
+export interface ArchitectureEpoch {
+  readonly id: string
+  readonly name: string
+  readonly startRevision: Revision
+  readonly endRevision?: Revision
+  readonly primaryLanguage?: string
+  readonly description?: string
+}
+
 export class HardState {
   revision: Revision = Revision.ZERO
   goalDescription: string | null = null
@@ -261,6 +270,33 @@ export class HardState {
   readonly completedTasks: Map<TaskId, ReceiptId> = new Map()
   readonly validityGraph: ValidityGraph = new ValidityGraph()
   readonly premiseConflicts: PremiseConflict[] = []
+  readonly epochs: Map<string, ArchitectureEpoch> = new Map()
+  currentEpochId?: string
+
+  recordEpoch(epoch: ArchitectureEpoch): void {
+    this.epochs.set(epoch.id, epoch)
+    if (!epoch.endRevision || epoch.endRevision.value >= this.revision.value) {
+      this.currentEpochId = epoch.id
+    }
+  }
+
+  getEpochForRevision(rev: Revision): ArchitectureEpoch | undefined {
+    for (const epoch of this.epochs.values()) {
+      if (rev.value >= epoch.startRevision.value) {
+        if (!epoch.endRevision || rev.value <= epoch.endRevision.value) {
+          return epoch
+        }
+      }
+    }
+    return undefined
+  }
+
+  getActiveEpoch(): ArchitectureEpoch | undefined {
+    if (this.currentEpochId) {
+      return this.epochs.get(this.currentEpochId)
+    }
+    return this.getEpochForRevision(this.revision)
+  }
 
   apply(event: NoesisEvent): void {
     this.revision = this.revision.next()
@@ -808,7 +844,13 @@ export class CognitiveView {
 
 export type MemoryHorizon = "H0_IMMEDIATE" | "H1_RECENT" | "H2_LONG_TERM" | "H3_ARCHIVE"
 
-export type TaskPhase = "diagnosis" | "implementation" | "brainstorming" | "verification"
+export type TaskPhase =
+  | "orientation"
+  | "diagnosis"
+  | "planning"
+  | "implementation"
+  | "verification"
+  | "brainstorming"
 
 export type EpistemicRole =
   | "authoritative"
@@ -851,37 +893,51 @@ export type MemoryAdmissionDecision =
 export class Noesis {
   /**
    * Evaluates an associative memory candidate against canonical HardState,
-   * temporal horizon, task phase, and epistemic risk policy.
+   * architecture epoch, temporal horizon, task phase, and epistemic risk policy.
    *
    * Invariants:
    * 1. Retrievable != Admissible
-   * 2. Memory engine cannot report authority; authority is derived via HardState lookup.
+   * 2. Memory engine cannot report authority; authority is derived exclusively via canonical sourceRefs in HardState.
    * 3. Memory candidates never mint "verified" status out of thin air.
-   * 4. SoftWorkspace provisional hypotheses are SUPPRESSED during diagnosis and implementation.
-   * 5. Long-term memory (H2/H3) requires stronger evidence or explicit symbol match.
+   * 4. SoftWorkspace provisional hypotheses are SUPPRESSED during orientation, planning, diagnosis, and implementation.
+   * 5. Long-term memory (H2/H3 or cross-epoch) requires stronger evidence or explicit symbol match.
    */
   static admitMemory(
     candidate: NoesisAdmissionCandidate,
     context: CognitiveAdmissionContext
   ): MemoryAdmissionDecision {
-    // 1. Calculate Temporal Horizon
+    // 1. Calculate Horizon: Architecture Epoch + Revision Distance
     let horizon: MemoryHorizon = "H2_LONG_TERM"
-    if (candidate.revision && context.currentRevision) {
-      const deltaRev = Number(context.currentRevision.value - candidate.revision.value)
-      if (deltaRev <= 1) {
-        horizon = "H0_IMMEDIATE"
-      } else if (deltaRev <= 15) {
-        horizon = "H1_RECENT"
-      } else if (deltaRev <= 60) {
+    const currentRev = context.currentRevision
+    const candRev = candidate.revision
+
+    if (candRev && currentRev) {
+      const candidateEpoch = context.hardState.getEpochForRevision(candRev)
+      const currentEpoch = context.hardState.getActiveEpoch() ?? context.hardState.getEpochForRevision(currentRev)
+
+      if (candidateEpoch && currentEpoch && candidateEpoch.id !== currentEpoch.id) {
+        // CROSS-EPOCH MEMORY: Crossing an architecture epoch boundary forces historical archive status!
+        // Even if commit distance is small, crossing an epoch is a deep epistemic gulf.
         horizon = "H2_LONG_TERM"
       } else {
-        horizon = "H3_ARCHIVE"
+        // Same epoch: evaluate revision delta
+        const deltaRev = Number(currentRev.value - candRev.value)
+        if (deltaRev <= 1) {
+          horizon = "H0_IMMEDIATE"
+        } else if (deltaRev <= 15) {
+          horizon = "H1_RECENT"
+        } else if (deltaRev <= 60) {
+          horizon = "H2_LONG_TERM"
+        } else {
+          horizon = "H3_ARCHIVE"
+        }
       }
     }
 
-    // 2. Canonical HardState Lookup via sourceRefs or id
-    const candidateId = candidate.sourceRefs?.[0] ?? candidate.id
-    const canonicalClaim = context.hardState.claims.get(candidateId as any)
+    // 2. Canonical HardState Lookup via mandatory sourceRefs (NO candidate.id fallback!)
+    const sourceRefs = candidate.sourceRefs ?? []
+    const canonicalClaimId = sourceRefs[0]
+    const canonicalClaim = canonicalClaimId ? context.hardState.claims.get(canonicalClaimId as any) : undefined
 
     let role: EpistemicRole = "episodic"
     if (canonicalClaim) {
@@ -903,6 +959,8 @@ export class Noesis {
       }
     } else {
       // Non-claim metadata classification
+      // CRITICAL INVARIANT: A candidate without canonical sourceRefs resolving to a verified claim
+      // CAN NEVER BE ADMITTED AS AUTHORITATIVE, even if candidate metadata claims authority === "authoritative"!
       if (
         candidate.proposedKind === "soft_hypothesis" ||
         candidate.proposedKind === "soft_unknown" ||
@@ -938,7 +996,13 @@ export class Noesis {
 
     // RULE 1: Provisional SoftWorkspace Hypotheses
     if (role === "provisional") {
-      if (context.taskPhase === "diagnosis" || context.taskPhase === "implementation" || context.taskPhase === "verification") {
+      if (
+        context.taskPhase === "diagnosis" ||
+        context.taskPhase === "implementation" ||
+        context.taskPhase === "verification" ||
+        context.taskPhase === "orientation" ||
+        context.taskPhase === "planning"
+      ) {
         return {
           kind: "SUPPRESS",
           reason: `Provisional SoftWorkspace hypotheses are strictly suppressed during ${context.taskPhase} to prevent cognitive anchoring.`,
@@ -976,7 +1040,11 @@ export class Noesis {
 
     // RULE 3: Superseded / Historical Only
     if (role === "superseded") {
-      if (context.taskPhase === "implementation" || context.taskPhase === "verification") {
+      if (
+        context.taskPhase === "implementation" ||
+        context.taskPhase === "verification" ||
+        context.taskPhase === "orientation"
+      ) {
         return {
           kind: "SUPPRESS",
           reason: `Superseded architectural facts are suppressed during ${context.taskPhase} to prevent regressions.`,
