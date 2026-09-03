@@ -262,7 +262,7 @@ export class CognitiveViewCompiler {
         object: claim.proposition,
       })
 
-      for (const evidId of claim.supportingEvidence) {
+      for (const evidId of (claim.supportingEvidence ?? [])) {
         triples.push({
           subject: `Claim#${claim.id}`,
           predicate: "supported_by",
