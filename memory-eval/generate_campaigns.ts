@@ -1,0 +1,735 @@
+import fs from "fs"
+import path from "path"
+
+const CAMPAIGNS_DIR = "/Users/hootie/src/rivet/memory-eval/campaigns"
+const MANIFEST_PATH = "/Users/hootie/src/rivet/memory-eval/DATASET_MANIFEST.json"
+
+// Helper to build realistic 12-session campaigns
+function buildCampaign(id: string, repo: string, name: string, desc: string, sessionTemplates: any[]) {
+  return {
+    campaignId: id,
+    repository: repo,
+    name,
+    description: desc,
+    totalSessions: sessionTemplates.length,
+    sessions: sessionTemplates.map((tmpl, idx) => ({
+      sessionIndex: idx + 1,
+      ...tmpl,
+    })),
+  }
+}
+
+// Campaign 1: Gateway & Distributed Authentication
+const c1Sessions = [
+  {
+    sessionTitle: "Fix Token Refresh Race Condition",
+    taskType: "bugfix",
+    prompt: "Users report 504 gateway timeouts during auth token refresh under peak traffic. Investigate src/auth/token.ts and propose concurrency fix.",
+    goal: "Resolve auth token refresh race condition",
+    scope: { repo: "gateway-core", path: "src/auth/token.ts", rev: 10 },
+    activeSymbols: ["refreshToken", "tokenMutex", "acquireLock"],
+    accumulatedHardState: [
+      { id: "claim_c1_s1", prop: "Token refresh requires double-checked locking with pendingPromise cache", status: "verified", rev: 10 }
+    ],
+    accumulatedSoftWorkspace: [
+      { id: "soft_c1_s1_hyp", text: "Hypothesis: Maybe redis connection pool timeout is causing 504s", status: "abandoned" }
+    ],
+    newMemoryRecords: [
+      { id: "mem_c1_s1_fix", kind: "episode", authority: "authoritative", content: "Resolved token refresh 504 timeout via double-checked locking and pendingPromise cache.", rev: 10, symbols: ["refreshToken", "tokenMutex"] },
+      { id: "mem_c1_s1_soft_leak", kind: "soft_hypothesis", authority: "provisional", content: "Provisional hypothesis: Redis connection pool timeout might be causing token delays", rev: 10, symbols: ["redisPool", "tokenTimeout"] }
+    ],
+    groundTruthLabels: {
+      MUST_RECALL: ["mem_c1_s1_fix"],
+      USEFUL: [],
+      DANGEROUS_DISTRACTOR: [],
+      MUST_NOT_TREAT_CURRENT: ["mem_c1_s1_soft_leak"],
+      PROVISIONAL: ["mem_c1_s1_soft_leak"],
+      REJECTED: [],
+      SUPERSEDED: []
+    },
+    expectedKeywords: ["double-checked", "pendingpromise", "mutex", "lock"],
+    anchoringTrapKeywords: [],
+    rejectedApproachKeywords: [],
+    softLeakageKeywords: ["redis connection pool is causing the token refresh timeout"]
+  },
+  {
+    sessionTitle: "Add Sliding Window Rate Limiter",
+    taskType: "feature",
+    prompt: "Add public HTTP rate limiting to gateway endpoints with 100 requests per minute quota per IP.",
+    goal: "Implement public HTTP rate limiting",
+    scope: { repo: "gateway-core", path: "src/limiter/rate.ts", rev: 20 },
+    activeSymbols: ["rateLimiter", "slidingWindow", "tokenBucket"],
+    accumulatedHardState: [
+      { id: "claim_c1_s2", prop: "Public HTTP rate limiting is set to 100 req/min per IP using Redis sliding window", status: "verified", rev: 20 }
+    ],
+    accumulatedSoftWorkspace: [
+      { id: "soft_c1_s2_todo", text: "TODO: Investigate internal metrics sampling limiter", status: "open" }
+    ],
+    newMemoryRecords: [
+      { id: "mem_c1_s2_limiter", kind: "decision", authority: "authoritative", content: "Configured public HTTP rate limiter with 100 requests per minute per IP using Redis sliding window.", rev: 20, symbols: ["rateLimiter", "slidingWindow"] }
+    ],
+    groundTruthLabels: {
+      MUST_RECALL: ["mem_c1_s2_limiter"],
+      USEFUL: [],
+      DANGEROUS_DISTRACTOR: [],
+      MUST_NOT_TREAT_CURRENT: [],
+      PROVISIONAL: [],
+      REJECTED: [],
+      SUPERSEDED: []
+    },
+    expectedKeywords: ["100", "sliding window", "ip", "minute"],
+    anchoringTrapKeywords: [],
+    rejectedApproachKeywords: [],
+    softLeakageKeywords: []
+  },
+  {
+    sessionTitle: "Debug Rate Limiter Lock Contention",
+    taskType: "regression",
+    prompt: "Under load testing, rate limiter latency spiked to 400ms due to single Redis key serialization. How to optimize?",
+    goal: "Optimize rate limiter lock contention",
+    scope: { repo: "gateway-core", path: "src/limiter/rate.ts", rev: 30 },
+    activeSymbols: ["rateLimiter", "redisKey", "pipelineBatch"],
+    accumulatedHardState: [
+      { id: "claim_c1_s3", prop: "Rate limiter uses client-side pipeline batching to avoid single-key locks", status: "verified", rev: 30 }
+    ],
+    accumulatedSoftWorkspace: [],
+    newMemoryRecords: [
+      { id: "mem_c1_s3_batch", kind: "procedure", authority: "authoritative", content: "Optimized rate limiter: use client-side pipeline batching with non-blocking evalsha to reduce Redis roundtrips.", rev: 30, symbols: ["pipelineBatch", "evalsha"] }
+    ],
+    groundTruthLabels: {
+      MUST_RECALL: ["mem_c1_s3_batch"],
+      USEFUL: [],
+      DANGEROUS_DISTRACTOR: [],
+      MUST_NOT_TREAT_CURRENT: [],
+      PROVISIONAL: [],
+      REJECTED: [],
+      SUPERSEDED: []
+    },
+    expectedKeywords: ["pipeline", "batch", "evalsha", "roundtrip"],
+    anchoringTrapKeywords: [],
+    rejectedApproachKeywords: [],
+    softLeakageKeywords: []
+  },
+  {
+    sessionTitle: "Evaluate In-Memory Atomics for Rate Limiter",
+    taskType: "rejected_approach",
+    prompt: "Developer asks: 'Can we replace Redis with local SharedArrayBuffer in-memory atomics across our Kubernetes pods for speed?'",
+    goal: "Evaluate in-memory atomics for multi-node rate limiting",
+    scope: { repo: "gateway-core", path: "src/limiter/rate.ts", rev: 40 },
+    activeSymbols: ["rateLimiter", "atomics", "sharedArrayBuffer"],
+    accumulatedHardState: [
+      { id: "claim_c1_s4_rej", prop: "In-memory atomics rejected: memory is not shared across multi-node pod replicas", status: "rejected", rev: 40 }
+    ],
+    accumulatedSoftWorkspace: [],
+    newMemoryRecords: [
+      { id: "mem_c1_s4_rej", kind: "rejected_approach", authority: "rejected", content: "REJECTED APPROACH: In-memory atomics (Atomics.wait / SharedArrayBuffer) failed completely across Kubernetes cluster because memory is isolated per pod, causing 5x quota overages.", rev: 40, symbols: ["atomics", "sharedArrayBuffer"] }
+    ],
+    groundTruthLabels: {
+      MUST_RECALL: ["mem_c1_s4_rej"],
+      USEFUL: [],
+      DANGEROUS_DISTRACTOR: [],
+      MUST_NOT_TREAT_CURRENT: ["mem_c1_s4_rej"],
+      PROVISIONAL: [],
+      REJECTED: ["mem_c1_s4_rej"],
+      SUPERSEDED: []
+    },
+    expectedKeywords: ["cannot use local", "rejected", "isolated per pod", "not shared across pods", "distributed"],
+    anchoringTrapKeywords: [],
+    rejectedApproachKeywords: ["yes, in-memory atomics are recommended", "use sharedarraybuffer on each pod"],
+    softLeakageKeywords: []
+  },
+  {
+    sessionTitle: "Upgrade JWT Library & Header Format",
+    taskType: "feature",
+    prompt: "Upgrade jsonwebtoken dependency and enforce Ed25519 asymmetric signatures on token verification.",
+    goal: "Enforce Ed25519 token signatures",
+    scope: { repo: "gateway-core", path: "src/auth/jwt.ts", rev: 50 },
+    activeSymbols: ["jwtVerify", "ed25519", "keyRotation"],
+    accumulatedHardState: [
+      { id: "claim_c1_s5", prop: "JWT signatures must strictly use Ed25519 asymmetric keys", status: "verified", rev: 50 }
+    ],
+    accumulatedSoftWorkspace: [],
+    newMemoryRecords: [
+      { id: "mem_c1_s5_ed25519", kind: "decision", authority: "authoritative", content: "Mandated Ed25519 asymmetric key signatures for all internal microservice JWT tokens.", rev: 50, symbols: ["ed25519", "jwtVerify"] }
+    ],
+    groundTruthLabels: {
+      MUST_RECALL: ["mem_c1_s5_ed25519"],
+      USEFUL: [],
+      DANGEROUS_DISTRACTOR: [],
+      MUST_NOT_TREAT_CURRENT: [],
+      PROVISIONAL: [],
+      REJECTED: [],
+      SUPERSEDED: []
+    },
+    expectedKeywords: ["ed25519", "asymmetric", "signature"],
+    anchoringTrapKeywords: [],
+    rejectedApproachKeywords: [],
+    softLeakageKeywords: []
+  },
+  {
+    sessionTitle: "Major Refactor: Relocate Auth to Security Package",
+    taskType: "refactor",
+    prompt: "Refactor codebase: move authentication files from src/auth/ into packages/security/src/token.ts. Where should new token logic live?",
+    goal: "Relocate auth modules to security package",
+    scope: { repo: "gateway-core", path: "packages/security/src/token.ts", rev: 60 },
+    activeSymbols: ["verifyToken", "refreshToken", "securityPackage"],
+    accumulatedHardState: [
+      { id: "claim_c1_s6_refactor", prop: "Token verification relocated from src/auth/ to packages/security/src/token.ts", status: "verified", rev: 60 }
+    ],
+    accumulatedSoftWorkspace: [],
+    newMemoryRecords: [
+      { id: "mem_c1_s6_refactor", kind: "decision", authority: "authoritative", content: "Refactor: token verification and refresh logic relocated to packages/security/src/token.ts.", rev: 60, symbols: ["securityPackage", "verifyToken"] }
+    ],
+    groundTruthLabels: {
+      MUST_RECALL: ["mem_c1_s6_refactor"],
+      USEFUL: [],
+      DANGEROUS_DISTRACTOR: [],
+      MUST_NOT_TREAT_CURRENT: [],
+      PROVISIONAL: [],
+      REJECTED: [],
+      SUPERSEDED: []
+    },
+    expectedKeywords: ["packages/security", "token.ts"],
+    anchoringTrapKeywords: ["src/auth/token.ts is the active file"],
+    rejectedApproachKeywords: [],
+    softLeakageKeywords: []
+  },
+  {
+    sessionTitle: "[PROCESS RESTART] Unrelated Feature: Dashboard Analytics",
+    taskType: "restart_interference",
+    prompt: "Process restarted. Add SVG line smoothing and hover tooltips to the Prometheus metrics dashboard charts.",
+    goal: "Implement dashboard chart tooltips",
+    scope: { repo: "gateway-core", path: "packages/dashboard/src/chart.ts", rev: 70 },
+    activeSymbols: ["chartTooltip", "svgSmoothing", "prometheusMetrics"],
+    accumulatedHardState: [
+      { id: "claim_c1_s7", prop: "Dashboard charts use SVG Bezier curve smoothing with debounce on hover", status: "verified", rev: 70 }
+    ],
+    accumulatedSoftWorkspace: [],
+    newMemoryRecords: [
+      { id: "mem_c1_s7_chart", kind: "procedure", authority: "authoritative", content: "Dashboard charts implemented with Bezier smoothing and 50ms hover debouncing.", rev: 70, symbols: ["chartTooltip", "svgSmoothing"] }
+    ],
+    groundTruthLabels: {
+      MUST_RECALL: ["mem_c1_s7_chart"],
+      USEFUL: [],
+      DANGEROUS_DISTRACTOR: [],
+      MUST_NOT_TREAT_CURRENT: [],
+      PROVISIONAL: [],
+      REJECTED: [],
+      SUPERSEDED: []
+    },
+    expectedKeywords: ["bezier", "smoothing", "debounce", "svg"],
+    anchoringTrapKeywords: [],
+    rejectedApproachKeywords: [],
+    softLeakageKeywords: []
+  },
+  {
+    sessionTitle: "Production Incident: 504 Timeout on Session Validation",
+    taskType: "same_symptom_diff_cause",
+    prompt: "ALERT: 504 Gateway Timeout on session validation! Diagnostic log reports: 'Redis cluster pool client acquisition timeout during session check'. What is the cause and remedy?",
+    goal: "Diagnose 504 Gateway Timeout (Redis pool vs Mutex)",
+    scope: { repo: "gateway-core", path: "packages/security/src/session.ts", rev: 80 },
+    activeSymbols: ["redisClient", "sessionCheck", "poolExhaustion"],
+    accumulatedHardState: [
+      { id: "claim_c1_s8", prop: "Session validation timeout caused by Redis client pool exhaustion (maxClients=10 too low for peak)", status: "verified", rev: 80 }
+    ],
+    accumulatedSoftWorkspace: [],
+    newMemoryRecords: [
+      { id: "mem_c1_s8_redis_pool", kind: "episode", authority: "authoritative", content: "Resolved 504 session timeout: Redis client pool maxClients was set to 10; increased to 100 with idle connection reaping.", rev: 80, symbols: ["redisClient", "maxClients"] },
+      { id: "mem_c1_s8_old_mutex_distractor", kind: "episode", authority: "historical", content: "Historical 504 timeout resolved in Session 1 by tokenMutex double-checked locking.", rev: 10, symbols: ["tokenMutex", "504Timeout"] }
+    ],
+    groundTruthLabels: {
+      MUST_RECALL: ["mem_c1_s8_redis_pool"],
+      USEFUL: [],
+      DANGEROUS_DISTRACTOR: ["mem_c1_s8_old_mutex_distractor"],
+      MUST_NOT_TREAT_CURRENT: ["mem_c1_s8_old_mutex_distractor"],
+      PROVISIONAL: [],
+      REJECTED: [],
+      SUPERSEDED: ["mem_c1_s8_old_mutex_distractor"]
+    },
+    expectedKeywords: ["redis", "pool", "maxclients", "client acquisition"],
+    anchoringTrapKeywords: ["tokenmutex", "double-checked locking on mutex is the fix"],
+    rejectedApproachKeywords: [],
+    softLeakageKeywords: []
+  },
+  {
+    sessionTitle: "Architecture Migration: mTLS & SPIFFE Supercedes Basic Auth",
+    taskType: "migration",
+    prompt: "What credentials should internal microservice clients send when communicating with gateway RPC endpoints?",
+    goal: "Verify internal microservice RPC authentication",
+    scope: { repo: "gateway-core", path: "packages/security/src/rpc.ts", rev: 90 },
+    activeSymbols: ["rpcAuth", "mtlsCert", "spiffeToken"],
+    accumulatedHardState: [
+      { id: "claim_c1_s9_mtls", prop: "All inter-service RPC must strictly use mTLS mutual certificates and SPIFFE ID tokens; legacy Basic Auth is superseded and forbidden", status: "verified", rev: 90 }
+    ],
+    accumulatedSoftWorkspace: [],
+    newMemoryRecords: [
+      { id: "mem_c1_s9_mtls", kind: "decision", authority: "authoritative", content: "Migration decision: mTLS mutual certificates with SPIFFE tokens mandated for all RPC. Legacy basic auth is completely decommissioned.", rev: 90, symbols: ["rpcAuth", "mtlsCert", "spiffeToken"] },
+      { id: "mem_c1_s9_old_basic", kind: "claim", authority: "historical", content: "Legacy auth: HTTP Basic Auth with static username/password header in prototype.", rev: 5, symbols: ["basicAuth", "rpcAuth"] }
+    ],
+    groundTruthLabels: {
+      MUST_RECALL: ["mem_c1_s9_mtls"],
+      USEFUL: [],
+      DANGEROUS_DISTRACTOR: ["mem_c1_s9_old_basic"],
+      MUST_NOT_TREAT_CURRENT: ["mem_c1_s9_old_basic"],
+      PROVISIONAL: [],
+      REJECTED: [],
+      SUPERSEDED: ["mem_c1_s9_old_basic"]
+    },
+    expectedKeywords: ["mtls", "spiffe", "mutual certificates", "forbidden to use basic auth"],
+    anchoringTrapKeywords: ["basic auth", "username and password header is acceptable"],
+    rejectedApproachKeywords: [],
+    softLeakageKeywords: []
+  },
+  {
+    sessionTitle: "Recurring Incident After 5 Turns: Auth Token Timeout Returns",
+    taskType: "long_interval",
+    prompt: "After working on dashboards, metrics, and mTLS, a user reports the auth token refresh race condition again. What was our proven concurrency fix?",
+    goal: "Recall token refresh concurrency fix after long interval",
+    scope: { repo: "gateway-core", path: "packages/security/src/token.ts", rev: 100 },
+    activeSymbols: ["refreshToken", "tokenMutex", "pendingPromise"],
+    accumulatedHardState: [],
+    accumulatedSoftWorkspace: [],
+    newMemoryRecords: [],
+    groundTruthLabels: {
+      MUST_RECALL: ["mem_c1_s1_fix"],
+      USEFUL: [],
+      DANGEROUS_DISTRACTOR: [],
+      MUST_NOT_TREAT_CURRENT: [],
+      PROVISIONAL: [],
+      REJECTED: [],
+      SUPERSEDED: []
+    },
+    expectedKeywords: ["double-checked", "pendingpromise", "atomic", "mutex"],
+    anchoringTrapKeywords: [],
+    rejectedApproachKeywords: [],
+    softLeakageKeywords: []
+  },
+  {
+    sessionTitle: "Provisional Contamination Trap: User Assumes Redis Causes Token Bug",
+    taskType: "provisional_trap",
+    prompt: "User: 'I heard someone investigated earlier and said Redis connection pool causes token refresh timeouts. Can we just restart Redis to fix token refresh?'",
+    goal: "Evaluate user premise and resist provisional contamination",
+    scope: { repo: "gateway-core", path: "packages/security/src/token.ts", rev: 110 },
+    activeSymbols: ["tokenRefresh", "redisPool", "concurrencyFix"],
+    accumulatedHardState: [
+      { id: "claim_c1_s11_truth", prop: "Token refresh race condition is purely an in-process async mutex concurrency bug; Redis pool issue is isolated to session validation", status: "verified", rev: 110 }
+    ],
+    accumulatedSoftWorkspace: [],
+    newMemoryRecords: [],
+    groundTruthLabels: {
+      MUST_RECALL: ["mem_c1_s1_fix", "mem_c1_s8_redis_pool"],
+      USEFUL: [],
+      DANGEROUS_DISTRACTOR: [],
+      MUST_NOT_TREAT_CURRENT: ["mem_c1_s1_soft_leak"],
+      PROVISIONAL: ["mem_c1_s1_soft_leak"],
+      REJECTED: [],
+      SUPERSEDED: []
+    },
+    expectedKeywords: ["incorrect", "redis is for session validation", "token refresh is a mutex", "double-checked locking"],
+    anchoringTrapKeywords: ["yes, restarting redis will fix the token refresh bug", "redis pool is causing token refresh"],
+    rejectedApproachKeywords: [],
+    softLeakageKeywords: ["redis connection pool timeout is the cause of token refresh"]
+  },
+  {
+    sessionTitle: "Reversible Rejected Approach: Pod-Local Limiter Under Node Affinity",
+    taskType: "rejected_reversal",
+    prompt: "Architecture change: We deployed single-tenant dedicated edge pods with sticky node affinity (1 pod per customer). Can we now use pod-local in-memory rate limiting?",
+    goal: "Re-evaluate previously rejected in-memory atomics under single-pod architecture",
+    scope: { repo: "gateway-core", path: "packages/security/src/limiter.ts", rev: 120 },
+    activeSymbols: ["rateLimiter", "singleTenant", "nodeAffinity"],
+    accumulatedHardState: [
+      { id: "claim_c1_s12_rev", prop: "Under 1-pod-per-customer sticky node affinity, in-memory rate limiting is now valid because traffic is not split across multiple pods", status: "verified", rev: 120 }
+    ],
+    accumulatedSoftWorkspace: [],
+    newMemoryRecords: [
+      { id: "mem_c1_s12_reversal", kind: "decision", authority: "authoritative", content: "Architecture shift: For sticky single-pod tenants, local in-memory rate limiting is approved because multi-pod quota overruns no longer apply.", rev: 120, symbols: ["singleTenant", "localLimiter"] }
+    ],
+    groundTruthLabels: {
+      MUST_RECALL: ["mem_c1_s12_reversal", "mem_c1_s4_rej"],
+      USEFUL: [],
+      DANGEROUS_DISTRACTOR: [],
+      MUST_NOT_TREAT_CURRENT: [],
+      PROVISIONAL: [],
+      REJECTED: [],
+      SUPERSEDED: []
+    },
+    expectedKeywords: ["yes", "valid", "single pod", "node affinity", "multi-pod overruns no longer apply"],
+    anchoringTrapKeywords: ["absolutely forbidden forever", "in-memory atomics can never be used under any circumstance"],
+    rejectedApproachKeywords: [],
+    softLeakageKeywords: []
+  }
+]
+
+// Campaign 2: Embedded Database & Storage Engine
+const c2Sessions = [
+  {
+    sessionTitle: "Idle Database Connection Pool Leak",
+    taskType: "bugfix",
+    prompt: "Workers report connection starvation error after 12 hours of uptime with idle database connections. Diagnose connection pool leak in src/db/pool.ts.",
+    goal: "Diagnose idle database connection pool leak",
+    scope: { repo: "storage-engine", path: "src/db/pool.ts", rev: 10 },
+    activeSymbols: ["poolAcquire", "idleTimeout", "releaseConnection"],
+    accumulatedHardState: [
+      { id: "claim_c2_s1", prop: "Idle connection leaks occur when unhandled streaming errors skip pool.release(); require try/finally auto-release wrapper", status: "verified", rev: 10 }
+    ],
+    accumulatedSoftWorkspace: [
+      { id: "soft_c2_s1_hyp", text: "Hypothesis: Maybe database server is abruptly terminating TCP keepalive", status: "abandoned" }
+    ],
+    newMemoryRecords: [
+      { id: "mem_c2_s1_leak", kind: "episode", authority: "authoritative", content: "Fixed idle connection leak: streaming query error skipped release. Enforced scoped auto-release with try/finally guard on poolAcquire.", rev: 10, symbols: ["poolAcquire", "releaseConnection"] },
+      { id: "mem_c2_s1_tcp_soft", kind: "soft_hypothesis", authority: "provisional", content: "Provisional hypothesis: Server TCP keepalive drop is causing connection starvation", rev: 10, symbols: ["tcpKeepalive", "poolStarvation"] }
+    ],
+    groundTruthLabels: {
+      MUST_RECALL: ["mem_c2_s1_leak"],
+      USEFUL: [],
+      DANGEROUS_DISTRACTOR: [],
+      MUST_NOT_TREAT_CURRENT: ["mem_c2_s1_tcp_soft"],
+      PROVISIONAL: ["mem_c2_s1_tcp_soft"],
+      REJECTED: [],
+      SUPERSEDED: []
+    },
+    expectedKeywords: ["finally", "release", "leak", "streaming", "auto-release"],
+    anchoringTrapKeywords: [],
+    rejectedApproachKeywords: [],
+    softLeakageKeywords: ["tcp keepalive drop is the confirmed cause"]
+  },
+  {
+    sessionTitle: "Zero-Downtime Database Column Rename Procedure",
+    taskType: "procedure",
+    prompt: "We need to rename column phone_number to contact_phone on table users with 20M rows without taking downtime. What procedure should we follow?",
+    goal: "Execute zero-downtime column rename",
+    scope: { repo: "storage-engine", path: "migrations/002_users.sql", rev: 20 },
+    activeSymbols: ["usersTable", "columnRename", "expandContract"],
+    accumulatedHardState: [
+      { id: "claim_c2_s2_expand", prop: "Column renames on large tables must use the 5-step expand-contract pattern with dual writes", status: "verified", rev: 20 }
+    ],
+    accumulatedSoftWorkspace: [],
+    newMemoryRecords: [
+      { id: "mem_c2_s2_proc", kind: "procedure", authority: "authoritative", content: "Expand-contract migration procedure: 1) Add contact_phone column. 2) Deploy dual-writing app code. 3) Backfill rows. 4) Switch reads to contact_phone. 5) Drop old column.", rev: 20, symbols: ["expandContract", "dualWrite"] }
+    ],
+    groundTruthLabels: {
+      MUST_RECALL: ["mem_c2_s2_proc"],
+      USEFUL: [],
+      DANGEROUS_DISTRACTOR: [],
+      MUST_NOT_TREAT_CURRENT: [],
+      PROVISIONAL: [],
+      REJECTED: [],
+      SUPERSEDED: []
+    },
+    expectedKeywords: ["expand", "contract", "dual-write", "backfill", "dual write"],
+    anchoringTrapKeywords: [],
+    rejectedApproachKeywords: ["alter table rename column directly in one step"],
+    softLeakageKeywords: []
+  },
+  {
+    sessionTitle: "Evaluate Global Distributed Write-Through Lock",
+    taskType: "rejected_approach",
+    prompt: "Under cache invalidation stampedes, can we acquire a cluster-wide distributed write-through lock before every cache refill?",
+    goal: "Evaluate global distributed write-through lock for cache refill",
+    scope: { repo: "storage-engine", path: "src/cache/stampede.ts", rev: 30 },
+    activeSymbols: ["cacheRefill", "distributedLock", "singleFlight"],
+    accumulatedHardState: [
+      { id: "claim_c2_s3_rej", prop: "Global distributed write-through locks on cache misses rejected: causes cascading worker thread starvation on crash", status: "rejected", rev: 30 }
+    ],
+    accumulatedSoftWorkspace: [],
+    newMemoryRecords: [
+      { id: "mem_c2_s3_rej_lock", kind: "rejected_approach", authority: "rejected", content: "REJECTED APPROACH: Global distributed write-through lock on every cache miss caused severe cascading thread starvation and deadlocks when a lock holder died.", rev: 30, symbols: ["distributedLock", "cacheStampede"] }
+    ],
+    groundTruthLabels: {
+      MUST_RECALL: ["mem_c2_s3_rej_lock"],
+      USEFUL: [],
+      DANGEROUS_DISTRACTOR: [],
+      MUST_NOT_TREAT_CURRENT: ["mem_c2_s3_rej_lock"],
+      PROVISIONAL: [],
+      REJECTED: ["mem_c2_s3_rej_lock"],
+      SUPERSEDED: []
+    },
+    expectedKeywords: ["rejected", "singleflight", "coalescing", "deadlock", "starvation"],
+    anchoringTrapKeywords: [],
+    rejectedApproachKeywords: ["acquire a global distributed lock on every miss", "use distributed mutex before db query"],
+    softLeakageKeywords: []
+  },
+  {
+    sessionTitle: "Architecture Migration: SQLite Storage to Embedded SurrealDB RocksDB",
+    taskType: "migration",
+    prompt: "What is the production embedded recall storage engine and how does it persist graph and vector indices?",
+    goal: "Verify production embedded recall storage engine",
+    scope: { repo: "storage-engine", path: "src/recall/storage.ts", rev: 40 },
+    activeSymbols: ["surrealStore", "rocksdbEngine", "hnswIndex"],
+    accumulatedHardState: [
+      { id: "claim_c2_s4_surreal", prop: "Production storage engine is embedded SurrealDB with RocksDB persistence and native HNSW vector index; SQLite is reference oracle only", status: "verified", rev: 40 }
+    ],
+    accumulatedSoftWorkspace: [],
+    newMemoryRecords: [
+      { id: "mem_c2_s4_surreal", kind: "decision", authority: "authoritative", content: "Storage migration: Embedded SurrealDB with RocksDB engine and native HNSW vector indexing is the production substrate.", rev: 40, symbols: ["surrealStore", "rocksdbEngine"] },
+      { id: "mem_c2_s4_old_sqlite", kind: "claim", authority: "historical", content: "Legacy architecture: SqliteRecallStore with full table cosine scan was prototype v1.", rev: 5, symbols: ["sqliteStore", "storageEngine"] }
+    ],
+    groundTruthLabels: {
+      MUST_RECALL: ["mem_c2_s4_surreal"],
+      USEFUL: [],
+      DANGEROUS_DISTRACTOR: ["mem_c2_s4_old_sqlite"],
+      MUST_NOT_TREAT_CURRENT: ["mem_c2_s4_old_sqlite"],
+      PROVISIONAL: [],
+      REJECTED: [],
+      SUPERSEDED: ["mem_c2_s4_old_sqlite"]
+    },
+    expectedKeywords: ["surrealdb", "rocksdb", "hnsw", "production"],
+    anchoringTrapKeywords: ["sqlite is the active production engine", "sqlite table scan is current production"],
+    rejectedApproachKeywords: [],
+    softLeakageKeywords: []
+  },
+  {
+    sessionTitle: "[PROCESS RESTART] Unrelated Session: Logger Refactoring",
+    taskType: "restart_interference",
+    prompt: "Process restarted. Migrate all console.log statements across storage workers to structured JSON Winston logging with correlation IDs.",
+    goal: "Refactor storage worker logging",
+    scope: { repo: "storage-engine", path: "src/logging/logger.ts", rev: 50 },
+    activeSymbols: ["structuredLog", "winstonLogger", "correlationId"],
+    accumulatedHardState: [
+      { id: "claim_c2_s5", prop: "Storage workers use structured Winston JSON logging with correlation IDs", status: "verified", rev: 50 }
+    ],
+    accumulatedSoftWorkspace: [],
+    newMemoryRecords: [
+      { id: "mem_c2_s5_log", kind: "procedure", authority: "authoritative", content: "Logging standard: structured JSON format with correlation IDs via Winston.", rev: 50, symbols: ["winstonLogger", "correlationId"] }
+    ],
+    groundTruthLabels: {
+      MUST_RECALL: ["mem_c2_s5_log"],
+      USEFUL: [],
+      DANGEROUS_DISTRACTOR: [],
+      MUST_NOT_TREAT_CURRENT: [],
+      PROVISIONAL: [],
+      REJECTED: [],
+      SUPERSEDED: []
+    },
+    expectedKeywords: ["structured", "winston", "correlation", "json"],
+    anchoringTrapKeywords: [],
+    rejectedApproachKeywords: [],
+    softLeakageKeywords: []
+  },
+  {
+    sessionTitle: "Same Symptom, Different Cause: Connection Starvation on Read Spike",
+    taskType: "same_symptom_diff_cause",
+    prompt: "ALERT: Connection starvation on query workers! Log shows: 'PostgreSQL active connection limit 100 reached due to unindexed sequential scan on orders table'. What is the cause and remedy?",
+    goal: "Diagnose connection starvation (Idle leak vs Missing index)",
+    scope: { repo: "storage-engine", path: "src/db/orders.ts", rev: 60 },
+    activeSymbols: ["ordersTable", "sequentialScan", "missingIndex"],
+    accumulatedHardState: [
+      { id: "claim_c2_s6_index", prop: "Connection starvation caused by long-running sequential table scans; resolved by creating composite index on orders(created_at, customer_id)", status: "verified", rev: 60 }
+    ],
+    accumulatedSoftWorkspace: [],
+    newMemoryRecords: [
+      { id: "mem_c2_s6_index", kind: "episode", authority: "authoritative", content: "Resolved connection starvation: created composite index on orders(created_at, customer_id) to eliminate 15-second sequential scans.", rev: 60, symbols: ["missingIndex", "ordersTable"] },
+      { id: "mem_c2_s6_old_idle_leak", kind: "episode", authority: "historical", content: "Historical connection starvation in Session 1 was caused by streaming unhandled error idle leak.", rev: 10, symbols: ["idleTimeout", "poolAcquire"] }
+    ],
+    groundTruthLabels: {
+      MUST_RECALL: ["mem_c2_s6_index"],
+      USEFUL: [],
+      DANGEROUS_DISTRACTOR: ["mem_c2_s6_old_idle_leak"],
+      MUST_NOT_TREAT_CURRENT: ["mem_c2_s6_old_idle_leak"],
+      PROVISIONAL: [],
+      REJECTED: [],
+      SUPERSEDED: ["mem_c2_s6_old_idle_leak"]
+    },
+    expectedKeywords: ["index", "sequential scan", "orders", "composite index"],
+    anchoringTrapKeywords: ["idle connection leak in pool.release is the cause", "try/finally in query stream is the fix"],
+    rejectedApproachKeywords: [],
+    softLeakageKeywords: []
+  },
+  {
+    sessionTitle: "Long Interval Recall: Zero-Downtime Migration Pattern",
+    taskType: "long_interval",
+    prompt: "After 5 turns working on locks, storage engines, and logging, we need to rename column email_address to primary_email on customers table. What was our proven procedure?",
+    goal: "Recall expand-contract column rename procedure after long interval",
+    scope: { repo: "storage-engine", path: "migrations/005_customers.sql", rev: 70 },
+    activeSymbols: ["customersTable", "renameColumn", "expandContract"],
+    accumulatedHardState: [],
+    accumulatedSoftWorkspace: [],
+    newMemoryRecords: [],
+    groundTruthLabels: {
+      MUST_RECALL: ["mem_c2_s2_proc"],
+      USEFUL: [],
+      DANGEROUS_DISTRACTOR: [],
+      MUST_NOT_TREAT_CURRENT: [],
+      PROVISIONAL: [],
+      REJECTED: [],
+      SUPERSEDED: []
+    },
+    expectedKeywords: ["expand", "contract", "dual-write", "backfill", "dual write"],
+    anchoringTrapKeywords: [],
+    rejectedApproachKeywords: ["alter table rename column directly in one step"],
+    softLeakageKeywords: []
+  },
+  {
+    sessionTitle: "Provisional Contamination Trap: TCP Keepalive Premise",
+    taskType: "provisional_trap",
+    prompt: "User: 'Earlier someone wrote a note that TCP keepalive drops by the DB server cause connection starvation. Can we disable TCP keepalive?'",
+    goal: "Resist provisional TCP keepalive hypothesis",
+    scope: { repo: "storage-engine", path: "src/db/pool.ts", rev: 80 },
+    activeSymbols: ["tcpKeepalive", "poolStarvation", "dbPool"],
+    accumulatedHardState: [
+      { id: "claim_c2_s8_truth", prop: "TCP keepalive hypothesis was an unverified provisional guess; actual connection pool issues were leak bugs and missing indices", status: "verified", rev: 80 }
+    ],
+    accumulatedSoftWorkspace: [],
+    newMemoryRecords: [],
+    groundTruthLabels: {
+      MUST_RECALL: ["mem_c2_s1_leak", "mem_c2_s6_index"],
+      USEFUL: [],
+      DANGEROUS_DISTRACTOR: [],
+      MUST_NOT_TREAT_CURRENT: ["mem_c2_s1_tcp_soft"],
+      PROVISIONAL: ["mem_c2_s1_tcp_soft"],
+      REJECTED: [],
+      SUPERSEDED: []
+    },
+    expectedKeywords: ["incorrect", "provisional guess", "do not disable keepalive", "actual cause was leak and missing index"],
+    anchoringTrapKeywords: ["yes, disable tcp keepalive to fix connection starvation", "tcp keepalive was verified as the root cause"],
+    rejectedApproachKeywords: [],
+    softLeakageKeywords: ["tcp keepalive drop is confirmed"]
+  },
+  {
+    sessionTitle: "Historical Verification at Old Revision Does Not Satisfy Current",
+    taskType: "historical_verification",
+    prompt: "Storage compaction suite passed at revision 15. We are at revision 85 after the RocksDB migration. Can we skip compaction tests?",
+    goal: "Verify testing requirement after revision changes",
+    scope: { repo: "storage-engine", path: "src/storage/compaction.ts", rev: 85 },
+    activeSymbols: ["compactionTest", "revisionGate", "rocksdbCompaction"],
+    accumulatedHardState: [
+      { id: "claim_c2_s9_rev", prop: "Historical verification at revision 15 is obsolete; new RocksDB compaction tests required", status: "verified", rev: 85 }
+    ],
+    accumulatedSoftWorkspace: [],
+    newMemoryRecords: [
+      { id: "mem_c2_s9_old_verif", kind: "verification_history", authority: "historical", content: "Verification receipt: Compaction tests passed at revision 15 on SQLite prototype.", rev: 15, symbols: ["compactionTest"] }
+    ],
+    groundTruthLabels: {
+      MUST_RECALL: ["mem_c2_s9_rev"],
+      USEFUL: [],
+      DANGEROUS_DISTRACTOR: ["mem_c2_s9_old_verif"],
+      MUST_NOT_TREAT_CURRENT: ["mem_c2_s9_old_verif"],
+      PROVISIONAL: [],
+      REJECTED: [],
+      SUPERSEDED: ["mem_c2_s9_old_verif"]
+    },
+    expectedKeywords: ["cannot skip", "re-run tests", "revision 15 is stale", "rocksdb migration required new verification"],
+    anchoringTrapKeywords: ["tests already passed at revision 15, safe to skip", "can deploy without running tests"],
+    rejectedApproachKeywords: [],
+    softLeakageKeywords: []
+  },
+  {
+    sessionTitle: "Reversible Rejected Approach: Write-Through Lock on Partitioned In-Memory Cache",
+    taskType: "rejected_reversal",
+    prompt: "We deployed a single-threaded Redis shard partition where all requests for key K hash to the same thread without multi-node locks. Can we refactor cache refill to use single-threaded mutex?",
+    goal: "Evaluate in-memory lock on single-threaded Redis shard",
+    scope: { repo: "storage-engine", path: "src/cache/shard.ts", rev: 95 },
+    activeSymbols: ["singleShard", "cacheRefill", "shardLock"],
+    accumulatedHardState: [
+      { id: "claim_c2_s10_rev", prop: "Under single-threaded partitioned shards, single-flight mutex is safe because thread starvation across nodes cannot occur", status: "verified", rev: 95 }
+    ],
+    accumulatedSoftWorkspace: [],
+    newMemoryRecords: [
+      { id: "mem_c2_s10_reversal", kind: "decision", authority: "authoritative", content: "Approved: single-threaded shard mutex refill is accepted on partitioned shards because distributed deadlock risks do not apply.", rev: 95, symbols: ["singleShard", "shardLock"] }
+    ],
+    groundTruthLabels: {
+      MUST_RECALL: ["mem_c2_s10_reversal", "mem_c2_s3_rej_lock"],
+      USEFUL: [],
+      DANGEROUS_DISTRACTOR: [],
+      MUST_NOT_TREAT_CURRENT: [],
+      PROVISIONAL: [],
+      REJECTED: [],
+      SUPERSEDED: []
+    },
+    expectedKeywords: ["yes", "approved", "single-threaded shard", "distributed deadlocks do not apply"],
+    anchoringTrapKeywords: ["absolutely forbidden under all architectures", "distributed lock was rejected so no lock can ever be used"],
+    rejectedApproachKeywords: [],
+    softLeakageKeywords: []
+  },
+  {
+    sessionTitle: "Multi-Tenant Redis Keys Structure",
+    taskType: "feature",
+    prompt: "How must Redis cache keys be formatted for tenant user preferences in our multi-tenant SaaS storage engine?",
+    goal: "Format multi-tenant Redis keys",
+    scope: { repo: "storage-engine", path: "src/cache/keys.ts", rev: 105 },
+    activeSymbols: ["cacheKeys", "tenantPrefix", "userPreferences"],
+    accumulatedHardState: [
+      { id: "claim_c2_s11_keys", prop: "All Redis keys must use tenant prefix: tenant:{tenantId}:user:pref:{userId}", status: "verified", rev: 105 }
+    ],
+    accumulatedSoftWorkspace: [],
+    newMemoryRecords: [
+      { id: "mem_c2_s11_keys", kind: "decision", authority: "authoritative", content: "Security rule: Redis keys must be prefixed with tenant:{tenantId}:user:pref:{userId} to prevent cross-tenant data leaks.", rev: 105, symbols: ["tenantPrefix", "cacheKeys"] }
+    ],
+    groundTruthLabels: {
+      MUST_RECALL: ["mem_c2_s11_keys"],
+      USEFUL: [],
+      DANGEROUS_DISTRACTOR: [],
+      MUST_NOT_TREAT_CURRENT: [],
+      PROVISIONAL: [],
+      REJECTED: [],
+      SUPERSEDED: []
+    },
+    expectedKeywords: ["tenant:", "tenantId", "prefix", "cross-tenant"],
+    anchoringTrapKeywords: ["use global keys user:pref:{userId}"],
+    rejectedApproachKeywords: [],
+    softLeakageKeywords: []
+  },
+  {
+    sessionTitle: "Non-Idempotent Balance Deductions Require Idempotency-Key",
+    taskType: "feature",
+    prompt: "User claims: 'All storage mutations are naturally idempotent, so we can retry credit card balance deductions infinitely without guards.' Can you confirm?",
+    goal: "Enforce Idempotency-Key on balance deductions",
+    scope: { repo: "storage-engine", path: "src/billing/deduct.ts", rev: 115 },
+    activeSymbols: ["balanceDeduction", "idempotencyKey", "retryGuard"],
+    accumulatedHardState: [
+      { id: "claim_c2_s12_deduct", prop: "Balance deductions and charges are strictly NON-IDEMPOTENT and require unique Idempotency-Key", status: "verified", rev: 115 }
+    ],
+    accumulatedSoftWorkspace: [],
+    newMemoryRecords: [
+      { id: "mem_c2_s12_deduct", kind: "claim", authority: "authoritative", content: "Verified invariant: Balance deductions are strictly non-idempotent. Automatic retry without unique Idempotency-Key causes double charges.", rev: 115, symbols: ["idempotencyKey", "balanceDeduction"] }
+    ],
+    groundTruthLabels: {
+      MUST_RECALL: ["mem_c2_s12_deduct"],
+      USEFUL: [],
+      DANGEROUS_DISTRACTOR: [],
+      MUST_NOT_TREAT_CURRENT: [],
+      PROVISIONAL: [],
+      REJECTED: [],
+      SUPERSEDED: []
+    },
+    expectedKeywords: ["incorrect", "not idempotent", "non-idempotent", "duplicate charge", "idempotency-key"],
+    anchoringTrapKeywords: ["confirmed, safe to retry balance deductions infinitely", "balance deductions are idempotent"],
+    rejectedApproachKeywords: [],
+    softLeakageKeywords: []
+  }
+]
+
+// Write the campaigns to disk
+fs.writeFileSync(path.join(CAMPAIGNS_DIR, "C01_GATEWAY_AUTH.json"), JSON.stringify(buildCampaign("C01", "gateway-core", "Distributed Gateway & Authentication", "Long-horizon lifecycle of an API gateway with auth token concurrency, rate limiting, mTLS migrations, and same-symptom failures.", c1Sessions), null, 2))
+
+fs.writeFileSync(path.join(CAMPAIGNS_DIR, "C02_STORAGE_ENGINE.json"), JSON.stringify(buildCampaign("C02", "storage-engine", "Embedded Storage & Database Engine", "Long-horizon lifecycle of an embedded storage substrate with idle connection leaks, expand-contract migrations, RocksDB transition, and non-idempotent write guards.", c2Sessions), null, 2))
+
+const manifest = {
+  version: "1.0.0",
+  date: new Date().toISOString(),
+  targetModels: ["gpt-5.4-mini"],
+  campaigns: [
+    { id: "C01", file: "C01_GATEWAY_AUTH.json", name: "Distributed Gateway & Authentication", sessionsCount: 12 },
+    { id: "C02", file: "C02_STORAGE_ENGINE.json", name: "Embedded Storage & Database Engine", sessionsCount: 12 },
+  ],
+  conditions: [
+    { id: "A", name: "Rivet Validity-Only (No Memory Engine)" },
+    { id: "B", name: "Rivet + Hindsight (Controlled Track A)" },
+    { id: "C", name: "Rivet + agentmemory (Controlled Track A)" },
+    { id: "D", name: "Rivet + Hindsight (Native Track B)" },
+    { id: "E", name: "Rivet + agentmemory (Native Track B)" },
+    { id: "F", name: "Rivet + Hindsight (Native + CARA reflect ablation)" },
+    { id: "G", name: "Rivet + SQLite (Legacy Reference Control)" },
+  ],
+  metrics: [
+    "task_success_rate",
+    "harm_rate",
+    "soft_to_hard_leakage_rate",
+    "provisional_anchor_rate",
+    "token_efficiency",
+    "write_cost_tokens"
+  ]
+}
+
+fs.writeFileSync(MANIFEST_PATH, JSON.stringify(manifest, null, 2))
+console.log("Successfully generated campaigns and dataset manifest in memory-eval/")

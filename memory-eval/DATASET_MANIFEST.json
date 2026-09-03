@@ -1,0 +1,59 @@
+{
+  "version": "1.0.0",
+  "date": "2026-09-03T03:24:18.681Z",
+  "targetModels": [
+    "gpt-5.4-mini"
+  ],
+  "campaigns": [
+    {
+      "id": "C01",
+      "file": "C01_GATEWAY_AUTH.json",
+      "name": "Distributed Gateway & Authentication",
+      "sessionsCount": 12
+    },
+    {
+      "id": "C02",
+      "file": "C02_STORAGE_ENGINE.json",
+      "name": "Embedded Storage & Database Engine",
+      "sessionsCount": 12
+    }
+  ],
+  "conditions": [
+    {
+      "id": "A",
+      "name": "Rivet Validity-Only (No Memory Engine)"
+    },
+    {
+      "id": "B",
+      "name": "Rivet + Hindsight (Controlled Track A)"
+    },
+    {
+      "id": "C",
+      "name": "Rivet + agentmemory (Controlled Track A)"
+    },
+    {
+      "id": "D",
+      "name": "Rivet + Hindsight (Native Track B)"
+    },
+    {
+      "id": "E",
+      "name": "Rivet + agentmemory (Native Track B)"
+    },
+    {
+      "id": "F",
+      "name": "Rivet + Hindsight (Native + CARA reflect ablation)"
+    },
+    {
+      "id": "G",
+      "name": "Rivet + SQLite (Legacy Reference Control)"
+    }
+  ],
+  "metrics": [
+    "task_success_rate",
+    "harm_rate",
+    "soft_to_hard_leakage_rate",
+    "provisional_anchor_rate",
+    "token_efficiency",
+    "write_cost_tokens"
+  ]
+}
