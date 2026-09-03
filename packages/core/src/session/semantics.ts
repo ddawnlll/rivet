@@ -55,17 +55,26 @@ export interface EpistemicStateSnapshot {
   readonly memoryFrontier: MemoryFrontier
 }
 
-/** Rivet semantic state attached to one durable Session aggregate. */
+import { InMemoryRecallStore, AutomaticRecallAdmissionHook, NoesisRecallProjector, type RecallStore } from "../rivet/recall"
+
 export class SessionSemantics {
+  static workspaceRecallStore: RecallStore | null = null
+
   readonly hardState: HardState
   readonly softWorkspace: SoftWorkspace
+  readonly recallStore: RecallStore
 
-  private constructor(readonly sessionID: SessionSchema.ID, hardState: HardState) {
+  private constructor(readonly sessionID: SessionSchema.ID, hardState: HardState, recallStore?: RecallStore) {
     this.hardState = hardState
     this.softWorkspace = new SoftWorkspace(sessionID as unknown as SessionId, hardState.revision)
+    this.recallStore = recallStore ?? SessionSemantics.workspaceRecallStore ?? new InMemoryRecallStore()
   }
 
-  static load = Effect.fn("SessionSemantics.load")(function* (db: Database.Interface["db"], sessionID: SessionSchema.ID) {
+  static load = Effect.fn("SessionSemantics.load")(function* (
+    db: Database.Interface["db"],
+    sessionID: SessionSchema.ID,
+    customRecallStore?: RecallStore,
+  ) {
     const state = new HardState()
     const aggregate = yield* EventV2.readAggregate(db, {
       aggregateID: sessionID,
@@ -76,7 +85,10 @@ export class SessionSemantics {
       if (event.type !== SessionEvent.Semantic.type) continue
       state.apply(decodeNoesisEvent(event.data.event))
     }
-    return new SessionSemantics(sessionID, state)
+    const store = customRecallStore ?? SessionSemantics.workspaceRecallStore ?? new InMemoryRecallStore()
+    const docs = NoesisRecallProjector.projectFromHardState(state, sessionID)
+    yield* store.index(docs).pipe(Effect.ignore)
+    return new SessionSemantics(sessionID, state, store)
   })
 
   append(events: EventV2.Interface, event: NoesisEvent) {
@@ -89,6 +101,8 @@ export class SessionSemantics {
         event: encodeNoesisEvent(event),
       })
       self.hardState.apply(event)
+      const docs = NoesisRecallProjector.projectFromHardState(self.hardState, self.sessionID)
+      yield* self.recallStore.index(docs).pipe(Effect.ignore)
     })
   }
 
@@ -481,6 +495,22 @@ export class SessionSemantics {
     readonly tokenBudget?: number
     readonly mode?: RepresentationMode
   }) {
+    let memoryFrontier: MemoryFrontier | undefined
+    if (input.userPrompt) {
+      const recallEffect = AutomaticRecallAdmissionHook.admitRecall({
+        hardState: this.hardState,
+        recallStore: this.recallStore,
+        userPrompt: input.userPrompt,
+        goalDescription: input.goalDescription ?? this.hardState.goalDescription ?? "Continue the current goal",
+        repositoryId: input.repositoryId,
+        focusSymbols: input.focusSymbols,
+      })
+      const result = Effect.runSyncExit(recallEffect)
+      if (result._tag === "Success") {
+        memoryFrontier = result.value
+      }
+    }
+
     const compiled = CognitiveViewCompiler.compile({
       hardState: this.hardState,
       softWorkspace: this.softWorkspace,
@@ -491,6 +521,7 @@ export class SessionSemantics {
       relevantFiles: input.relevantFiles,
       repositorySignals: input.repositorySignals,
       focusSymbols: input.focusSymbols,
+      memoryFrontier,
       scope: input.scope,
       tokenBudget: input.tokenBudget ?? 4000,
       mode: input.mode ?? "HYBRID",

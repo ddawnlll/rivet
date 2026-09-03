@@ -266,7 +266,7 @@ export class HardState {
 
     switch (event.type) {
       case "goal_set": {
-        this.goalDescription = event.goal
+        this.goalDescription = (event as any).goal ?? (event as any).description ?? null
         break
       }
       case "claim_asserted": {
@@ -427,7 +427,7 @@ export class HardState {
         this.rejectedClaims.set(event.claimId, {
           claimId: event.claimId,
           reason: event.reason,
-          evidence: [...event.evidence],
+          evidence: event.evidence ? [...event.evidence] : [],
           timestamp: event.timestamp,
         })
         this.cascadeClaimInvalidation(event.claimId, event.reason)

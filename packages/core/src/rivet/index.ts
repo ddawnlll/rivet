@@ -15,3 +15,7 @@ export * from "./praxis/pipeline"
 export * from "./repository/project-graph"
 export * from "./runtime/sandbox"
 export * from "./runtime/semantic-patch"
+export * from "./derived-state"
+export * from "./maintenance"
+export * from "./recall"
+

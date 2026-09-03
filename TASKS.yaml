@@ -172,15 +172,43 @@ tasks:
       - "First-class query_epistemic_state tool avoids raw SQL"
       - "Deterministic replay of validity graph and epistemic events"
     evidence: "packages/core/test/rivet/retrieval_barrier.test.ts, restart_replay.test.ts, benchmark.test.ts"
-  - id: "M9-004"
-    phase: 9
-    title: "Slow Epistemic Maintenance & Production Lifecycle Audit"
+  # PHASE 10 — ASSOCIATIVE RECALL RUNTIME
+  - id: "M10-001"
+    phase: 10
+    title: "RecallStore Contract, Types & Multi-Channel Associative Engine"
     status: "DONE"
     acceptance:
-      - "EpistemicMaintenanceEngine detects unresolved DIRTY claims, orphan deps, weak provenance, cyclic supersessions"
-      - "DerivedStateProjector derives live census without fossilization"
-      - "Production SessionRunner lifecycle delivers Rust state and PremiseConflict without requiring query_epistemic_state"
-      - "Leak isolation proves superseded memories never leak into active knowledge"
-    evidence: "packages/core/src/rivet/maintenance.ts, derived-state.ts, packages/core/test/rivet/maintenance.test.ts, derived_state.test.ts, leak_isolation.test.ts, adjudication_contrast.test.ts, python_to_rust_production.test.ts"
+      - "Backend-independent RecallStore contract (index, remove, recall, rebuild)"
+      - "Dense semantic subword vector similarity + BM25 lexical term matching"
+      - "Graph neighborhood topological expansion across SUPPORTS, CONTRADICTS, SUPERSEDES, FAILED_BECAUSE, RESOLVED_BY"
+      - "Temporal decay and scope relevance scoring with multi-channel fusion"
+    evidence: "packages/core/src/rivet/recall/types.ts, engine.ts, store.ts, tested in test/rivet/recall/store.test.ts"
+  - id: "M10-002"
+    phase: 10
+    title: "Noesis Deterministic Recall Projector & Rebuildability"
+    status: "DONE"
+    acceptance:
+      - "Deterministic projection from canonical Noesis HardState/events into typed RecallDocument records"
+      - "Non-authoritative isolation: Recall index wipe/corruption causes zero loss to HardState and fully rebuilds"
+    evidence: "packages/core/src/rivet/recall/projector.ts, test/rivet/recall/store.test.ts"
+  - id: "M10-003"
+    phase: 10
+    title: "Automatic Recall Admission Hook & Validity Barrier Integration"
+    status: "DONE"
+    acceptance:
+      - "Automatic Harness recall during prompt admission without model memory tools"
+      - "Read-time validity barrier blocks STALE/SUPERSEDED memories from active truth"
+      - "REJECTED memories populated into failure-avoidance frontier"
+      - "Historical verifications annotated with non-current status"
+    evidence: "packages/core/src/rivet/recall/harness.ts, test/rivet/recall/validity_barrier_recall.test.ts"
+  - id: "M10-004"
+    phase: 10
+    title: "Killer Cross-Session E2E & Scientific Comparative Benchmark"
+    status: "DONE"
+    acceptance:
+      - "Cross-session fresh process E2E: Session 1 auth race -> Session 5 Turn 1 automatic episode & decision delivery"
+      - "Scientific comparative benchmark: Raw model vs Rivet validity-only vs Rivet validity+recall"
+      - "100% useful historical episode recall, 0% repeated rejected approaches, 0% stale recall leakage"
+    evidence: "packages/core/test/rivet/recall/killer_e2e_cross_session.test.ts, scientific_benchmark.test.ts"
 
 

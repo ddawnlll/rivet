@@ -283,6 +283,11 @@ const layer = Layer.effect(
         cognitiveView.activeHypotheses.length > 0 ||
         cognitiveView.premiseConflicts.length > 0 ||
         cognitiveView.contradictions.length > 0 ||
+        (cognitiveView.memoryFrontier !== undefined &&
+          (cognitiveView.memoryFrontier.active.length > 0 ||
+            cognitiveView.memoryFrontier.episodic.length > 0 ||
+            cognitiveView.memoryFrontier.procedural.length > 0 ||
+            cognitiveView.memoryFrontier.rejected.length > 0)) ||
         gateEvaluation.reason === "STATE_CONTRADICTION" ||
         gateEvaluation.reason === "HYPOTHESIS_CONFLICT"
       const rivetStateSystem = hasMeaningfulRivetState ? cognitiveView.formatPromptBlock() : undefined

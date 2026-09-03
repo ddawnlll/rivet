@@ -55,6 +55,7 @@ export interface CompilationContext {
   readonly userPrompt?: string
   readonly currentEnvironmentLanguage?: string
   readonly focusSymbols?: readonly string[]
+  readonly memoryFrontier?: MemoryFrontier
   readonly scope?: Scope
   readonly tokenBudget: number
   readonly mode: RepresentationMode
@@ -146,10 +147,12 @@ export class CognitiveViewCompiler {
       ...(premiseConflict ? [premiseConflict] : []),
     ]
 
-    const memoryFrontier = ValidityEngine.compileMemoryFrontier(
-      ctx.hardState,
-      ctx.focusSymbols ?? [],
-    )
+    const memoryFrontier =
+      ctx.memoryFrontier ??
+      ValidityEngine.compileMemoryFrontier(
+        ctx.hardState,
+        ctx.focusSymbols ?? [],
+      )
 
     // Stage 7: Assemble compiled payload (Zero-copy pass-through)
     return {

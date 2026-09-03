@@ -1071,6 +1071,39 @@ RECENT EVIDENCE ──────┘          ↓
     - decision_register
 </code></pre>
 <p>v0.2 doğrudan representation ablation ister: <strong>(A) raw retrieved text, (B) triples, (C) selected graph paths, (D) hybrid semantic+typed cognitive view.</strong> Aynı underlying evidence altında next-action accuracy, contradiction detection, rejected-belief recall, unsupported relation üretimi, token cost ve latency ölçülmelidir. “Graph kullanmak” katkı değildir; doğru cognitive serialization katkı olabilir.</p>
+<h1 id="associative-recall-runtime">Associative Recall Runtime<a class="anchor" href="#associative-recall-runtime">¶</a></h1>
+<p><span class="badge active">CONSTITUTIONAL_RUNTIME</span> <strong>Kural:</strong> LLM memory search tool çağırmaz. Harness prompt admission sırasında otomatik hatırlar.</p>
+<pre><code class="language-text">User Prompt
+    ↓
+Harness (Prompt Admission)
+    ↓
+Current Cognitive State (Goal, Scope, Revision, Active Claims)
+    +
+Automatic Associative Recall (Vector + BM25 + Graph + Temporal)
+    ↓
+Recall Candidates (Episodes, Claims, Decisions, Failures, Procedures)
+    ↓
+Noesis Read-Time Validity Barrier (Filters Stale/Superseded, Retains Failure-Avoidance)
+    ↓
+MemoryFrontier Integration
+    ↓
+Cognitive View (formatPromptBlock)
+    ↓
+LLM (Turn 1 Zero-Tool Memory Delivery)
+</code></pre>
+<h2>Constitutional Invariants (R-01 .. R-10)</h2>
+<ul>
+<li><strong>R-01 (Proactive Recall):</strong> The Controller never invokes a memory search tool during normal operation; Harness recalls automatically during prompt admission.</li>
+<li><strong>R-02 (Retrieval != Evidence):</strong> Recalled candidates are unverified context; they cannot mint <code>VERIFIED</code> status without a fresh Praxis verification receipt.</li>
+<li><strong>R-03 (Retrieval != Current Truth):</strong> High recall scores never override current repository state or validated HardState.</li>
+<li><strong>R-04 (Read-Time Invalidation):</strong> <code>SUPERSEDED</code> and <code>STALE</code> memories can never enter the active current-knowledge section.</li>
+<li><strong>R-05 (Failure Avoidance):</strong> <code>REJECTED</code> memories and failure attributions are recalled specifically to prevent repeating known dead-ends.</li>
+<li><strong>R-06 (Historical Isolation):</strong> Historical verification is explicitly tagged <code>historical verification != current verification</code>.</li>
+<li><strong>R-07 (Rebuildability & Non-Authority):</strong> The recall store is a pure projection over canonical <code>NoesisEvent</code>s; total destruction/corruption of recall storage leaves HardState untouched and can be fully rebuilt.</li>
+<li><strong>R-08 (Multi-Channel Fusion):</strong> Recall combines dense semantic similarity, lexical keyword matching, graph topological expansion, and temporal/scope relevance.</li>
+<li><strong>R-09 (Backend Portability):</strong> <code>RecallStore</code> contract is fully decoupled from backend engine (SQLite / RocksDB / SurrealDB / LanceDB).</li>
+<li><strong>R-10 (Zero Raw DB Leaks):</strong> Neither the LLM nor the Controller has raw query access to the underlying recall database.</li>
+</ul>
 <h1 id="accp-specification-claim-action-authority-and-capability-governance">ACCP specification: claim, action, authority and capability governance<a class="anchor" href="#accp-specification-claim-action-authority-and-capability-governance">¶</a></h1>
 <p><span class="badge established">SUPERSEDED_BY_ACCP_3_0</span></p>
 <blockquote>
