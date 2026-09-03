@@ -124,6 +124,21 @@ describe("Rivet Agent Memory Backends: Hindsight & agentmemory Adapters with Val
     await Effect.runPromise(backend.ingest(records))
 
     const hardState = new HardState()
+    hardState.claims.set("mem_hard_1" as any, {
+      id: "mem_hard_1" as any,
+      proposition: "mTLS with SPIFFE token exchange is strictly required for inter-service RPC",
+      status: "verified",
+      validityPolicy: "EPISTEMIC",
+      validFromRevision: Revision.from(10),
+      learnedAtRevision: Revision.from(10),
+      dependencies: [],
+      dependsOn: [],
+      supportingEvidence: [],
+      scope,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    })
+
     const query: MemoryQuery = {
       prompt: "System issues with auth timeout, rate limiting and legacy auth",
       goal: "Diagnose overall system state",
@@ -133,29 +148,42 @@ describe("Rivet Agent Memory Backends: Hindsight & agentmemory Adapters with Val
       limit: 10,
     }
 
-    const frontier = await Effect.runPromise(
+    // 1. In diagnosis phase: provisional hypothesis MUST be suppressed!
+    const diagFrontier = await Effect.runPromise(
       AgentMemoryValidityBarrier.admitRecall({
         hardState,
         backend,
         query,
+        taskPhase: "diagnosis",
       })
     )
 
-    // 1. Authoritative claims must be in active frontier
-    expect(frontier.active.some((m) => m.id === "mem_hard_1")).toBe(true)
+    // Authoritative claims backed by HardState must be in active frontier
+    expect(diagFrontier.active.some((m) => m.id === "mem_hard_1")).toBe(true)
 
-    // 2. Rejected approaches must be in rejected frontier with [FAILURE AVOIDANCE]
-    expect(frontier.rejected.some((m) => m.id === "mem_rej_2" && m.summary.includes("[FAILURE AVOIDANCE]"))).toBe(true)
+    // Rejected approaches must be in rejected frontier with [FAILURE AVOIDANCE]
+    expect(diagFrontier.rejected.some((m) => m.id === "mem_rej_2" && m.summary.includes("[FAILURE AVOIDANCE]"))).toBe(true)
 
-    // 3. Provisional SoftWorkspace hypotheses must be tagged and NEVER in active
-    expect(frontier.active.some((m) => m.id === "mem_soft_3")).toBe(false)
-    const softMem = frontier.episodic.find((m) => m.id === "mem_soft_3")
-    expect(softMem).toBeDefined()
-    expect(softMem!.summary).toContain("[PROVISIONAL HYPOTHESIS - NOT HARD FACT]")
+    // In diagnosis phase, provisional hypothesis is strictly SUPPRESSED
+    expect(diagFrontier.episodic.some((m) => m.id === "mem_soft_3")).toBe(false)
+    expect(diagFrontier.active.some((m) => m.id === "mem_soft_3")).toBe(false)
 
-    // 4. Stale/superseded memories must be tagged with warning
-    const staleMem = frontier.episodic.find((m) => m.id === "mem_stale_4")
+    // Stale/superseded memories are tagged with archive warning
+    const staleMem = diagFrontier.episodic.find((m) => m.id === "mem_stale_4")
     expect(staleMem).toBeDefined()
-    expect(staleMem!.summary).toContain("[SUPERSEDED / HISTORICAL - DO NOT USE AS ACTIVE TRUTH]")
+    expect(staleMem!.summary).toContain("[HISTORICAL ARCHIVE - SUPERSEDED]")
+
+    // 2. In brainstorming phase: provisional hypothesis is admitted with caveat
+    const brainstormFrontier = await Effect.runPromise(
+      AgentMemoryValidityBarrier.admitRecall({
+        hardState,
+        backend,
+        query,
+        taskPhase: "brainstorming",
+      })
+    )
+    const softMem = brainstormFrontier.episodic.find((m) => m.id === "mem_soft_3")
+    expect(softMem).toBeDefined()
+    expect(softMem!.summary).toContain("[PROVISIONAL HYPOTHESIS]")
   })
 })

@@ -6,6 +6,7 @@ import {
   type EvidenceId,
   type InvocationId,
   type MemoryFrontier,
+  type MemoryRef,
   type ObligationId,
   type PremiseConflict,
   type Provenance,
@@ -741,11 +742,15 @@ export class CognitiveView {
       const activeMem = this.memoryFrontier.active
       const episodicMem = this.memoryFrontier.episodic
       const rejectedMem = this.memoryFrontier.rejected
+      const proceduralMem = this.memoryFrontier.procedural ?? []
 
-      if (activeMem.length > 0 || episodicMem.length > 0 || rejectedMem.length > 0) {
+      if (activeMem.length > 0 || episodicMem.length > 0 || rejectedMem.length > 0 || proceduralMem.length > 0) {
         lines.push("### HARNESS MEMORY FRONTIER (Associative Context):")
         for (const m of activeMem) {
           lines.push(`- [active:${m.type}] ${m.summary}`)
+        }
+        for (const m of proceduralMem) {
+          lines.push(`- [procedure:${m.type}] ${m.summary}`)
         }
         for (const m of episodicMem) {
           lines.push(`- [history:${m.type}] ${m.summary}`)
@@ -798,5 +803,256 @@ export class CognitiveView {
       out = out.slice(0, maxBytes - marker.length) + marker
     }
     return out
+  }
+}
+
+export type MemoryHorizon = "H0_IMMEDIATE" | "H1_RECENT" | "H2_LONG_TERM" | "H3_ARCHIVE"
+
+export type TaskPhase = "diagnosis" | "implementation" | "brainstorming" | "verification"
+
+export type EpistemicRole =
+  | "authoritative"
+  | "episodic"
+  | "procedural"
+  | "provisional"
+  | "rejected"
+  | "superseded"
+
+export interface NoesisAdmissionCandidate {
+  readonly id: string
+  readonly content: string
+  readonly score: number
+  readonly sourceRefs?: readonly string[]
+  readonly proposedKind?: string
+  readonly revision?: Revision
+  readonly scope?: Scope
+  readonly relatedSymbols?: readonly string[]
+  readonly metadata?: Record<string, unknown>
+}
+
+export interface CognitiveAdmissionContext {
+  readonly hardState: HardState
+  readonly taskPhase: TaskPhase
+  readonly currentRevision: Revision
+  readonly scope: Scope
+  readonly activeSymbols?: readonly string[]
+  readonly userPrompt?: string
+  readonly goalDescription?: string
+}
+
+export type MemoryAdmissionDecision =
+  | { readonly kind: "ADMIT_CURRENT"; readonly ref: MemoryRef; readonly horizon: MemoryHorizon }
+  | { readonly kind: "ADMIT_PROCEDURAL"; readonly ref: MemoryRef; readonly horizon: MemoryHorizon }
+  | { readonly kind: "ADMIT_FAILURE_AVOIDANCE"; readonly ref: MemoryRef; readonly horizon: MemoryHorizon }
+  | { readonly kind: "ADMIT_HISTORICAL"; readonly ref: MemoryRef; readonly horizon: MemoryHorizon }
+  | { readonly kind: "QUARANTINE"; readonly reason: string; readonly horizon: MemoryHorizon }
+  | { readonly kind: "SUPPRESS"; readonly reason: string; readonly horizon: MemoryHorizon }
+
+export class Noesis {
+  /**
+   * Evaluates an associative memory candidate against canonical HardState,
+   * temporal horizon, task phase, and epistemic risk policy.
+   *
+   * Invariants:
+   * 1. Retrievable != Admissible
+   * 2. Memory engine cannot report authority; authority is derived via HardState lookup.
+   * 3. Memory candidates never mint "verified" status out of thin air.
+   * 4. SoftWorkspace provisional hypotheses are SUPPRESSED during diagnosis and implementation.
+   * 5. Long-term memory (H2/H3) requires stronger evidence or explicit symbol match.
+   */
+  static admitMemory(
+    candidate: NoesisAdmissionCandidate,
+    context: CognitiveAdmissionContext
+  ): MemoryAdmissionDecision {
+    // 1. Calculate Temporal Horizon
+    let horizon: MemoryHorizon = "H2_LONG_TERM"
+    if (candidate.revision && context.currentRevision) {
+      const deltaRev = Number(context.currentRevision.value - candidate.revision.value)
+      if (deltaRev <= 1) {
+        horizon = "H0_IMMEDIATE"
+      } else if (deltaRev <= 15) {
+        horizon = "H1_RECENT"
+      } else if (deltaRev <= 60) {
+        horizon = "H2_LONG_TERM"
+      } else {
+        horizon = "H3_ARCHIVE"
+      }
+    }
+
+    // 2. Canonical HardState Lookup via sourceRefs or id
+    const candidateId = candidate.sourceRefs?.[0] ?? candidate.id
+    const canonicalClaim = context.hardState.claims.get(candidateId as any)
+
+    let role: EpistemicRole = "episodic"
+    if (canonicalClaim) {
+      if (canonicalClaim.status === "verified") {
+        if (
+          canonicalClaim.supersededBy ||
+          (canonicalClaim.validToRevision && canonicalClaim.validToRevision.value <= context.currentRevision.value)
+        ) {
+          role = "superseded"
+        } else {
+          role = "authoritative"
+        }
+      } else if (canonicalClaim.status === "rejected") {
+        role = "rejected"
+      } else if (canonicalClaim.status === "stale" || canonicalClaim.status === "dirty") {
+        role = "superseded"
+      } else {
+        role = "episodic"
+      }
+    } else {
+      // Non-claim metadata classification
+      if (
+        candidate.proposedKind === "soft_hypothesis" ||
+        candidate.proposedKind === "soft_unknown" ||
+        candidate.metadata?.epistemicClass === "soft_hypothesis" ||
+        candidate.metadata?.authority === "provisional" ||
+        candidate.metadata?.isSoftWorkspace === true ||
+        candidate.content.toLowerCase().includes("provisional hypothesis")
+      ) {
+        role = "provisional"
+      } else if (
+        candidate.proposedKind === "procedure" ||
+        candidate.metadata?.epistemicClass === "procedure" ||
+        candidate.metadata?.kind === "procedure"
+      ) {
+        role = "procedural"
+      } else if (
+        candidate.proposedKind === "rejected_approach" ||
+        candidate.metadata?.epistemicClass === "rejected_approach" ||
+        candidate.metadata?.authority === "rejected"
+      ) {
+        role = "rejected"
+      } else if (
+        candidate.metadata?.epistemicStatus === "superseded" ||
+        candidate.metadata?.authority === "historical"
+      ) {
+        role = "superseded"
+      } else {
+        role = "episodic"
+      }
+    }
+
+    // 3. Epistemic Admission Rules by Task Phase and Role
+
+    // RULE 1: Provisional SoftWorkspace Hypotheses
+    if (role === "provisional") {
+      if (context.taskPhase === "diagnosis" || context.taskPhase === "implementation" || context.taskPhase === "verification") {
+        return {
+          kind: "SUPPRESS",
+          reason: `Provisional SoftWorkspace hypotheses are strictly suppressed during ${context.taskPhase} to prevent cognitive anchoring.`,
+          horizon,
+        }
+      }
+      // Allowed only in brainstorming phase
+      return {
+        kind: "ADMIT_HISTORICAL",
+        ref: {
+          id: candidate.id as any,
+          type: "claim",
+          summary: `[PROVISIONAL HYPOTHESIS] ${candidate.content}`,
+          status: "supported",
+          revision: candidate.revision ?? context.currentRevision,
+        },
+        horizon,
+      }
+    }
+
+    // RULE 2: Rejected Approaches (Failure Avoidance)
+    if (role === "rejected") {
+      return {
+        kind: "ADMIT_FAILURE_AVOIDANCE",
+        ref: {
+          id: candidate.id as any,
+          type: "failure",
+          summary: `[FAILURE AVOIDANCE] ${candidate.content}`,
+          status: "rejected",
+          revision: candidate.revision ?? context.currentRevision,
+        },
+        horizon,
+      }
+    }
+
+    // RULE 3: Superseded / Historical Only
+    if (role === "superseded") {
+      if (context.taskPhase === "implementation" || context.taskPhase === "verification") {
+        return {
+          kind: "SUPPRESS",
+          reason: `Superseded architectural facts are suppressed during ${context.taskPhase} to prevent regressions.`,
+          horizon,
+        }
+      }
+      return {
+        kind: "ADMIT_HISTORICAL",
+        ref: {
+          id: candidate.id as any,
+          type: "observation",
+          summary: `[HISTORICAL ARCHIVE - SUPERSEDED] ${candidate.content}`,
+          status: "superseded",
+          revision: candidate.revision ?? context.currentRevision,
+        },
+        horizon,
+      }
+    }
+
+    // RULE 4: Long-Horizon Evidence Gating (H2 / H3)
+    if (horizon === "H2_LONG_TERM" || horizon === "H3_ARCHIVE") {
+      const activeSyms = context.activeSymbols ?? []
+      const docSyms = candidate.relatedSymbols ?? []
+      const hasSharedSymbol = activeSyms.length > 0 && docSyms.some((s) => activeSyms.includes(s))
+      const hasStrongScore = candidate.score >= 0.65
+
+      if (!hasSharedSymbol && !hasStrongScore) {
+        return {
+          kind: "SUPPRESS",
+          reason: `Long-horizon historical memory requires strong relevance score (>=0.65) or matching active symbols. (score=${candidate.score.toFixed(2)})`,
+          horizon,
+        }
+      }
+    }
+
+    // RULE 5: Procedural Memories
+    if (role === "procedural") {
+      return {
+        kind: "ADMIT_PROCEDURAL",
+        ref: {
+          id: candidate.id as any,
+          type: "claim",
+          summary: candidate.content,
+          status: "supported",
+          revision: candidate.revision ?? context.currentRevision,
+        },
+        horizon,
+      }
+    }
+
+    // RULE 6: Authoritative Claims (Derived via canonical HardState)
+    if (role === "authoritative") {
+      return {
+        kind: "ADMIT_CURRENT",
+        ref: {
+          id: candidate.id as any,
+          type: canonicalClaim ? "claim" : "observation",
+          summary: candidate.content,
+          status: canonicalClaim ? canonicalClaim.status : "supported",
+          revision: candidate.revision ?? context.currentRevision,
+        },
+        horizon,
+      }
+    }
+
+    // Default Episodic Memory
+    return {
+      kind: "ADMIT_HISTORICAL",
+      ref: {
+        id: candidate.id as any,
+        type: "observation",
+        summary: candidate.content,
+        status: "supported",
+        revision: candidate.revision ?? context.currentRevision,
+      },
+      horizon,
+    }
   }
 }
