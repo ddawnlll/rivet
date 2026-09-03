@@ -3,6 +3,7 @@ import {
   type RecallChannelScores,
   type RecallDocument,
   type RecallQuery,
+  type RelationshipKind,
 } from "./types"
 
 export interface RetrievalWeights {
@@ -21,65 +22,50 @@ export const DEFAULT_RETRIEVAL_WEIGHTS: RetrievalWeights = {
   scope: 0.05,
 }
 
-const EMBEDDING_DIM = 128
+export interface RankOptions {
+  readonly docEmbeddings?: Map<string, Float32Array>
+  readonly queryEmbedding?: Float32Array
+  readonly maxGraphHop?: number
+}
+
+const RELATIONSHIP_WEIGHTS: Record<RelationshipKind, number> = {
+  FAILED_BECAUSE: 0.9,
+  RESOLVED_BY: 0.9,
+  SUPERSEDES: 0.8,
+  CONTRADICTS: 0.8,
+  SUPPORTS: 0.6,
+  DEPENDS_ON: 0.6,
+  TOUCHED: 0.5,
+  TESTED_BY: 0.5,
+  OCCURRED_IN: 0.4,
+}
 
 /**
- * AssociativeRetrievalEngine implements multi-channel retrieval:
- * 1. Vector (Dense semantic similarity via subword feature hashing)
- * 2. Lexical (BM25 term matching over prompt and goal)
- * 3. Graph (Multi-hop topological neighbor expansion)
- * 4. Temporal (Revision & timestamp decay)
- * 5. Scope (Repository & path boundary relevance)
- * 6. Fusion & Ranking (Weighted multi-channel score)
+ * AssociativeRetrievalEngine implements true multi-channel retrieval:
+ * 1. Dense Semantic Vector Channel (Cosine distance over real embedding vectors)
+ * 2. Lexical Channel (BM25 term matching with IDF and length normalization)
+ * 3. Topological Graph Channel (0-hop, 1-hop, and bounded 2-hop relationship expansion)
+ * 4. Temporal Decay Channel (Exponential revision/time decay)
+ * 5. Scope Channel (Repository & path pattern boundary relevance)
+ * 6. Multi-Channel Fusion & Pruning
  */
 export class AssociativeRetrievalEngine {
   /**
-   * Computes dense feature vector for text.
-   */
-  static computeEmbedding(text: string): Float32Array {
-    const vec = new Float32Array(EMBEDDING_DIM)
-    const tokens = tokenize(text)
-    if (tokens.length === 0) return vec
-
-    for (const token of tokens) {
-      // Unigram hash
-      const h1 = hashString(token) % EMBEDDING_DIM
-      vec[Math.abs(h1)] += 1.0
-
-      // Subword character trigrams
-      if (token.length >= 3) {
-        for (let i = 0; i <= token.length - 3; i++) {
-          const tri = token.slice(i, i + 3)
-          const h2 = hashString(tri) % EMBEDDING_DIM
-          vec[Math.abs(h2)] += 0.5
-        }
-      }
-    }
-
-    // Normalize to unit length
-    let norm = 0
-    for (let i = 0; i < EMBEDDING_DIM; i++) {
-      norm += vec[i] * vec[i]
-    }
-    norm = Math.sqrt(norm)
-    if (norm > 0) {
-      for (let i = 0; i < EMBEDDING_DIM; i++) {
-        vec[i] /= norm
-      }
-    }
-
-    return vec
-  }
-
-  /**
-   * Computes cosine similarity between two unit vectors.
+   * Computes cosine similarity between two float vectors.
    */
   static cosineSimilarity(a: Float32Array, b: Float32Array): number {
+    if (a.length !== b.length || a.length === 0) return 0
     let dot = 0
-    for (let i = 0; i < EMBEDDING_DIM; i++) {
-      dot += a[i] * b[i]
+    let normA = 0
+    let normB = 0
+    for (let i = 0; i < a.length; i++) {
+      dot += a[i]! * b[i]!
+      normA += a[i]! * a[i]!
+      normB += b[i]! * b[i]!
     }
-    return Math.max(0, Math.min(1, dot))
+    const denom = Math.sqrt(normA) * Math.sqrt(normB)
+    if (denom === 0) return 0
+    return Math.max(0, Math.min(1, dot / denom))
   }
 
   /**
@@ -119,16 +105,20 @@ export class AssociativeRetrievalEngine {
   }
 
   /**
-   * Evaluates graph neighborhood relevance based on active symbols, active claims, and graph relationships.
+   * Evaluates graph neighborhood relevance:
+   * - 0-hop direct symbol / claim match
+   * - 1-hop typed edge traversal
+   * - Bounded 2-hop transitive neighbor expansion
    */
   static computeGraphScore(
     doc: RecallDocument,
     query: RecallQuery,
     allDocsMap: Map<string, RecallDocument>,
+    maxHop: number = 2,
   ): number {
     let score = 0
 
-    // Direct symbol intersection
+    // 0-Hop: Direct symbol intersection
     const docSymbolSet = new Set(doc.relatedSymbols.map((s) => s.toLowerCase()))
     for (const qSym of query.activeSymbols) {
       if (docSymbolSet.has(qSym.toLowerCase())) {
@@ -136,7 +126,7 @@ export class AssociativeRetrievalEngine {
       }
     }
 
-    // Direct claim reference
+    // 0-Hop: Direct claim reference
     const docSourceSet = new Set(doc.sourceRefs.map((s) => s.toLowerCase()))
     for (const qClaim of query.activeClaims) {
       if (docSourceSet.has(qClaim.toLowerCase())) {
@@ -144,13 +134,32 @@ export class AssociativeRetrievalEngine {
       }
     }
 
-    // Relationship graph edge traversal (1-hop)
+    // 1-Hop: Direct relationship edge traversal
+    const visitedHop1 = new Set<string>()
     if (doc.relationships) {
       for (const rel of doc.relationships) {
+        visitedHop1.add(rel.targetId)
         if (query.activeClaims.includes(rel.targetId)) {
-          if (rel.kind === "RESOLVED_BY" || rel.kind === "SUPERSEDES") score += 0.6
-          else if (rel.kind === "FAILED_BECAUSE" || rel.kind === "CONTRADICTS") score += 0.5
-          else score += 0.3
+          const edgeWeight = RELATIONSHIP_WEIGHTS[rel.kind] ?? 0.5
+          score += edgeWeight * 0.7
+        }
+      }
+    }
+
+    // 2-Hop: Bounded transitive neighborhood traversal
+    if (maxHop >= 2 && doc.relationships) {
+      for (const rel of doc.relationships) {
+        const neighbor = allDocsMap.get(rel.targetId)
+        if (!neighbor || !neighbor.relationships) continue
+
+        for (const neighborRel of neighbor.relationships) {
+          if (visitedHop1.has(neighborRel.targetId)) continue
+          if (query.activeClaims.includes(neighborRel.targetId)) {
+            const edge1Weight = RELATIONSHIP_WEIGHTS[rel.kind] ?? 0.5
+            const edge2Weight = RELATIONSHIP_WEIGHTS[neighborRel.kind] ?? 0.5
+            // 2-hop distance decay (0.4x factor)
+            score += edge1Weight * edge2Weight * 0.4
+          }
         }
       }
     }
@@ -173,13 +182,15 @@ export class AssociativeRetrievalEngine {
    * Computes scope relevance score.
    */
   static computeScopeScore(doc: RecallDocument, query: RecallQuery): number {
-    if (doc.scope.repository !== query.scope.repository) return 0.2
+    if (doc.scope.repository !== query.scope.repository) return 0.0
     if (!doc.scope.pathPattern || !query.scope.pathPattern) return 0.8
-    if (doc.scope.pathPattern === query.scope.pathPattern) return 1.0
-    if (doc.scope.pathPattern.startsWith(query.scope.pathPattern) || query.scope.pathPattern.startsWith(doc.scope.pathPattern)) {
+    const cleanDoc = doc.scope.pathPattern.replace(/[\*\/]+$/, "")
+    const cleanQuery = query.scope.pathPattern.replace(/[\*\/]+$/, "")
+    if (cleanDoc === cleanQuery) return 1.0
+    if (cleanQuery.startsWith(cleanDoc) || cleanDoc.startsWith(cleanQuery)) {
       return 0.7
     }
-    return 0.4
+    return 0.2
   }
 
   /**
@@ -189,12 +200,13 @@ export class AssociativeRetrievalEngine {
     documents: readonly RecallDocument[],
     query: RecallQuery,
     weights: RetrievalWeights = DEFAULT_RETRIEVAL_WEIGHTS,
+    options: RankOptions = {},
   ): readonly RecallCandidate[] {
     if (documents.length === 0) return []
 
     const queryText = `${query.prompt} ${query.goal}`.trim()
-    const queryEmbedding = this.computeEmbedding(queryText)
     const queryTokens = tokenize(queryText)
+    const maxGraphHop = options.maxGraphHop ?? 2
 
     // Build document token cache & term document frequencies
     const docTokensList: string[][] = []
@@ -220,14 +232,27 @@ export class AssociativeRetrievalEngine {
     for (let i = 0; i < documents.length; i++) {
       const doc = documents[i]!
       const docTokens = docTokensList[i]!
-      const docEmbedding = this.computeEmbedding(`${doc.text} ${doc.summary ?? ""}`)
 
-      const semanticScore = this.cosineSimilarity(queryEmbedding, docEmbedding)
+      // 1. Semantic channel
+      let semanticScore = 0
+      if (options.queryEmbedding && options.docEmbeddings?.has(doc.id)) {
+        const docVec = options.docEmbeddings.get(doc.id)!
+        semanticScore = this.cosineSimilarity(options.queryEmbedding, docVec)
+      }
+
+      // 2. Lexical channel (BM25)
       const lexicalScore = this.computeBM25Score(queryTokens, docTokens, avgDocLen, documents.length, termDocFreqs)
-      const graphScore = this.computeGraphScore(doc, query, docMap)
+
+      // 3. Graph channel (0-hop, 1-hop, 2-hop)
+      const graphScore = this.computeGraphScore(doc, query, docMap, maxGraphHop)
+
+      // 4. Temporal decay channel
       const temporalScore = this.computeTemporalScore(doc, query)
+
+      // 5. Scope relevance channel
       const scopeScore = this.computeScopeScore(doc, query)
 
+      // Prune candidates that have no relevance across semantic, lexical, or graph channels
       if (semanticScore < 0.25 && lexicalScore === 0 && graphScore === 0) {
         continue
       }
@@ -258,18 +283,10 @@ export class AssociativeRetrievalEngine {
   }
 }
 
-function tokenize(text: string): string[] {
+export function tokenize(text: string): string[] {
   return text
     .toLowerCase()
     .replace(/[^a-z0-9_\-./]/g, " ")
     .split(/\s+/)
     .filter((t) => t.length > 1)
-}
-
-function hashString(str: string): number {
-  let hash = 5381
-  for (let i = 0; i < str.length; i++) {
-    hash = (hash * 33) ^ str.charCodeAt(i)
-  }
-  return hash >>> 0
 }

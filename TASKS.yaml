@@ -172,43 +172,64 @@ tasks:
       - "First-class query_epistemic_state tool avoids raw SQL"
       - "Deterministic replay of validity graph and epistemic events"
     evidence: "packages/core/test/rivet/retrieval_barrier.test.ts, restart_replay.test.ts, benchmark.test.ts"
-  # PHASE 10 — ASSOCIATIVE RECALL RUNTIME
+  # PHASE 10 — ASSOCIATIVE RECALL RUNTIME HARDENING & EMPIRICAL VALIDATION
   - id: "M10-001"
     phase: 10
     title: "RecallStore Contract, Types & Multi-Channel Associative Engine"
     status: "DONE"
     acceptance:
-      - "Backend-independent RecallStore contract (index, remove, recall, rebuild)"
-      - "Dense semantic subword vector similarity + BM25 lexical term matching"
+      - "Backend-independent RecallStore contract (index, remove, recall, rebuild, count)"
+      - "Dense Float32Array vector cosine similarity + BM25 lexical term matching"
       - "Graph neighborhood topological expansion across SUPPORTS, CONTRADICTS, SUPERSEDES, FAILED_BECAUSE, RESOLVED_BY"
+      - "Bounded 2-hop graph expansion with distance decay (0.4x) and typed edge weighting"
       - "Temporal decay and scope relevance scoring with multi-channel fusion"
-    evidence: "packages/core/src/rivet/recall/types.ts, engine.ts, store.ts, tested in test/rivet/recall/store.test.ts"
+    evidence: "packages/core/src/rivet/recall/types.ts, engine.ts, store.ts, tested in test/rivet/recall/store.test.ts, graph_expansion.test.ts"
   - id: "M10-002"
     phase: 10
-    title: "Noesis Deterministic Recall Projector & Rebuildability"
+    title: "Real Embedding Provider & SHA-256 Batch Cache"
     status: "DONE"
     acceptance:
-      - "Deterministic projection from canonical Noesis HardState/events into typed RecallDocument records"
-      - "Non-authoritative isolation: Recall index wipe/corruption causes zero loss to HardState and fully rebuilds"
-    evidence: "packages/core/src/rivet/recall/projector.ts, test/rivet/recall/store.test.ts"
+      - "Pluggable EmbeddingProvider interface for OpenAI, Ollama, and local vector backends"
+      - "CachedEmbeddingProvider keyed by sha256(model + ':' + text) with batching"
+      - "DeterministicHashEmbeddingProvider for offline deterministic test execution"
+      - "Degraded lexical/graph fallback mode on embedding failure"
+    evidence: "packages/core/src/rivet/recall/embedding.ts, tested in test/rivet/recall/embedding.test.ts"
   - id: "M10-003"
     phase: 10
-    title: "Automatic Recall Admission Hook & Validity Barrier Integration"
+    title: "Persistent SqliteRecallStore with FTS5 & Vector Embeddings"
     status: "DONE"
     acceptance:
-      - "Automatic Harness recall during prompt admission without model memory tools"
-      - "Read-time validity barrier blocks STALE/SUPERSEDED memories from active truth"
-      - "REJECTED memories populated into failure-avoidance frontier"
-      - "Historical verifications annotated with non-current status"
-    evidence: "packages/core/src/rivet/recall/harness.ts, test/rivet/recall/validity_barrier_recall.test.ts"
+      - "Persistent SQLite backing with FTS5 virtual table for lexical BM25 indexing"
+      - "BLOB float array storage for vector embeddings and cosine search"
+      - "100% disposable & rebuildable invariant from canonical Noesis HardState/events"
+    evidence: "packages/core/src/rivet/recall/sqlite-store.ts, tested in test/rivet/recall/sqlite_store.test.ts"
   - id: "M10-004"
     phase: 10
-    title: "Killer Cross-Session E2E & Scientific Comparative Benchmark"
+    title: "Structured Episodic Memory Projector & Read-Time Validity Barrier"
     status: "DONE"
     acceptance:
-      - "Cross-session fresh process E2E: Session 1 auth race -> Session 5 Turn 1 automatic episode & decision delivery"
-      - "Scientific comparative benchmark: Raw model vs Rivet validity-only vs Rivet validity+recall"
-      - "100% useful historical episode recall, 0% repeated rejected approaches, 0% stale recall leakage"
-    evidence: "packages/core/test/rivet/recall/killer_e2e_cross_session.test.ts, scientific_benchmark.test.ts"
+      - "Structured episode projection preserving problem, observations, hypotheses, rejectedApproaches, decisions, verifications"
+      - "Automatic Harness recall admission hook without model memory tools"
+      - "Read-time validity barrier blocks STALE/SUPERSEDED memories from active truth"
+      - "REJECTED memories populated into failure-avoidance frontier"
+    evidence: "packages/core/src/rivet/recall/projector.ts, harness.ts, tested in test/rivet/recall/validity_barrier_recall.test.ts"
+  - id: "M10-005"
+    phase: 10
+    title: "Adversarial Recall Suite (8 Scenarios) & Latency Profiling"
+    status: "DONE"
+    acceptance:
+      - "8 adversarial scenarios: irrelevant episodes, superseded premises, contradictory episodes, symbol collisions, error collisions, foreign scope, altered revision, poisoned summaries"
+      - "Sub-millisecond latency profile across embedding, search, and admission hook stages"
+    evidence: "packages/core/test/rivet/recall/adversarial.test.ts, latency_profile.test.ts"
+  - id: "M10-006"
+    phase: 10
+    title: "Long-Horizon Multi-Session Campaign & Empirical Trajectory Evaluation"
+    status: "DONE"
+    acceptance:
+      - "5-session long-horizon scenario with cluster refactor, process restart, and state recovery"
+      - "Multi-trial empirical evaluation measuring Recall@5, Precision@5, latency, and zero stale leakage"
+      - "Cross-session Turn-1 automatic delivery without tool queries"
+    evidence: "packages/core/test/rivet/recall/long_horizon_campaign.test.ts, empirical_evaluation.test.ts, killer_e2e_cross_session.test.ts"
+
 
 

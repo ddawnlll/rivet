@@ -1,5 +1,7 @@
 export * from "./types"
 export * from "./engine"
 export * from "./store"
+export * from "./sqlite-store"
+export * from "./embedding"
 export * from "./projector"
 export * from "./harness"

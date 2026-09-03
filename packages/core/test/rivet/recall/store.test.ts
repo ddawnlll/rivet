@@ -5,6 +5,7 @@ import {
   InMemoryRecallStore,
   AssociativeRetrievalEngine,
   NoesisRecallProjector,
+  DeterministicHashEmbeddingProvider,
   type RecallDocument,
   type RecallQuery,
 } from "../../../src/rivet/recall"
@@ -13,7 +14,7 @@ import { Revision, Scope, createClaimId, createEvidenceId, createWorkspaceId } f
 
 describe("Associative RecallStore & Retrieval Engine (Contract & Invariants)", () => {
   test("Multi-Channel Retrieval: Combines dense vector, BM25 lexical, graph, and temporal channels", () => {
-    const store = new InMemoryRecallStore()
+    const store = new InMemoryRecallStore(new DeterministicHashEmbeddingProvider(128))
     const scope = Scope.global("repo", Revision.ZERO)
     const wsId = createWorkspaceId("ws_1")
 

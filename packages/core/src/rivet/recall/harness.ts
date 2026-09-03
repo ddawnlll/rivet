@@ -17,10 +17,12 @@ import {
 
 export interface RecallAdmissionContext {
   readonly hardState: HardState
-  readonly recallStore: RecallStore
+  readonly recallStore?: RecallStore
   readonly userPrompt: string
   readonly goalDescription: string
-  readonly repositoryId: string
+  readonly repositoryId?: string
+  readonly scope?: Scope
+  readonly revision?: Revision
   readonly focusSymbols?: readonly string[]
   readonly limit?: number
 }
@@ -34,21 +36,39 @@ export class AutomaticRecallAdmissionHook {
    * Executes proactive recall and filters candidates into a hardened MemoryFrontier.
    */
   static admitRecall(
-    ctx: RecallAdmissionContext,
+    storeOrCtx: RecallStore | RecallAdmissionContext,
+    maybeCtx?: Omit<RecallAdmissionContext, "recallStore">,
   ): Effect.Effect<MemoryFrontier, RecallError> {
     return Effect.gen(function* () {
+      let store: RecallStore
+      let ctx: RecallAdmissionContext
+
+      if (maybeCtx !== undefined) {
+        store = storeOrCtx as RecallStore
+        ctx = { ...maybeCtx, recallStore: store }
+      } else {
+        ctx = storeOrCtx as RecallAdmissionContext
+        if (!ctx.recallStore) {
+          return yield* Effect.fail(new RecallError("RecallStore is required in RecallAdmissionContext"))
+        }
+        store = ctx.recallStore
+      }
+
       const activeClaimIds = Array.from(ctx.hardState.claims.keys())
+      const repoId = ctx.repositoryId ?? ctx.scope?.repository ?? "repo"
+      const revision = ctx.revision ?? ctx.hardState.revision
+
       const query: RecallQuery = {
         prompt: ctx.userPrompt,
         goal: ctx.goalDescription,
-        scope: Scope.global(ctx.repositoryId, ctx.hardState.revision),
-        revision: ctx.hardState.revision,
+        scope: ctx.scope ?? Scope.global(repoId, revision),
+        revision,
         activeSymbols: ctx.focusSymbols ?? [],
         activeClaims: activeClaimIds,
         limit: ctx.limit ?? 10,
       }
 
-      const candidates = yield* ctx.recallStore.recall(query)
+      const candidates = yield* store.recall(query)
 
       const active: MemoryRef[] = []
       const episodic: MemoryRef[] = []
@@ -104,6 +124,37 @@ export class AutomaticRecallAdmissionHook {
             status,
             revision: doc.validFromRevision,
           })
+
+          // Unpack structured episode relationships into respective frontiers
+          if (doc.kind === "episode" && doc.metadata?.structuredEpisode) {
+            const ep = doc.metadata.structuredEpisode as any
+            if (Array.isArray(ep.decisions)) {
+              for (const dec of ep.decisions) {
+                if (!procedural.some((p) => p.id === dec.claimId)) {
+                  procedural.push({
+                    id: dec.claimId,
+                    type: "claim",
+                    summary: `Previous decision: ${dec.proposition}`,
+                    status: "supported",
+                    revision: doc.validFromRevision,
+                  })
+                }
+              }
+            }
+            if (Array.isArray(ep.rejectedApproaches)) {
+              for (const rej of ep.rejectedApproaches) {
+                if (!rejected.some((r) => r.id === rej.claimId)) {
+                  rejected.push({
+                    id: rej.claimId,
+                    type: "failure",
+                    summary: `Previous rejected approach: ${rej.reason}`,
+                    status: "rejected",
+                    revision: doc.validFromRevision,
+                  })
+                }
+              }
+            }
+          }
           continue
         }
 
