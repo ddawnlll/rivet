@@ -188,113 +188,138 @@ export class StructuralSkeletonIndexer {
     const imports: ParsedImport[] = []
     const calls = new Set<string>()
     const testTargets = new Set<string>()
-    const lines = content.split("\n")
 
     const isIndex = filePath.endsWith("index.ts") || filePath.endsWith("index.js") || filePath.endsWith("main.ts")
 
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i]?.trim() ?? ""
-      if (!line || line.startsWith("//") || line.startsWith("/*") || line.startsWith("*")) continue
+    // 1. Multiline Imports
+    const importRegex = /import\s+(?:type\s+)?(?:([\w$]+)\s*,?\s*)?(?:\{([^}]+)\})?\s*(?:\*\s+as\s+([\w$]+))?\s*from\s*['"]([^'"]+)['"]/gs
+    for (const match of content.matchAll(importRegex)) {
+      const defaultImp = match[1]
+      const namedImps = match[2]
+      const starImp = match[3]
+      const src = match[4] ?? ""
 
-      // Import statements
-      const importMatch = line.match(/^import\s+(?:type\s+)?(?:(\w+)|(?:\{([^}]+)\})|(?:\*\s+as\s+(\w+)))?\s*(?:from\s+)?['"]([^'"]+)['"]/)
-      if (importMatch) {
-        const defaultImp = importMatch[1]
-        const namedImps = importMatch[2]
-        const starImp = importMatch[3]
-        const src = importMatch[4] ?? ""
-
-        const importedSymbols: string[] = []
-        if (defaultImp) importedSymbols.push(defaultImp)
-        if (starImp) importedSymbols.push(starImp)
-        if (namedImps) {
-          for (const s of namedImps.split(",")) {
-            const trimmed = s.trim().split(/\s+as\s+/)[0]?.trim()
-            if (trimmed) importedSymbols.push(trimmed)
-          }
+      const importedSymbols: string[] = []
+      if (defaultImp && defaultImp !== "type") importedSymbols.push(defaultImp)
+      if (starImp) importedSymbols.push(starImp)
+      if (namedImps) {
+        for (const s of namedImps.split(",")) {
+          const clean = s.trim().replace(/^type\s+/, "")
+          const sym = clean.split(/\s+as\s+/)[0]?.trim()
+          if (sym && !importedSymbols.includes(sym)) importedSymbols.push(sym)
         }
-        imports.push({ source: src, importedSymbols, isTypeOnly: line.startsWith("import type") })
-        continue
       }
+      imports.push({ source: src, importedSymbols, isTypeOnly: match[0].startsWith("import type") })
+    }
 
-      // Export / Define Class
-      const classMatch = line.match(/^(?:export\s+)?(?:abstract\s+)?class\s+(\w+)(?:\s+extends\s+(\w+))?(?:\s+implements\s+([\w\s,]+))?/)
-      if (classMatch) {
-        const name = classMatch[1]!
-        const extendsOrImplements: string[] = []
-        if (classMatch[2]) extendsOrImplements.push(classMatch[2])
-        if (classMatch[3]) {
-          extendsOrImplements.push(...classMatch[3].split(",").map((s) => s.trim()).filter(Boolean))
+    // 2. Multiline Classes
+    const classRegex = /(?:export\s+)?(?:abstract\s+)?class\s+([\w$]+)(?:\s+extends\s+([\w$.]+))?(?:\s+implements\s+([^{]+))?\s*\{/gs
+    for (const match of content.matchAll(classRegex)) {
+      const name = match[1]!
+      const extendsOrImplements: string[] = []
+      if (match[2]) extendsOrImplements.push(match[2].trim())
+      if (match[3]) {
+        for (const imp of match[3].split(",")) {
+          const trimmed = imp.trim()
+          if (trimmed) extendsOrImplements.push(trimmed)
         }
-        symbols.push({
-          id: `symbol:${filePath}:${name}`,
-          name,
-          kind: "class",
-          line: i + 1,
-          exported: line.startsWith("export"),
-          extendsOrImplements,
-        })
-        continue
       }
+      symbols.push({
+        id: `symbol:${filePath}:${name}`,
+        name,
+        kind: "class",
+        exported: match[0].startsWith("export"),
+        extendsOrImplements,
+      })
+    }
 
-      // Interface
-      const interfaceMatch = line.match(/^(?:export\s+)?interface\s+(\w+)(?:\s+extends\s+([\w\s,]+))?/)
-      if (interfaceMatch) {
-        const name = interfaceMatch[1]!
-        const extendsOrImplements: string[] = []
-        if (interfaceMatch[2]) {
-          extendsOrImplements.push(...interfaceMatch[2].split(",").map((s) => s.trim()).filter(Boolean))
+    // 3. Multiline Interfaces
+    const interfaceRegex = /(?:export\s+)?interface\s+([\w$]+)(?:\s+extends\s+([^{]+))?\s*\{/gs
+    for (const match of content.matchAll(interfaceRegex)) {
+      const name = match[1]!
+      const extendsOrImplements: string[] = []
+      if (match[2]) {
+        for (const ext of match[2].split(",")) {
+          const trimmed = ext.trim()
+          if (trimmed) extendsOrImplements.push(trimmed)
         }
-        symbols.push({
-          id: `symbol:${filePath}:${name}`,
-          name,
-          kind: "interface",
-          line: i + 1,
-          exported: line.startsWith("export"),
-          extendsOrImplements,
-        })
-        continue
       }
+      symbols.push({
+        id: `symbol:${filePath}:${name}`,
+        name,
+        kind: "interface",
+        exported: match[0].startsWith("export"),
+        extendsOrImplements,
+      })
+    }
 
-      // Type alias
-      const typeMatch = line.match(/^(?:export\s+)?type\s+(\w+)\s*=/)
-      if (typeMatch) {
-        const name = typeMatch[1]!
+    // 4. Type aliases & Enums
+    const typeRegex = /(?:export\s+)?type\s+([\w$]+)\s*=/g
+    for (const match of content.matchAll(typeRegex)) {
+      const name = match[1]!
+      if (!symbols.some((s) => s.name === name)) {
         symbols.push({
           id: `symbol:${filePath}:${name}`,
           name,
           kind: "type",
-          line: i + 1,
-          exported: line.startsWith("export"),
+          exported: match[0].startsWith("export"),
         })
-        continue
       }
+    }
 
-      // Function
-      const funcMatch = line.match(/^(?:export\s+)?(?:async\s+)?function\s+(\w+)\s*\(/) ||
-        line.match(/^(?:export\s+)?const\s+(\w+)\s*=\s*(?:async\s*)?(?:\([^)]*\)|[a-zA-Z0-9_]+)\s*=>/)
-      if (funcMatch) {
-        const name = funcMatch[1]!
+    const enumRegex = /(?:export\s+)?enum\s+([\w$]+)\s*\{/g
+    for (const match of content.matchAll(enumRegex)) {
+      const name = match[1]!
+      if (!symbols.some((s) => s.name === name)) {
+        symbols.push({
+          id: `symbol:${filePath}:${name}`,
+          name,
+          kind: "type",
+          exported: match[0].startsWith("export"),
+        })
+      }
+    }
+
+    // 5. Functions & Exported Constants
+    const funcRegex = /(?:export\s+)?(?:async\s+)?function\s+([\w$]+)\s*\(/g
+    for (const match of content.matchAll(funcRegex)) {
+      const name = match[1]!
+      if (!symbols.some((s) => s.name === name)) {
         symbols.push({
           id: `symbol:${filePath}:${name}`,
           name,
           kind: "function",
-          line: i + 1,
-          exported: line.startsWith("export"),
+          exported: match[0].startsWith("export"),
         })
-        continue
       }
+    }
 
-      // Test description match
+    const constFuncRegex = /(?:export\s+)?const\s+([\w$]+)\s*=\s*(?:async\s*)?(?:\([^)]*\)|[\w$]+)\s*=>/g
+    for (const match of content.matchAll(constFuncRegex)) {
+      const name = match[1]!
+      if (!symbols.some((s) => s.name === name)) {
+        symbols.push({
+          id: `symbol:${filePath}:${name}`,
+          name,
+          kind: "function",
+          exported: match[0].startsWith("export"),
+        })
+      }
+    }
+
+    // 6. Test description match & calls
+    const lines = content.split("\n")
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i]?.trim() ?? ""
+      if (!line || line.startsWith("//")) continue
+
       const testMatch = line.match(/(?:test|it|describe)\s*\(\s*['"`]([^'"`]+)['"`]/)
       if (testMatch) {
         const testDesc = testMatch[1]!
-        // Extract symbol references mentioned inside test label
         const words = testDesc.split(/[^a-zA-Z0-9_]+/).filter((w) => w.length > 2 && /^[A-Z]/.test(w))
         for (const w of words) testTargets.add(w)
       }
 
-      // Syntactic method call: obj.method() or functionCall()
       const callMatches = line.matchAll(/\b([A-Z][a-zA-Z0-9_]+)\.([a-zA-Z0-9_]+)\s*\(/g)
       for (const cm of callMatches) {
         if (cm[1] && cm[2]) {

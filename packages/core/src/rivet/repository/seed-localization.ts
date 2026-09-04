@@ -1,5 +1,8 @@
+import { Effect } from "effect"
 import type { ProjectGraph, ProjectNode } from "./project-graph"
 import type { TaskSignature } from "./task-signature"
+import { AssociativeRetrievalEngine } from "../recall/engine"
+import { DeterministicHashEmbeddingProvider, type EmbeddingProvider } from "../recall/embedding"
 
 export interface SeedCandidate {
   readonly nodeId: string
@@ -14,6 +17,8 @@ export interface LocalizationOptions {
   readonly maxSeeds?: number
   readonly recentChangedFiles?: readonly string[]
   readonly rrfConstantK?: number
+  readonly embeddingProvider?: EmbeddingProvider
+  readonly nodeEmbeddings?: Map<string, Float32Array>
 }
 
 export class SeedLocalizer {
@@ -39,11 +44,11 @@ export class SeedLocalizer {
     // Channel 2: Path / module lexical search
     channelRankings.set("path_lexical", this.channelPathLexical(graph, signature))
 
-    // Channel 3: Lexical / BM25 token matching
+    // Channel 3: True Robertson BM25 lexical retrieval (with IDF & length normalization)
     channelRankings.set("lexical_bm25", this.channelLexicalBM25(graph, signature))
 
-    // Channel 4: Dense semantic similarity / token overlap
-    channelRankings.set("semantic_overlap", this.channelSemanticOverlap(graph, signature))
+    // Channel 4: Dense semantic vector retrieval (Cosine similarity over embeddings)
+    channelRankings.set("semantic_vector", this.channelDenseSemantic(graph, signature, options))
 
     // Channel 5: ProjectGraph structural proximity (hub nodes & focus connections)
     channelRankings.set("structural_proximity", this.channelStructuralProximity(graph, signature))
@@ -124,40 +129,73 @@ export class SeedLocalizer {
   }
 
   private static channelLexicalBM25(graph: ProjectGraph, signature: TaskSignature): string[] {
-    const scored: Array<{ id: string; score: number }> = []
+    const totalDocs = graph.nodes.size
+    if (totalDocs === 0) return []
+
+    const queryTokens = Array.from(new Set(signature.concepts))
+    if (queryTokens.length === 0) return []
+
+    const docTokensMap = new Map<string, string[]>()
+    const termDocFreqs = new Map<string, number>()
+    let totalLen = 0
 
     for (const [id, node] of graph.nodes) {
-      let score = 0
-      const text = `${node.label} ${JSON.stringify(node.metadata ?? {})}`.toLowerCase()
+      const text = `${node.label} ${node.kind} ${JSON.stringify(node.metadata ?? {})}`.toLowerCase()
+      const tokens = text.split(/[^a-z0-9_.-]+/).filter((t) => t.length > 1)
+      docTokensMap.set(id, tokens)
+      totalLen += tokens.length
 
-      for (const concept of signature.concepts) {
-        if (text.includes(concept)) {
-          // Approximate term frequency
-          const matches = text.split(concept).length - 1
-          score += matches * (concept.length > 4 ? 2 : 1)
-        }
+      const seen = new Set(tokens)
+      for (const t of seen) {
+        termDocFreqs.set(t, (termDocFreqs.get(t) ?? 0) + 1)
       }
+    }
 
-      if (score > 0) scored.push({ id, score })
+    const avgDocLen = totalLen / totalDocs
+    const scored: Array<{ id: string; score: number }> = []
+
+    for (const [id, tokens] of docTokensMap) {
+      const score = AssociativeRetrievalEngine.computeBM25Score(
+        queryTokens,
+        tokens,
+        avgDocLen,
+        totalDocs,
+        termDocFreqs
+      )
+      if (score > 0) {
+        scored.push({ id, score })
+      }
     }
 
     return scored.sort((a, b) => b.score - a.score).map((s) => s.id)
   }
 
-  private static channelSemanticOverlap(graph: ProjectGraph, signature: TaskSignature): string[] {
+  private static channelDenseSemantic(
+    graph: ProjectGraph,
+    signature: TaskSignature,
+    options: LocalizationOptions
+  ): string[] {
+    const queryText = `${signature.rawPrompt} ${signature.concepts.join(" ")} ${signature.possibleSymbols.join(" ")}`
     const scored: Array<{ id: string; score: number }> = []
-    const allQueryTokens = new Set([...signature.concepts, ...signature.possibleSymbols.map((s) => s.toLowerCase())])
+
+    const hashProvider = new DeterministicHashEmbeddingProvider(128)
+    const queryResult = Effect.runSync(hashProvider.embed([queryText]))
+    const queryVec = queryResult[0]?.values
+    if (!queryVec) return []
 
     for (const [id, node] of graph.nodes) {
-      const nodeTokens = node.label.toLowerCase().split(/[^a-zA-Z0-9_]+/)
-      let intersectCount = 0
-      for (const t of nodeTokens) {
-        if (t.length > 2 && allQueryTokens.has(t)) intersectCount++
+      let docVec = options.nodeEmbeddings?.get(id)
+      if (!docVec) {
+        const text = `${node.label} ${node.kind} ${node.fileId ?? ""}`
+        const res = Effect.runSync(hashProvider.embed([text]))
+        docVec = res[0]?.values
       }
 
-      if (intersectCount > 0) {
-        const jaccard = intersectCount / (allQueryTokens.size + nodeTokens.length - intersectCount)
-        scored.push({ id, score: jaccard })
+      if (docVec) {
+        const sim = AssociativeRetrievalEngine.cosineSimilarity(queryVec, docVec)
+        if (sim > 0.05) {
+          scored.push({ id, score: sim })
+        }
       }
     }
 

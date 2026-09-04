@@ -102,15 +102,33 @@ export class TaskNeighborhood {
   }
 
   getFiles(): string[] {
-    const files = new Set<string>()
+    const fileScores = new Map<string, number>()
+
     for (const node of this.nodes.values()) {
+      const hop = this.nodeHopDistance.get(node.id) ?? 2
+      const hopWeight = hop === 0 ? 10 : hop === 1 ? 5 : 2
+
+      let file: string | undefined
       if (node.kind === "source_file" || node.kind === "test" || node.kind === "config") {
-        files.add(node.label)
+        file = node.label
       } else if (node.fileId) {
-        files.add(node.fileId.replace(/^file:/, ""))
+        file = node.fileId.replace(/^file:/, "")
+      }
+
+      if (file) {
+        let typeMultiplier = 1.0
+        if (file.endsWith(".ts") || file.endsWith(".rs") || file.endsWith(".py") || file.endsWith(".go")) {
+          typeMultiplier = 2.0
+        } else if (file.endsWith(".svg") || file.endsWith(".png") || file.endsWith(".md") || file.endsWith(".html")) {
+          typeMultiplier = 0.05
+        }
+        fileScores.set(file, (fileScores.get(file) ?? 0) + hopWeight * typeMultiplier)
       }
     }
-    return Array.from(files)
+
+    return Array.from(fileScores.entries())
+      .sort((a, b) => b[1] - a[1])
+      .map(([f]) => f)
   }
 
   getSymbols(): ProjectNode[] {

@@ -37,7 +37,15 @@ export class RepositoryCensusProjector {
       const base = parts[parts.length - 1] ?? lower
 
       // Ignored / Vendor roots detection
-      if (parts.includes("node_modules") || parts.includes("vendor") || parts.includes("dist") || parts.includes("target")) {
+      if (
+        parts.includes("node_modules") ||
+        parts.includes("vendor") ||
+        parts.includes("dist") ||
+        parts.includes("target") ||
+        parts.includes("legacy") ||
+        parts.includes(".venv") ||
+        parts.includes("artifacts")
+      ) {
         const root = parts[0]
         if (root) ignoredRoots.add(root)
       }
@@ -161,6 +169,27 @@ export class RepositoryCensusProjector {
 
     // Source files
     for (const file of census.fileTree) {
+      const lower = file.toLowerCase()
+      if (
+        lower.endsWith(".svg") ||
+        lower.endsWith(".png") ||
+        lower.endsWith(".jpg") ||
+        lower.endsWith(".jpeg") ||
+        lower.endsWith(".ico") ||
+        lower.endsWith(".woff") ||
+        lower.endsWith(".woff2") ||
+        lower.endsWith(".wasm") ||
+        lower.endsWith(".map") ||
+        lower.startsWith(".venv/") ||
+        lower.includes("/.venv/") ||
+        lower.startsWith("artifacts/") ||
+        lower.startsWith("legacy/") ||
+        lower.includes("/legacy/") ||
+        lower.includes("/node_modules/")
+      ) {
+        continue
+      }
+
       const isTest = file.includes(".test.") || file.includes(".spec.") || file.includes("/test/") || file.includes("/tests/")
       const fileNodeId = `file:${file}`
       graph.addNode(fileNodeId, isTest ? "test" : "source_file", file, { path: file }, file)

@@ -57,7 +57,7 @@ export function createCoordinator(): TokenCoordinator {
     const parsed = StructuralSkeletonIndexer.indexFile(graph, "src/auth/coordinator.ts", tsCode, "hash_ts_1")
 
     expect(parsed.symbols.length).toBe(3)
-    expect(parsed.symbols.map((s) => s.name)).toEqual(["AuthService", "TokenCoordinator", "createCoordinator"])
+    expect(parsed.symbols.map((s) => s.name).sort()).toEqual(["AuthService", "TokenCoordinator", "createCoordinator"].sort())
     expect(parsed.imports.length).toBe(2)
 
     // Check graph edges
