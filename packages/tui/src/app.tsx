@@ -53,6 +53,11 @@ import { DialogConsoleOrg } from "./component/dialog-console-org"
 import { ThemeProvider, useTheme } from "./context/theme"
 import { Home } from "./routes/home"
 import { Session } from "./routes/session"
+import { RivetProvider } from "./rivet/context"
+import { StateView } from "./rivet/views/state-view"
+import { CodeView } from "./rivet/views/code-view"
+import { VerifyView } from "./rivet/views/verify-view"
+import { ChangesView } from "./rivet/views/changes-view"
 import { PromptHistoryProvider } from "./component/prompt/history"
 import { FrecencyProvider } from "./component/prompt/frecency"
 import { PromptStashProvider } from "./component/prompt/stash"
@@ -120,6 +125,14 @@ const appBindingCommands = [
   "console.org.switch",
   "rivet.status",
   "rivet.debug",
+  "rivet.state",
+  "rivet.state.hard",
+  "rivet.state.workspace",
+  "rivet.memory",
+  "rivet.code",
+  "rivet.changes",
+  "rivet.verify",
+  "rivet.history",
   "opencode.status",
   "opencode.debug",
   "theme.switch",
@@ -781,6 +794,80 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
         category: "System",
       },
       {
+        name: "rivet.state",
+        title: "View State",
+        category: "Rivet",
+        slashName: "state",
+        run: () => {
+          dialog.replace(() => <StateView initialTab="hard" onClose={() => dialog.clear()} />)
+        },
+      },
+      {
+        name: "rivet.state.hard",
+        title: "View Hard State",
+        category: "Rivet",
+        slashName: "hard",
+        slashAliases: ["state-hard"],
+        run: () => {
+          dialog.replace(() => <StateView initialTab="hard" onClose={() => dialog.clear()} />)
+        },
+      },
+      {
+        name: "rivet.state.workspace",
+        title: "View Workspace (Soft State)",
+        category: "Rivet",
+        slashName: "workspace",
+        slashAliases: ["state-workspace"],
+        run: () => {
+          dialog.replace(() => <StateView initialTab="workspace" onClose={() => dialog.clear()} />)
+        },
+      },
+      {
+        name: "rivet.memory",
+        title: "View Memory",
+        category: "Rivet",
+        slashName: "memory",
+        run: () => {
+          dialog.replace(() => <StateView initialTab="memory" onClose={() => dialog.clear()} />)
+        },
+      },
+      {
+        name: "rivet.code",
+        title: "View Code Context",
+        category: "Rivet",
+        slashName: "code",
+        run: () => {
+          dialog.replace(() => <CodeView onClose={() => dialog.clear()} />)
+        },
+      },
+      {
+        name: "rivet.changes",
+        title: "View Changes",
+        category: "Rivet",
+        slashName: "changes",
+        run: () => {
+          dialog.replace(() => <ChangesView onClose={() => dialog.clear()} />)
+        },
+      },
+      {
+        name: "rivet.verify",
+        title: "View Verification & Obligations",
+        category: "Rivet",
+        slashName: "verify",
+        run: () => {
+          dialog.replace(() => <VerifyView onClose={() => dialog.clear()} />)
+        },
+      },
+      {
+        name: "rivet.history",
+        title: "View History",
+        category: "Rivet",
+        slashName: "history",
+        run: () => {
+          dialog.replace(() => <StateView initialTab="history" onClose={() => dialog.clear()} />)
+        },
+      },
+      {
         name: "theme.switch",
         title: "Switch theme",
         slashName: "themes",
@@ -1110,23 +1197,25 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
         <TimeToFirstDraw />
       </Show>
       <Show when={ready()}>
-        <box flexGrow={1} minHeight={0} flexDirection="column">
-          <Switch>
-            <Match when={route.data.type === "home"}>
-              <Home />
-            </Match>
-            <Match when={route.data.type === "session"}>
-              <Show when={route.data.type === "session" ? route.data.sessionID : undefined} keyed>
-                {(_) => <Session />}
-              </Show>
-            </Match>
-          </Switch>
-          {plugin()}
-        </box>
-        <box flexShrink={0}>
-          <pluginRuntime.Slot name="app_bottom" />
-        </box>
-        <pluginRuntime.Slot name="app" />
+        <RivetProvider>
+          <box flexGrow={1} minHeight={0} flexDirection="column">
+            <Switch>
+              <Match when={route.data.type === "home"}>
+                <Home />
+              </Match>
+              <Match when={route.data.type === "session"}>
+                <Show when={route.data.type === "session" ? route.data.sessionID : undefined} keyed>
+                  {(_) => <Session />}
+                </Show>
+              </Match>
+            </Switch>
+            {plugin()}
+          </box>
+          <box flexShrink={0}>
+            <pluginRuntime.Slot name="app_bottom" />
+          </box>
+          <pluginRuntime.Slot name="app" />
+        </RivetProvider>
       </Show>
       <Show when={!startup.skipInitialLoading}>
         <StartupLoading ready={ready} />

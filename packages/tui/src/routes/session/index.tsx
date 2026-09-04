@@ -55,6 +55,8 @@ import { DialogForkFromTimeline } from "./dialog-fork-from-timeline"
 import { DialogSessionRename } from "../../component/dialog-session-rename"
 import { Sidebar } from "./sidebar"
 import { SubagentFooter } from "./subagent-footer.tsx"
+import { StatusRail } from "../../rivet/components/status-rail"
+import { StateView } from "../../rivet/views/state-view"
 import { filetype } from "../../util/filetype"
 import parsers from "../../parsers-config"
 import { errorMessage } from "../../util/error"
@@ -1311,6 +1313,7 @@ export function Session() {
                   <SubagentFooter />
                 </Show>
                 <Show when={visible()}>
+                  <StatusRail onClick={() => dialog.replace(() => <StateView />)} />
                   <pluginRuntime.Slot
                     name="session_prompt"
                     mode="replace"
@@ -1780,6 +1783,15 @@ function ToolPart(props: { last: boolean; part: ToolPart; message: AssistantMess
         </Match>
         <Match when={display() === "skill"}>
           <Skill {...toolprops} />
+        </Match>
+        <Match when={display() === "propose_claim"}>
+          <ProposeClaim {...toolprops} />
+        </Match>
+        <Match when={display() === "request_verification"}>
+          <RequestVerification {...toolprops} />
+        </Match>
+        <Match when={display() === "request_completion"}>
+          <RequestCompletion {...toolprops} />
         </Match>
         <Match when={true}>
           <GenericTool {...toolprops} />
@@ -2592,6 +2604,153 @@ function Skill(props: ToolProps) {
   )
 }
 
+function ProposeClaim(props: ToolProps) {
+  const { theme } = useTheme()
+  const proposition = createMemo(() => (typeof props.input.proposition === "string" ? props.input.proposition : ""))
+  const scope = createMemo(() => (typeof props.input.scope === "string" ? props.input.scope : "global"))
+  const evidence = createMemo(() =>
+    Array.isArray(props.input.supporting_evidence)
+      ? props.input.supporting_evidence.join(", ")
+      : Array.isArray(props.input.evidence)
+        ? props.input.evidence.join(", ")
+        : "",
+  )
+  const [expanded, setExpanded] = createSignal(false)
+
+  return (
+    <Show
+      when={expanded()}
+      fallback={
+        <InlineTool
+          icon="◆"
+          pending="Proposing claim..."
+          complete={proposition()}
+          part={props.part}
+          onClick={() => setExpanded(true)}
+        >
+          Supported claim: {proposition()}
+        </InlineTool>
+      }
+    >
+      <BlockTool title={`◆ Claim: ${proposition()}`} part={props.part} onClick={() => setExpanded(false)}>
+        <box flexDirection="column" gap={0}>
+          <text fg={theme.textMuted}>
+            Scope: <span style={{ fg: theme.text }}>{scope()}</span>
+          </text>
+          <Show when={evidence()}>
+            <text fg={theme.textMuted}>
+              Evidence: <span style={{ fg: theme.text }}>{evidence()}</span>
+            </text>
+          </Show>
+          <text fg={theme.textMuted} marginTop={1}>
+            Click to collapse
+          </text>
+        </box>
+      </BlockTool>
+    </Show>
+  )
+}
+
+function RequestVerification(props: ToolProps) {
+  const { theme } = useTheme()
+  const predicate = createMemo(() =>
+    typeof props.input.predicate === "string"
+      ? props.input.predicate
+      : typeof props.input.obligation_id === "string"
+        ? props.input.obligation_id
+        : "Verification",
+  )
+  const passed = createMemo(() => {
+    if (props.metadata.passed === true) return true
+    if (props.metadata.passed === false) return false
+    const out = props.output?.toLowerCase() ?? ""
+    return out.length > 0 && !out.includes("fail")
+  })
+  const receiptId = createMemo(() => (typeof props.metadata.receiptId === "string" ? props.metadata.receiptId : undefined))
+  const [expanded, setExpanded] = createSignal(false)
+
+  return (
+    <Show
+      when={expanded()}
+      fallback={
+        <InlineTool
+          icon={passed() ? "✓" : "✗"}
+          pending="Verifying..."
+          complete={true}
+          part={props.part}
+          onClick={() => setExpanded(true)}
+        >
+          {passed() ? `${predicate()} passed` : `${predicate()} failed`}
+        </InlineTool>
+      }
+    >
+      <BlockTool
+        title={`${passed() ? "✓" : "✗"} Verification: ${predicate()}`}
+        part={props.part}
+        onClick={() => setExpanded(false)}
+      >
+        <box flexDirection="column" gap={0}>
+          <text fg={passed() ? theme.success : theme.error}>
+            Status: {passed() ? "Verified" : "Failed"}
+          </text>
+          <Show when={receiptId()}>
+            <text fg={theme.textMuted}>
+              Receipt ID: <span style={{ fg: theme.text }}>{receiptId()}</span>
+            </text>
+          </Show>
+          <Show when={props.output}>
+            <text fg={theme.textMuted} marginTop={1}>
+              {props.output}
+            </text>
+          </Show>
+          <text fg={theme.textMuted} marginTop={1}>
+            Click to collapse
+          </text>
+        </box>
+      </BlockTool>
+    </Show>
+  )
+}
+
+function RequestCompletion(props: ToolProps) {
+  const { theme } = useTheme()
+  const summary = createMemo(() => (typeof props.input.summary === "string" ? props.input.summary : "Task completion"))
+  const completed = createMemo(() => props.metadata.completed !== false)
+  const [expanded, setExpanded] = createSignal(false)
+
+  return (
+    <Show
+      when={expanded()}
+      fallback={
+        <InlineTool
+          icon={completed() ? "✓" : "⚠"}
+          pending="Evaluating completion..."
+          complete={true}
+          part={props.part}
+          onClick={() => setExpanded(true)}
+        >
+          {completed() ? `Ready: ${summary()}` : `Completion blocked: ${summary()}`}
+        </InlineTool>
+      }
+    >
+      <BlockTool
+        title={`${completed() ? "✓" : "⚠"} Completion: ${summary()}`}
+        part={props.part}
+        onClick={() => setExpanded(false)}
+      >
+        <box flexDirection="column" gap={0}>
+          <text fg={completed() ? theme.success : theme.warning}>
+            {completed() ? "All required obligations satisfied" : "Verification requirements remaining"}
+          </text>
+          <text fg={theme.textMuted} marginTop={1}>
+            Click to collapse
+          </text>
+        </box>
+      </BlockTool>
+    </Show>
+  )
+}
+
 function Diagnostics(props: { diagnostics: unknown; filePath: string }) {
   const { theme } = useTheme()
   const terminalEnvironment = useTuiTerminalEnvironment()
@@ -2650,6 +2809,9 @@ const toolDisplays = new Set([
   "question",
   "skill",
   "execute",
+  "propose_claim",
+  "request_verification",
+  "request_completion",
 ])
 
 export function toolDisplay(tool: string) {
