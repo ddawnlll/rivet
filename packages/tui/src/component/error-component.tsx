@@ -108,7 +108,7 @@ export function ErrorComponent(props: { error: Error; reset: () => void; mode?: 
         {/* Headline */}
         <box flexDirection="column" alignItems="center" flexShrink={0}>
           <text attributes={TextAttributes.BOLD} fg={colors.text}>
-            opencode crashed
+            rivet crashed
           </text>
           <Show when={showSubtext()}>
             <text fg={colors.muted}>An unexpected error stopped the session.</text>
@@ -211,7 +211,7 @@ function buildIssueURL(message: string, stack: string) {
   url.searchParams.set("terminal", describeTerminal())
   url.searchParams.set(
     "reproduce",
-    "Reported automatically from the opencode crash screen. If you can, describe what you were doing when it crashed.",
+    "Reported automatically from the rivet crash screen. If you can, describe what you were doing when it crashed.",
   )
 
   // Budget the stack against the fully URL-encoded length (not the raw length) so
