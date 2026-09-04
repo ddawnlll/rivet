@@ -22,6 +22,7 @@ import {
 } from "./types"
 import type { ExecutionReceipt, VerificationReceipt } from "./accp"
 import { ValidityGraph } from "./validity"
+import { RepositoryFrontierCompiler, type RepositoryFrontier } from "./repository/repository-frontier"
 
 export interface ClaimRecord {
   readonly id: ClaimId
@@ -652,18 +653,19 @@ export interface CognitiveViewInit {
   hardRevision: Revision
   repositoryId?: string
   goalDescription: string
-  activeClaims?: ClaimRecord[]
-  contradictions?: string[]
-  rejectedClaims?: string[]
-  openObligations?: string[]
-  recentEvidence?: string[]
-  repositorySignals?: string[]
-  unknowns?: string[]
-  activeHypotheses?: string[]
-  activeFocus?: string[]
-  relevantFiles?: string[]
-  premiseConflicts?: PremiseConflict[]
+  activeClaims?: readonly ClaimRecord[]
+  contradictions?: readonly string[]
+  rejectedClaims?: readonly string[]
+  openObligations?: readonly string[]
+  recentEvidence?: readonly string[]
+  repositorySignals?: readonly string[]
+  unknowns?: readonly string[]
+  activeHypotheses?: readonly string[]
+  activeFocus?: readonly string[]
+  relevantFiles?: readonly string[]
+  premiseConflicts?: readonly PremiseConflict[]
   memoryFrontier?: MemoryFrontier
+  repositoryFrontier?: RepositoryFrontier
   tokenBudgetHint?: number
   modelInvocationCount?: number
 }
@@ -684,6 +686,7 @@ export class CognitiveView {
   readonly relevantFiles: readonly string[]
   readonly premiseConflicts: readonly PremiseConflict[]
   readonly memoryFrontier?: MemoryFrontier
+  readonly repositoryFrontier?: RepositoryFrontier
   readonly tokenBudgetHint: number
   readonly modelInvocationCount: number
 
@@ -703,6 +706,7 @@ export class CognitiveView {
     this.relevantFiles = init.relevantFiles ?? []
     this.premiseConflicts = init.premiseConflicts ?? []
     this.memoryFrontier = init.memoryFrontier
+    this.repositoryFrontier = init.repositoryFrontier
     this.tokenBudgetHint = init.tokenBudgetHint ?? 4096
     this.modelInvocationCount = init.modelInvocationCount ?? 0
   }
@@ -827,6 +831,11 @@ export class CognitiveView {
       for (const s of this.repositorySignals) {
         lines.push(`- ${s}`)
       }
+      lines.push("")
+    }
+
+    if (this.repositoryFrontier) {
+      lines.push(RepositoryFrontierCompiler.render(this.repositoryFrontier))
       lines.push("")
     }
 

@@ -16,6 +16,7 @@ import {
   Scope,
 } from "./types"
 import { ValidityEngine } from "./validity"
+import { RepositoryFrontierCompiler, type RepositoryFrontier } from "./repository/repository-frontier"
 
 export type RepresentationMode = "RAW_TEXT" | "TRIPLES" | "PATHS" | "HYBRID"
 
@@ -60,6 +61,7 @@ export interface CompilationContext {
   readonly tokenBudget: number
   readonly mode: RepresentationMode
   readonly deferredTreesCount?: number
+  readonly repositoryFrontier?: RepositoryFrontier
 }
 
 export interface CompiledViewPayload {
@@ -86,6 +88,7 @@ export interface CompiledViewPayload {
   readonly triples: readonly KnowledgeTriple[]
   readonly provenancePaths: readonly ProvenancePath[]
   readonly mode: RepresentationMode
+  readonly repositoryFrontier?: RepositoryFrontier
 }
 
 type ResolvedCompilationContext = CompilationContext & {
@@ -179,6 +182,7 @@ export class CognitiveViewCompiler {
       triples,
       provenancePaths,
       mode: ctx.mode,
+      repositoryFrontier: ctx.repositoryFrontier,
     }
   }
 
@@ -439,6 +443,10 @@ export class CognitiveViewCompiler {
       lines.push(`\nRelevant Files: ${p.relevantFiles.join(", ")}`)
     }
 
+    if (p.repositoryFrontier) {
+      lines.push(`\n${RepositoryFrontierCompiler.render(p.repositoryFrontier)}`)
+    }
+
     lines.push(
       `\nOmitted Summary: ${p.omittedSummary.deferredTrees} deferred trees, token budget: ${p.omittedSummary.tokenBudget}`,
     )
@@ -452,6 +460,14 @@ export class CognitiveViewCompiler {
 
     for (const triple of p.triples) {
       lines.push(formatTriple(triple))
+    }
+
+    if (p.repositoryFrontier) {
+      lines.push(`\n# --- Repository Frontier ---`)
+      lines.push(formatTriple({ subject: "Frontier#Repo", predicate: "description", object: p.repositoryFrontier.repositorySummary.description }))
+      for (const rel of p.repositoryFrontier.structure) {
+        lines.push(formatTriple({ subject: `Symbol#${rel.from}`, predicate: rel.relation, object: `Symbol#${rel.to}` }))
+      }
     }
 
     lines.push(`\n# (Meta#Omitted, deferred_trees, ${p.omittedSummary.deferredTrees})`)
@@ -468,6 +484,12 @@ export class CognitiveViewCompiler {
       lines.push(formatProvenancePath(path))
     }
 
+    if (p.repositoryFrontier) {
+      for (const rel of p.repositoryFrontier.structure) {
+        lines.push(formatProvenancePath({ steps: [`Frontier(${rel.from})`, rel.relation, `Frontier(${rel.to})`] }))
+      }
+    }
+
     lines.push(
       `\n[OmittedSummary: deferred_trees=${p.omittedSummary.deferredTrees}, token_budget=${p.omittedSummary.tokenBudget}]`,
     )
@@ -475,6 +497,16 @@ export class CognitiveViewCompiler {
   }
 
   private static renderHybrid(p: CompiledViewPayload): string {
+    const frontierYaml = p.repositoryFrontier
+      ? [
+          `  repository_frontier:`,
+          `    description: "${p.repositoryFrontier.repositorySummary.description}"`,
+          `    subsystems: ${JSON.stringify(p.repositoryFrontier.taskNeighborhood)}`,
+          `    files: ${JSON.stringify(p.repositoryFrontier.likelyRelevantFiles)}`,
+          `    key_symbols: ${JSON.stringify(p.repositoryFrontier.keySymbols)}`,
+        ].join("\n")
+      : ""
+
     return [
       "```yaml",
       `cognitive_view:`,
@@ -487,10 +519,11 @@ export class CognitiveViewCompiler {
       `  open_obligations_count: ${p.openObligations.length}`,
       `  contradictions_count: ${p.contradictions.length}`,
       `  premise_conflicts_count: ${p.premiseConflicts.length}`,
+      frontierYaml,
       `  omitted_summary:`,
       `    deferred_trees: ${p.omittedSummary.deferredTrees}`,
       `    token_budget: ${p.omittedSummary.tokenBudget}`,
       "```",
-    ].join("\n")
+    ].filter(Boolean).join("\n")
   }
 }
