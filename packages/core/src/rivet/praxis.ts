@@ -182,6 +182,11 @@ export class PraxisEngine {
     report: ParsedTestReport
   ): VerificationReceipt {
     const passed = report.failedCount === 0 && report.passedCount > 0
+    const reasonCodes: string[] = passed
+      ? ["TESTS_PASSED"]
+      : report.failedCount > 0
+        ? ["TESTS_FAILED"]
+        : ["NO_PASSING_TESTS"]
     const diagnostics = !passed
       ? `Praxis test verification failed: ${report.passedCount} passed, ${report.failedCount} failed, ${report.skippedCount} skipped`
       : null
@@ -193,6 +198,7 @@ export class PraxisEngine {
       evidenceId: createEvidenceId(),
       verifiedScope: req.targetScope,
       diagnostics,
+      reasonCodes,
       timestamp: new Date().toISOString(),
     }
   }

@@ -105,6 +105,10 @@ const layer = Layer.effectDiscard(
       return plugin.add(PluginV2.ID.make(loaded.id), loaded.effect)
     }
 
+    // Location plugins populate the catalog, agents, and integrations. The
+    // boot must complete BEFORE the layer finishes building so model
+    // resolution and prompt admission observe a populated catalog instead of
+    // racing a background fork.
     yield* State.batch(
       Effect.gen(function* () {
         yield* add(ConfigReferencePlugin.Plugin)
@@ -120,7 +124,7 @@ const layer = Layer.effectDiscard(
         yield* add(ConfigProviderPlugin.Plugin)
         yield* add(VariantPlugin.Plugin)
       }),
-    ).pipe(Effect.withSpan("PluginInternal.boot"), Effect.forkScoped({ startImmediately: true }))
+    ).pipe(Effect.withSpan("PluginInternal.boot"))
   }),
 )
 

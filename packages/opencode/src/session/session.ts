@@ -26,7 +26,7 @@ import { inArray } from "drizzle-orm"
 import { lt } from "drizzle-orm"
 import { or } from "drizzle-orm"
 import type { SQL } from "drizzle-orm"
-import { PartTable, SessionTable } from "@opencode-ai/core/session/sql"
+import { MessageTable, PartTable, SessionMessageTable, SessionTable } from "@opencode-ai/core/session/sql"
 import { ProjectTable } from "@opencode-ai/core/project/sql"
 import { MessageV2 } from "./message-v2"
 import type { InstanceContext } from "../project/instance-context"
@@ -825,11 +825,152 @@ const layer: Layer.Layer<
       return [] as Snapshot.FileDiff[]
     })
 
+    // Transitional bridge: the Rivet SessionRunner writes V2 messages into
+    // SessionMessageTable only. Until a full V2->V1 projection exists, derive
+    // the legacy read shape from the V2 store when the V1 tables are empty.
+    const v2FallbackMessages = Effect.fn("Session.v2FallbackMessages")(function* (sessionID: SessionID) {
+      const rows = yield* database.db
+        .select()
+        .from(SessionMessageTable)
+        .where(eq(SessionMessageTable.session_id, sessionID))
+        .orderBy(SessionMessageTable.seq)
+        .all()
+        .pipe(Effect.orDie)
+      if (rows.length === 0) return []
+      const sessionRow = yield* database.db
+        .select({ directory: SessionTable.directory })
+        .from(SessionTable)
+        .where(eq(SessionTable.id, sessionID))
+        .get()
+        .pipe(Effect.orDie)
+      const ctx = yield* InstanceState.context.pipe(Effect.option)
+      const sessionDir = sessionRow?.directory || (Option.isSome(ctx) ? ctx.value.directory : "")
+      const pathInfo = { cwd: sessionDir, root: sessionDir }
+      const decode = Schema.decodeUnknownOption(SessionMessage.Message)
+      const withParts: SessionV1.WithParts[] = []
+      let lastUserID = ""
+      for (const row of rows) {
+        const decoded = decode({ ...row.data, id: row.id, type: row.type })
+        if (decoded._tag === "None") continue
+        const message = decoded.value
+        const v1ID = MessageID.make(String(row.id))
+        const asMillis = (value: unknown, fallback: number) => {
+          const n = typeof value === "number" ? value : typeof value === "string" ? Date.parse(value) : NaN
+          return Number.isFinite(n) && n > 0 ? n : fallback
+        }
+        const now = Date.now()
+        const created = asMillis((message.time as any)?.created, now)
+        const base = (type: string) => ({
+          id: PartID.ascending(),
+          sessionID,
+          messageID: v1ID,
+          type,
+        })
+        if (message.type === "user") {
+          lastUserID = String(row.id)
+          withParts.push({
+            info: {
+              id: v1ID,
+              sessionID,
+              role: "user",
+              agent: message.agents?.[0]?.name ?? "build",
+              model: { providerID: "", modelID: "" },
+              time: { created },
+            },
+            parts: [
+              ...(message.text
+                ? [{ ...base("text"), text: message.text, time: { start: created, end: created } }]
+                : []),
+              ...(message.files ?? []).map((file) => ({
+                ...base("file"),
+                mime: file.mime,
+                url: file.uri,
+                ...(file.name ? { filename: file.name } : {}),
+              })),
+            ],
+          } as any)
+          continue
+        }
+        if (message.type === "assistant") {
+          const completedAt = message.time.completed ? asMillis(message.time.completed, created) : created
+          withParts.push({
+            info: {
+              id: v1ID,
+              parentID: MessageID.make(lastUserID || String(row.id)),
+              sessionID,
+              role: "assistant",
+              mode: message.agent,
+              agent: message.agent,
+              modelID: String(message.model.id),
+              providerID: String(message.model.providerID),
+              cost: message.cost ?? 0,
+              tokens: message.tokens ?? { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+              path: pathInfo,
+              time: { created, completed: completedAt },
+            },
+            parts: (message.content as any[]).flatMap((part: any) => {
+              if (part.type === "text")
+                return [{ ...base("text"), text: part.text, time: { start: created, end: completedAt } }]
+              if (part.type === "reasoning") return [{ ...base("reasoning"), text: part.text, time: { start: created } }]
+              const state: any = part.state
+              const stateInput = state.status === "pending" ? {} : (state.input ?? {})
+              const stateRaw = state.status === "pending" ? state.input : undefined
+              const textContent = (state.status === "pending" ? [] : (state.content ?? []))
+                .filter((item: any) => item.type === "text")
+                .map((item: any) => item.text)
+                .join("")
+              const stateOut =
+                state.status === "pending"
+                  ? { status: "pending", input: stateInput, raw: stateRaw ?? "" }
+                  : state.status === "running"
+                    ? { status: "running", input: stateInput, time: { start: created } }
+                    : state.status === "error"
+                      ? { status: "error", input: stateInput, error: textContent || "tool error", time: { start: created, end: completedAt } }
+                      : {
+                          status: "completed",
+                          input: stateInput,
+                          output: textContent,
+                          title: part.name,
+                          metadata: {},
+                          time: { start: created, end: completedAt },
+                        }
+              return [{ ...base("tool"), callID: part.id, tool: part.name, state: stateOut }] as any[]
+            }) as any[],
+          } as any)
+          continue
+        }
+        if (message.type === "system" || message.type === "synthetic") {
+          withParts.push({
+            info: {
+              id: v1ID,
+              sessionID,
+              role: "user",
+              agent: "build",
+              model: { providerID: "", modelID: "" },
+              time: { created },
+            },
+            parts: [{ ...base("text"), text: message.text, time: { start: created, end: created } }],
+          } as any)
+        }
+      }
+      for (const wp of withParts) {
+
+      }
+      return withParts
+    })
+
     const messages: Interface["messages"] = Effect.fn("Session.messages")(function* (input) {
       if (input.limit) {
-        return (yield* MessageV2.page({ sessionID: input.sessionID, limit: input.limit }).pipe(
+        const page = yield* MessageV2.page({ sessionID: input.sessionID, limit: input.limit }).pipe(
           Effect.provideService(Database.Service, database),
-        )).items
+        )
+        if (page.items.length > 0 && page.items.some((item) => item.info.role !== "user")) return page.items
+        const fallback = yield* v2FallbackMessages(input.sessionID)
+        if (fallback.length > 0 && fallback.some((item) => item.info.role !== "user")) {
+          return fallback.slice(-input.limit)
+        }
+        if (page.items.length > 0) return page.items
+        return fallback.slice(-input.limit)
       }
 
       const size = 50
@@ -846,6 +987,12 @@ const layer: Layer.Layer<
         }
         if (!page.more || !page.cursor) break
         before = page.cursor
+      }
+      if (result.length === 0 || !result.some((item) => item.info.role !== "user")) {
+        const fallback = yield* v2FallbackMessages(input.sessionID)
+        if (fallback.length > 0 && (result.length === 0 || fallback.some((item) => item.info.role !== "user"))) {
+          return fallback
+        }
       }
       return result.reverse()
     })

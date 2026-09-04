@@ -22,6 +22,7 @@ export type Event =
   | EventSessionNextPrompted
   | EventSessionNextPromptAdmitted
   | EventSessionNextContextUpdated
+  | EventSessionNextSemantic
   | EventSessionNextSynthetic
   | EventSessionNextShellStarted
   | EventSessionNextShellEnded
@@ -882,6 +883,16 @@ export type GlobalEvent = {
       }
     | {
         id: string
+        type: "session.next.semantic"
+        properties: {
+          timestamp: number
+          sessionID: string
+          version: 1
+          event: unknown
+        }
+      }
+    | {
+        id: string
         type: "session.next.synthetic"
         properties: {
           timestamp: number
@@ -1614,6 +1625,7 @@ export type GlobalEvent = {
     | SyncEventSessionNextPrompted
     | SyncEventSessionNextPromptAdmitted
     | SyncEventSessionNextContextUpdated
+    | SyncEventSessionNextSemantic
     | SyncEventSessionNextSynthetic
     | SyncEventSessionNextShellStarted
     | SyncEventSessionNextShellEnded
@@ -2743,6 +2755,7 @@ export type SessionDurableEvent =
   | SessionNextPrompted
   | SessionNextPromptAdmitted
   | SessionNextContextUpdated
+  | SessionNextSemantic
   | SessionNextSynthetic
   | SessionNextShellStarted
   | SessionNextShellEnded
@@ -2870,6 +2883,7 @@ export type V2Event =
   | SessionNextPrompted
   | SessionNextPromptAdmitted
   | SessionNextContextUpdated
+  | SessionNextSemantic
   | SessionNextSynthetic
   | SessionNextShellStarted
   | SessionNextShellEnded
@@ -3398,6 +3412,23 @@ export type SyncEventSessionNextContextUpdated = {
       sessionID: string
       messageID: string
       text: string
+    }
+  }
+}
+
+export type SyncEventSessionNextSemantic = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "session.next.semantic.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      timestamp: number
+      sessionID: string
+      version: 1
+      event: unknown
     }
   }
 }
@@ -4281,6 +4312,26 @@ export type SessionNextContextUpdated = {
     sessionID: string
     messageID: string
     text: string
+  }
+}
+
+export type SessionNextSemantic = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "session.next.semantic"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    timestamp: number
+    sessionID: string
+    version: 1
+    event: unknown
   }
 }
 
@@ -6313,6 +6364,17 @@ export type EventSessionNextContextUpdated = {
     sessionID: string
     messageID: string
     text: string
+  }
+}
+
+export type EventSessionNextSemantic = {
+  id: string
+  type: "session.next.semantic"
+  properties: {
+    timestamp: number
+    sessionID: string
+    version: 1
+    event: unknown
   }
 }
 

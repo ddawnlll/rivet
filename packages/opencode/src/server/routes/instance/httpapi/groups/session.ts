@@ -62,6 +62,20 @@ export const InitPayload = Schema.Struct({
   providerID: ProviderV2.ID,
   messageID: MessageID,
 })
+export const InductionStartPayload = Schema.Struct({
+  force: Schema.optional(Schema.Boolean),
+}).annotate({ identifier: "SessionInductionStart" })
+export type InductionStartPayload = typeof InductionStartPayload.Type
+export const InductionStatus = Schema.Struct({
+  status: Schema.Literals(["idle", "running", "complete", "partial"]),
+  startedAt: Schema.optional(Schema.String),
+  completedAt: Schema.optional(Schema.String),
+  fileCount: Schema.optional(Schema.Number),
+  claimCount: Schema.optional(Schema.Number),
+  packageCount: Schema.optional(Schema.Number),
+  filesRead: Schema.optional(Schema.Number),
+}).annotate({ identifier: "SessionInductionStatus" })
+export type InductionStatus = typeof InductionStatus.Type
 export const SummarizePayload = Schema.Struct({
   providerID: ProviderV2.ID,
   modelID: ModelV2.ID,
@@ -88,6 +102,7 @@ export const SessionPaths = {
   remove: `${root}/:sessionID`,
   update: `${root}/:sessionID`,
   fork: `${root}/:sessionID/fork`,
+  induction: `${root}/:sessionID/induction`,
   abort: `${root}/:sessionID/abort`,
   share: `${root}/:sessionID/share`,
   init: `${root}/:sessionID/init`,
@@ -274,6 +289,33 @@ export const SessionApi = HttpApi.make("session")
             summary: "Initialize session",
             description:
               "Analyze the current application and create an AGENTS.md file with project-specific agent configurations.",
+          }),
+        ),
+        HttpApiEndpoint.get("induction", SessionPaths.induction, {
+          params: { sessionID: SessionID },
+          query: WorkspaceRoutingQuery,
+          success: described(InductionStatus, "Deep induction status"),
+          error: [HttpApiError.BadRequest, ApiNotFoundError],
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "session.induction.status",
+            summary: "Get deep induction status",
+            description:
+              "Report the status of the deterministic deep repository induction (hard scan) for the session's project.",
+          }),
+        ),
+        HttpApiEndpoint.post("inductionStart", SessionPaths.induction, {
+          params: { sessionID: SessionID },
+          query: WorkspaceRoutingQuery,
+          payload: InductionStartPayload,
+          success: described(InductionStatus, "Deep induction status"),
+          error: [HttpApiError.BadRequest, ApiNotFoundError],
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "session.induction.start",
+            summary: "Start deep repository induction",
+            description:
+              "Start a deterministic deep repository induction (hard scan): census → structure → deepread → claims assert architecture claims into Hard State. Progress streams via rivet.induction.* events.",
           }),
         ),
         HttpApiEndpoint.post("share", SessionPaths.share, {

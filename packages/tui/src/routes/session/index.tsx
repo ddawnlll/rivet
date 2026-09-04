@@ -1205,7 +1205,7 @@ export function Session() {
                       <span style={{ bold: true, fg: theme.primary }}>Rivet Cognitive Controller</span> · Ready
                     </text>
                     <text fg={theme.textMuted}>
-                      Cold start repository census active · Epistemic claims and associative memory frontier synchronized.
+                      No messages yet — send a prompt to start the Rivet drain. Hard State fills as claims are verified.
                     </text>
                   </box>
                 </Show>

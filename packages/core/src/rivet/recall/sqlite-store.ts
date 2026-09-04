@@ -62,6 +62,9 @@ export class SqliteRecallStore implements RecallStore {
         embedding_blob BLOB,
         embedding_dim INTEGER
       );
+      CREATE INDEX IF NOT EXISTS idx_recall_scope ON recall_documents(scope_repo, epistemic_status);
+      CREATE INDEX IF NOT EXISTS idx_recall_kind ON recall_documents(kind, epistemic_status);
+      CREATE INDEX IF NOT EXISTS idx_recall_observed ON recall_documents(observed_at DESC);
     `)
 
     try {
@@ -129,11 +132,6 @@ export class SqliteRecallStore implements RecallStore {
         `)
       } catch {}
 
-      const deleteFts: any = null
-      try {
-        self.db.prepare(`DELETE FROM recall_fts WHERE id = ?`)
-      } catch {}
-
       self.db.transaction(() => {
         for (let i = 0; i < documents.length; i++) {
           const doc = documents[i]!
@@ -191,8 +189,72 @@ export class SqliteRecallStore implements RecallStore {
   recall = (query: RecallQuery): Effect.Effect<readonly RecallCandidate[], RecallError> => {
     const self = this
     return Effect.gen(function* () {
-      // 1. Load all candidates from SQLite
-      const rows = self.db.query(`SELECT * FROM recall_documents`).all() as any[]
+      // Check total document count
+      const countRes = self.db.query(`SELECT count(*) as cnt FROM recall_documents`).get() as { cnt: number }
+      const totalCount = countRes?.cnt ?? 0
+      if (totalCount === 0) return []
+
+      let rows: any[] = []
+
+      // If store has 300 or fewer records, exhaustive scan is sub-millisecond and 100% complete
+      if (totalCount <= 300) {
+        rows = self.db.query(`SELECT * FROM recall_documents`).all() as any[]
+      } else {
+        // High-scale candidate filtering via SQLite indexes + FTS5
+        const candidateIdSet = new Set<string>()
+
+        // 1. Lexical FTS5 candidate matching
+        try {
+          const rawTokens = `${query.prompt} ${query.goal}`
+            .toLowerCase()
+            .replace(/[^a-z0-9_\-./]/g, " ")
+            .split(/\s+/)
+            .filter((t) => t.length > 2)
+            .slice(0, 10)
+
+          if (rawTokens.length > 0) {
+            const ftsMatchExpr = rawTokens.map((t) => `"${t.replace(/"/g, "")}"`).join(" OR ")
+            const ftsMatches = self.db
+              .query(`SELECT id FROM recall_fts WHERE recall_fts MATCH ? LIMIT 150`)
+              .all(ftsMatchExpr) as { id: string }[]
+            for (const m of ftsMatches) candidateIdSet.add(m.id)
+          }
+        } catch {
+          // FTS error fallback
+        }
+
+        // 2. Exact active claim and symbol IDs (prioritize most recent active claims up to 50)
+        const claims = query.activeClaims ?? []
+        const activeClaimsSlice = claims.length > 50 ? claims.slice(-50) : claims
+        for (const c of activeClaimsSlice) candidateIdSet.add(c)
+
+        // 3. Structural candidates (failures, rejections, active episodes, and high-recency items in scope)
+        const repo = query.scope?.repository ?? "repo"
+        const structuralRows = self.db
+          .query(
+            `SELECT id FROM recall_documents 
+             WHERE (scope_repo = ? AND epistemic_status IN ('verified', 'rejected', 'invalidated'))
+                OR kind IN ('failure', 'episode')
+             ORDER BY observed_at DESC LIMIT 150`,
+          )
+          .all(repo) as { id: string }[]
+        for (const s of structuralRows) candidateIdSet.add(s.id)
+
+        // If candidate set is small, fill with recent documents
+        if (candidateIdSet.size < 50) {
+          const recentRows = self.db
+            .query(`SELECT id FROM recall_documents ORDER BY observed_at DESC LIMIT 100`)
+            .all() as { id: string }[]
+          for (const r of recentRows) candidateIdSet.add(r.id)
+        }
+
+        const candidateIds = Array.from(candidateIdSet)
+        const placeholders = candidateIds.map(() => "?").join(",")
+        rows = self.db
+          .query(`SELECT * FROM recall_documents WHERE id IN (${placeholders})`)
+          .all(...candidateIds) as any[]
+      }
+
       if (rows.length === 0) return []
 
       const documents: RecallDocument[] = []

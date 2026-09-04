@@ -10,6 +10,7 @@ import { useLanguage } from "@/context/language"
 import { useLayout } from "@/context/layout"
 import { useLocal, type ModelSelection } from "@/context/local"
 import { usePermission } from "@/context/permission"
+import { useCommand } from "@/context/command"
 import { type ContextItem, type ImageAttachmentPart, type Prompt, type usePrompt } from "@/context/prompt"
 import { useSDK, type DirectorySDK } from "@/context/sdk"
 import { useSync, type DirectorySync } from "@/context/sync"
@@ -238,6 +239,7 @@ export function createPromptSubmit(input: PromptSubmitInput) {
   const serverSync = useServerSync()
   const local = useLocal()
   const permission = usePermission()
+  const command = useCommand()
   const prompt = input.prompt
   const layout = useLayout()
   const language = useLanguage()
@@ -512,6 +514,12 @@ export function createPromptSubmit(input: PromptSubmitInput) {
     if (text.startsWith("/")) {
       const [cmdName, ...args] = text.split(" ")
       const commandName = cmdName.slice(1)
+      const builtin = command.options.find((c) => !c.disabled && c.slash === commandName)
+      if (builtin) {
+        clearInput()
+        builtin.onSelect?.("slash")
+        return
+      }
       const customCommand = sync().data.command.find((c) => c.name === commandName)
       if (customCommand) {
         clearInput()

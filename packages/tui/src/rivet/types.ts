@@ -113,6 +113,10 @@ export interface UiRivetStatus {
   readonly taskCount: number
   readonly changedFileCount: number
   readonly verifyStatus: "ready" | "pending" | "blocked" | "outdated"
+  readonly cacheHitRatio?: number
+  readonly totalTokens?: number
+  readonly cachedTokens?: number
+  readonly recallLatencyMs?: number
 }
 
 export interface UiSemanticEvent {

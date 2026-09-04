@@ -245,6 +245,169 @@ export class NoesisRecallProjector {
   }
 
   /**
+   * Incrementally projects only the delta RecallDocuments affected by a single NoesisEvent.
+   * Avoids scanning or re-projecting the entire HardState for every tool output.
+   */
+  static projectEventDelta(
+    event: NoesisEvent,
+    hardState: HardState,
+    workspaceId?: string,
+  ): readonly RecallDocument[] {
+    const wsId = createWorkspaceId(workspaceId ?? "default")
+    const docs: RecallDocument[] = []
+
+    switch (event.type) {
+      case "claim_asserted":
+      case "claim_status_changed":
+      case "claim_dirtied":
+      case "claim_revalidated":
+      case "claim_staled":
+      case "claim_superseded":
+      case "claim_promoted": {
+        const claim = hardState.claims.get(event.claimId)
+        if (!claim) break
+
+        const symbols: string[] = []
+        const rels: RecallRelationship[] = []
+        if (claim.dependencies) {
+          for (const dep of claim.dependencies) {
+            if (dep.type === "symbol") symbols.push(dep.symbol)
+            if (dep.type === "claim") {
+              rels.push({ targetId: dep.claimId as unknown as MemoryId, kind: "DEPENDS_ON" })
+            }
+          }
+        }
+        if (claim.supersededBy) {
+          rels.push({ targetId: claim.supersededBy as unknown as MemoryId, kind: "SUPERSEDES" })
+        }
+
+        const kind: MemoryKind = claim.validityPolicy === "PROCEDURAL" ? "procedure" : "claim"
+        const summaryPrefix = claim.status === "verified" ? "[verified]" : `[${claim.status}]`
+
+        docs.push({
+          id: claim.id as unknown as MemoryId,
+          kind,
+          text: claim.proposition,
+          summary: `${summaryPrefix} ${claim.proposition}`,
+          workspaceId: wsId,
+          scope: claim.scope,
+          sourceRefs: claim.supportingEvidence ? [...claim.supportingEvidence] : [],
+          relatedSymbols: symbols,
+          epistemicStatus: claim.status ?? "verified",
+          validFromRevision: claim.validFromRevision,
+          validToRevision: claim.validToRevision,
+          observedAt: claim.learnedAtRevision ? Number(claim.learnedAtRevision.value) * 1000 : Date.now(),
+          relationships: rels,
+        })
+        break
+      }
+
+      case "claim_rejected":
+      case "claim_contradicted": {
+        const claimId = event.claimId
+        const rej = hardState.rejectedClaims.get(claimId)
+        const origClaim = hardState.claims.get(claimId)
+        const claimText = origClaim?.proposition ?? (claimId as unknown as string)
+        const reason = rej?.reason ?? ("reason" in event ? event.reason : "Contradicted/Rejected")
+        const evidenceRefs = rej?.evidence ? [...rej.evidence] : "evidence" in event && event.evidence ? [...event.evidence] : []
+
+        docs.push({
+          id: createMemoryId(`rej_${claimId}`),
+          kind: "failure",
+          text: `${claimText} — Rejected: ${reason}`,
+          summary: `Previous rejected approach: ${reason}`,
+          workspaceId: wsId,
+          scope: origClaim?.scope ?? Scope.global("repo", hardState.revision),
+          sourceRefs: evidenceRefs,
+          relatedSymbols: origClaim?.dependencies
+            ? origClaim.dependencies.filter((d) => d.type === "symbol").map((d: any) => d.symbol)
+            : [],
+          epistemicStatus: "rejected",
+          validFromRevision: hardState.revision,
+          observedAt: Date.now(),
+          relationships: [{ targetId: claimId as unknown as MemoryId, kind: "CONTRADICTS" }],
+          metadata: { originalClaimId: claimId, rejectionReason: reason },
+        })
+        break
+      }
+
+      case "verification_recorded": {
+        const receipt = event.receipt
+        docs.push({
+          id: receipt.receiptId as unknown as MemoryId,
+          kind: "procedure",
+          text: `Verified obligation ${receipt.obligationId} with receipt ${receipt.receiptId}`,
+          summary: `Historical verification receipt ${receipt.receiptId} for obligation ${receipt.obligationId}`,
+          workspaceId: wsId,
+          scope: receipt.verifiedScope ?? Scope.global("repo", hardState.revision),
+          sourceRefs: [receipt.receiptId as unknown as string],
+          relatedSymbols: [],
+          epistemicStatus: "verified",
+          validFromRevision: hardState.revision,
+          observedAt: Date.now(),
+          relationships: [{ targetId: receipt.obligationId as unknown as MemoryId, kind: "TESTED_BY" }],
+        })
+        break
+      }
+
+      case "process_error_attributed": {
+        const attr = event.record
+        docs.push({
+          id: attr.attributionId as unknown as MemoryId,
+          kind: "failure",
+          text: `${attr.category}: ${attr.diagnostic}`,
+          summary: `Failure attribution [${attr.category}]: ${attr.diagnostic}`,
+          workspaceId: wsId,
+          scope: Scope.global("repo", hardState.revision),
+          sourceRefs: [attr.attributionId as unknown as string],
+          relatedSymbols: [],
+          epistemicStatus: "rejected",
+          validFromRevision: hardState.revision,
+          observedAt: Date.now(),
+        })
+        break
+      }
+
+      case "goal_set": {
+        // Goal set creates or updates the episode doc
+        if (hardState.goalDescription) {
+          const epHash = hashString(hardState.goalDescription).toString(36)
+          docs.push({
+            id: createMemoryId(`ep_${wsId}_${epHash}`),
+            kind: "episode",
+            text: hardState.goalDescription,
+            summary: `Prior Episode: ${hardState.goalDescription}`,
+            workspaceId: wsId,
+            scope: Scope.global("repo", hardState.revision),
+            sourceRefs: hardState.activeTaskId ? [hardState.activeTaskId as unknown as string] : [],
+            relatedSymbols: [],
+            epistemicStatus: "verified",
+            validFromRevision: hardState.revision,
+            observedAt: Date.now(),
+            relationships: [],
+            metadata: {
+              structuredEpisode: {
+                problem: hardState.goalDescription,
+                observations: [],
+                rejectedApproaches: [],
+                decisions: [],
+                verifications: [],
+                relatedSymbols: [],
+              },
+            },
+          })
+        }
+        break
+      }
+
+      default:
+        break
+    }
+
+    return docs
+  }
+
+  /**
    * Deterministically projects a sequence of NoesisEvents into RecallDocuments by replaying into HardState.
    */
   static projectFromEvents(

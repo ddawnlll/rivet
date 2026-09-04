@@ -89,10 +89,27 @@ export function StatusRail(props: StatusRailProps) {
           <text fg={theme.text}>
             {status().taskCount} task{status().taskCount !== 1 ? "s" : ""}
           </text>
-          <text fg={theme.textMuted}>·</text>
           <text fg={theme.text}>{status().changedFileCount} changed</text>
           <text fg={theme.textMuted}>·</text>
           <text fg={verifyLabel().fg}>{verifyLabel().full}</text>
+          <Show when={status().cacheHitRatio !== undefined}>
+            <text fg={theme.textMuted}>·</text>
+            <text
+              fg={
+                (status().cacheHitRatio ?? 0) >= 0.8
+                  ? theme.success
+                  : (status().cacheHitRatio ?? 0) >= 0.5
+                    ? theme.warning
+                    : theme.error
+              }
+            >
+              Cache {Math.round((status().cacheHitRatio ?? 0) * 100)}%
+            </text>
+          </Show>
+          <Show when={status().recallLatencyMs !== undefined}>
+            <text fg={theme.textMuted}>·</text>
+            <text fg={theme.textMuted}>Recall {Math.round(status().recallLatencyMs!)}ms</text>
+          </Show>
         </box>
       </Show>
     </box>

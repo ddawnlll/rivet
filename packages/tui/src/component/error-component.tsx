@@ -192,7 +192,7 @@ export function ErrorComponent(props: { error: Error; reset: () => void; mode?: 
                 ? "Report copied — paste it into a new GitHub issue."
                 : "Copy the report and open a GitHub issue to help us fix this."}
             </text>
-            <text fg={colors.muted}>opencode {InstallationVersion}</text>
+            <text fg={colors.muted}>rivet {InstallationVersion}</text>
           </box>
         </Show>
       </box>
@@ -220,7 +220,7 @@ function buildIssueURL(message: string, stack: string) {
   // so measuring url.toString() is both correct and safe on any input.
   const MAX_URL_LENGTH = 6000
   const marker = "\n... (truncated)"
-  const head = `The opencode TUI crashed with an unexpected error.\n\n**Error:** ${message}\n\n**Stack trace:**\n`
+  const head = `The rivet TUI crashed with an unexpected error.\n\n**Error:** ${message}\n\n**Stack trace:**\n`
   const setBody = (body: string) => url.searchParams.set("description", head + "```\n" + body + "\n```")
 
   setBody(stack)

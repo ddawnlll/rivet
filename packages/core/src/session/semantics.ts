@@ -1,6 +1,6 @@
 import fs from "fs"
 import path from "path"
-import { DateTime, Effect } from "effect"
+import { Cause, DateTime, Effect, Exit } from "effect"
 import { SessionDurable } from "@opencode-ai/schema/durable-event-manifest"
 import { Database } from "../database/database"
 import { EventV2 } from "../event"
@@ -16,11 +16,21 @@ import {
   type ClaimProposal,
   type CompletionProposal,
   type ExecutionReceipt,
+  type InquiryReceipt,
   type VerificationReceipt,
   type VerificationRequest,
 } from "../rivet/accp"
 import { PraxisEngine } from "../rivet/praxis"
-import { GoalCompiler } from "../rivet/goal-compiler"
+import { GoalCompiler, type ObligationPredicate } from "../rivet/goal-compiler"
+import {
+  Induction,
+  RepositoryInduction,
+  isMarkerStale,
+  readInductionMarker,
+  writeInductionMarker,
+  type InductionResult,
+} from "../rivet/repository/induction"
+import { RivetInductionEvent } from "@opencode-ai/schema/rivet-induction-event"
 import {
   Revision,
   Scope,
@@ -33,8 +43,11 @@ import {
   type ClaimId,
   type DependencyRef,
   type EpistemicStatus,
+  type EvidenceId,
   type InvocationId,
   type MemoryFrontier,
+  type ObligationId,
+  type ObligationKind,
   type PremiseConflict,
   type Provenance,
   type SessionId,
@@ -69,6 +82,10 @@ export class SessionSemantics {
   static getDefaultRecallStore(): RecallStore {
     if (SessionSemantics.workspaceRecallStore) return SessionSemantics.workspaceRecallStore
     if (!SessionSemantics.defaultStore) {
+      if (process.env.NODE_ENV === "test" || process.env.BUN_ENV === "test") {
+        SessionSemantics.defaultStore = new InMemoryRecallStore()
+        return SessionSemantics.defaultStore
+      }
       try {
         const dbPath = path.join(Global.Path.data, "rivet-recall.db")
         SessionSemantics.defaultStore = new SqliteRecallStore(dbPath)
@@ -120,13 +137,36 @@ export class SessionSemantics {
         event: encodeNoesisEvent(event),
       })
       self.hardState.apply(event)
-      const docs = NoesisRecallProjector.projectFromHardState(self.hardState, self.sessionID)
-      yield* self.recallStore.index(docs).pipe(Effect.ignore)
+      const deltaDocs = NoesisRecallProjector.projectEventDelta(event, self.hardState, self.sessionID)
+      if (deltaDocs.length > 0) {
+        yield* self.recallStore.index(deltaDocs).pipe(Effect.ignore)
+      }
     })
   }
 
   appendAll(events: EventV2.Interface, values: readonly NoesisEvent[]) {
-    return Effect.forEach(values, (event) => this.append(events, event), { discard: true })
+    const self = this
+    return Effect.gen(function* () {
+      if (values.length === 0) return
+      const now = yield* DateTime.now
+      const allDeltaDocs = []
+      for (const event of values) {
+        yield* events.publish(SessionEvent.Semantic, {
+          sessionID: self.sessionID,
+          timestamp: now,
+          version: 1,
+          event: encodeNoesisEvent(event),
+        })
+        self.hardState.apply(event)
+        const deltaDocs = NoesisRecallProjector.projectEventDelta(event, self.hardState, self.sessionID)
+        if (deltaDocs.length > 0) {
+          allDeltaDocs.push(...deltaDocs)
+        }
+      }
+      if (allDeltaDocs.length > 0) {
+        yield* self.recallStore.index(allDeltaDocs).pipe(Effect.ignore)
+      }
+    })
   }
 
   scope(repository: string) {
@@ -233,7 +273,158 @@ export class SessionSemantics {
     })
   }
 
-  verifyLastExecution(events: EventV2.Interface, request: VerificationRequest) {
+  /**
+   * Closes an epistemic inquiry obligation with its kind-appropriate proof
+   * object: an InquiryReceipt binding the obligation to the canonical revision
+   * of the authoritative projection that answered it. No execution, no Praxis.
+   * Returns undefined when no open epistemic inquiry obligation applies.
+   */
+  satisfyInquiries(
+    events: EventV2.Interface,
+    input: { readonly summary: string; readonly obligationId?: string; readonly atRevision?: Revision },
+  ): Effect.Effect<readonly InquiryReceipt[]> {
+    const openInquiryIds = this.hardState.openObligationIds().filter(
+      (id) => this.hardState.obligationKind(id) === "epistemic_inquiry",
+    )
+    const targetIds = input.obligationId !== undefined
+      ? openInquiryIds.filter((id) => id === input.obligationId)
+      : openInquiryIds
+    if (targetIds.length === 0) return Effect.succeed([])
+    const self = this
+    return Effect.gen(function* () {
+      const receipts: InquiryReceipt[] = []
+      for (const oblgId of targetIds) {
+        const receipt: InquiryReceipt = {
+          receiptId: createReceiptId(),
+          obligationId: oblgId,
+          satisfiedAtRevision: input.atRevision ?? self.hardState.revision,
+          summary: input.summary,
+          timestamp: new Date().toISOString(),
+        }
+        yield* self.append(events, {
+          type: "inquiry_satisfied",
+          obligationId: oblgId,
+          receiptId: receipt.receiptId,
+          satisfiedAtRevision: receipt.satisfiedAtRevision,
+          summary: receipt.summary,
+          timestamp: receipt.timestamp,
+        })
+        receipts.push(receipt)
+      }
+      return receipts
+    })
+  }
+
+  satisfyInquiry(
+    events: EventV2.Interface,
+    input: { readonly summary: string; readonly obligationId?: string; readonly atRevision?: Revision },
+  ): Effect.Effect<InquiryReceipt | undefined> {
+    return this.satisfyInquiries(events, input).pipe(
+      Effect.map((receipts) => receipts[0]),
+    )
+  }
+
+  invalidateObligation(
+    events: EventV2.Interface,
+    input: { readonly obligationId: string; readonly reason: string },
+  ): Effect.Effect<{ readonly obligationId: string; readonly invalidated: boolean; readonly reason: string }, Error> {
+    const self = this
+    const oblgId = input.obligationId as ObligationId
+    if (!self.hardState.obligations.has(oblgId)) {
+      return Effect.fail(new Error(`Obligation ${input.obligationId} is not an active open obligation`))
+    }
+    // Authority gate (ACCP): the model may only invalidate mechanically
+    // malformed compiler artifacts. Substantive obligations must close via
+    // their declared verifier; rejecting here keeps the attempt auditable and
+    // prevents invalidation from becoming a verification bypass.
+    const authority = AccpSemanticGate.checkInvalidationAuthority(self.hardState.obligationPredicates.get(oblgId))
+    if (!authority.allowed) {
+      return Effect.fail(
+        new Error(
+          `Invalidation authority denied for obligation ${input.obligationId}: ${authority.reason}. Do NOT mutate reality to satisfy a constraint you believe is malformed; report it to the user instead.`,
+        ),
+      )
+    }
+    return Effect.gen(function* () {
+      yield* self.append(events, {
+        type: "obligation_invalidated",
+        obligationId: oblgId,
+        reason: input.reason,
+        timestamp: new Date().toISOString(),
+      })
+      return { obligationId: input.obligationId, invalidated: true, reason: input.reason }
+    })
+  }
+
+  verifyLastExecution(
+    events: EventV2.Interface,
+    request: VerificationRequest,
+  ): Effect.Effect<
+    | { readonly type: "inquiry"; readonly receipt: InquiryReceipt }
+    | { readonly type: "praxis"; readonly receipt: VerificationReceipt & { readonly evidenceId: EvidenceId } },
+    Error
+  > {
+    const obligationId = this.hardState.obligations.has(request.obligationId)
+      ? request.obligationId
+      : this.hardState.openObligationIds()[0]
+    if (!obligationId) return Effect.fail(new Error("Praxis verification has no applicable open obligation"))
+    // Verifier routing: each obligation kind has its own closure proof object.
+    // Epistemic inquiries are closed by the authoritative Noesis projection
+    // that answered them; demanding an observed execution here would only
+    // manufacture verification theater.
+    if (this.hardState.obligationKind(obligationId) === "epistemic_inquiry") {
+      return this.satisfyInquiry(events, {
+        summary: `Epistemic inquiry satisfied by authoritative Noesis projection at revision ${this.hardState.revision.toJSON()}`,
+        obligationId,
+        atRevision: this.hardState.revision,
+      }).pipe(
+        Effect.flatMap((receipt) =>
+          receipt === undefined
+            ? Effect.fail(new Error("No open epistemic inquiry obligation to satisfy"))
+            : Effect.succeed({ type: "inquiry" as const, receipt }),
+        ),
+      )
+    }
+    // Verifier routing continues per predicate kind. A persisted predicate
+    // defines its own mechanically checkable closure proof; obligations
+    // minted before predicate persistence fall back to test-output parsing.
+    const obligationPredicate = this.hardState.obligationPredicates.get(obligationId)
+    if (obligationPredicate?.type === "file_constraint") {
+      return this.verifyFileConstraint(events, request, obligationId, obligationPredicate)
+    }
+    if (obligationPredicate?.type === "claims_verified") {
+      const outcome = this.evaluateClaimsVerified(obligationId, obligationPredicate)
+      if (outcome.passed) return this.recordClaimsOutcome(events, request, obligationId, outcome)
+      // An unsatisfied claims_verified wrapper falls back to the legacy
+      // test-output closure path: a goal wrapper legitimately closes through
+      // the model's verified test run when no claim was admitted.
+      return Effect.flatMap(Effect.exit(this.verifyObservedExecution(events, request, obligationId)), (legacy) => {
+        if (Exit.isSuccess(legacy) && legacy.value.type === "praxis" && legacy.value.receipt.passed) {
+          return Effect.succeed(legacy.value)
+        }
+        const legacyReason = Exit.isFailure(legacy)
+          ? String(Cause.squash(legacy.cause))
+          : legacy.value.type === "praxis"
+            ? (legacy.value.receipt.diagnostics ?? "test-output verification failed")
+            : legacy.value.receipt.summary
+        return this.recordClaimsOutcome(events, request, obligationId, {
+          ...outcome,
+          diagnostics: `${outcome.diagnostics} Legacy test-output path: ${legacyReason}`,
+        })
+      })
+    }
+    return this.verifyObservedExecution(events, request, obligationId)
+  }
+
+  private verifyObservedExecution(
+    events: EventV2.Interface,
+    request: VerificationRequest,
+    obligationId: ObligationId,
+  ): Effect.Effect<
+    | { readonly type: "inquiry"; readonly receipt: InquiryReceipt }
+    | { readonly type: "praxis"; readonly receipt: VerificationReceipt & { readonly evidenceId: EvidenceId } },
+    Error
+  > {
     const execution = this.hardState.executionReceipts.findLast(
       (receipt) => receipt.scope.repository === request.targetScope.repository,
     )
@@ -265,15 +456,127 @@ export class SessionSemantics {
           ? "go"
           : "bun"
     const report = PraxisEngine.parseTestOutput(framework, stdout)
-    const obligationId = this.hardState.obligations.has(request.obligationId)
-      ? request.obligationId
-      : this.hardState.openObligationIds()[0]
-    if (!obligationId) return Effect.fail(new Error("Praxis verification has no applicable open obligation"))
     const receipt = {
       ...PraxisEngine.evaluateTestResult({ ...request, obligationId, targetScope: execution.scope }, report),
       evidenceId: execution.evidenceId,
     }
-    return this.recordVerification(events, receipt).pipe(Effect.as(receipt))
+    return this.recordVerification(events, receipt).pipe(Effect.map(() => ({ type: "praxis" as const, receipt })))
+  }
+
+  /**
+   * Closes a file_constraint obligation with a harness-side deterministic
+   * filesystem observation. The check runs in the harness (not from model
+   * output), so the evidence cannot be fabricated by the controller; the
+   * receipt carries typed reason codes for rejection projection.
+   */
+  private verifyFileConstraint(
+    events: EventV2.Interface,
+    request: VerificationRequest,
+    obligationId: ObligationId,
+    predicate: Extract<ObligationPredicate, { type: "file_constraint" }>,
+  ) {
+    const outcome = evaluateFileConstraintOnDisk(request.targetScope.repository, predicate)
+    const evidenceId = createEvidenceId()
+    const receipt: VerificationReceipt = {
+      receiptId: createReceiptId(),
+      obligationId,
+      passed: outcome.passed,
+      evidenceId,
+      verifiedScope: request.targetScope,
+      reasonCodes: outcome.reasonCodes,
+      diagnostics: outcome.diagnostics,
+      timestamp: new Date().toISOString(),
+    }
+    const self = this
+    return Effect.gen(function* () {
+      yield* self.append(events, {
+        type: "evidence_recorded",
+        evidenceId,
+        source: "praxis.file_constraint",
+        summary: outcome.observation,
+        timestamp: new Date().toISOString(),
+      })
+      yield* self.recordVerification(events, receipt)
+      return { type: "praxis" as const, receipt: { ...receipt, evidenceId } }
+    })
+  }
+
+  /**
+   * Closes a claims_verified obligation either through admitted supported
+   * claims matching the predicate propositions, or — for goal-level wrapper
+   * obligations — by construction once every sibling obligation is closed
+   * with passing receipts. The derivation is mechanical and audited.
+   */
+  private evaluateClaimsVerified(
+    obligationId: ObligationId,
+    predicate: Extract<ObligationPredicate, { type: "claims_verified" }>,
+  ): { passed: boolean; reasonCodes: string[]; diagnostics: string | null; evidenceSummary: string } {
+    const supported = new Set(
+      [...this.hardState.claims.values()]
+        .filter((claim) => claim.status === "supported")
+        .map((claim) => claim.proposition),
+    )
+    const missing = predicate.claimPropositions.filter((proposition) => !supported.has(proposition))
+    const siblingOpenObligations = this.hardState.openObligationIds().filter((id) => id !== obligationId)
+    // Sibling closure only counts receipts minted at or after this obligation's
+    // own goal revision, so receipts from an earlier goal can never satisfy a
+    // later claims_verified wrapper.
+    const goalRevision = this.hardState.obligationScopes.get(obligationId)?.revision
+    const closedSiblingIds = [...this.hardState.closedObligations.keys()].filter((id) => id !== obligationId)
+    const verifiedSiblings = closedSiblingIds.filter((id) => {
+      if (!goalRevision) return false
+      const receipt = this.hardState.verificationReceipts.get(id)
+      if (receipt?.passed && receipt.verifiedScope.revision.value >= goalRevision.value) return true
+      const inquiry = this.hardState.inquiryReceipts.get(id)
+      return Boolean(inquiry && inquiry.satisfiedAtRevision.value >= goalRevision.value)
+    })
+    const fulfilledBySiblings = siblingOpenObligations.length === 0 && verifiedSiblings.length > 0 && goalRevision !== undefined
+    const passed = missing.length === 0 || fulfilledBySiblings
+    const diagnostics = passed
+      ? null
+      : `CLAIM_NOT_ADMITTED: no supported claim matches ${missing.map((p) => `"${p}"`).join(", ")}. Admit via propose_claim with admitted evidence, or close sibling obligations.`
+    const evidenceSummary = passed
+      ? fulfilledBySiblings
+        ? `Goal wrapper closed by ${verifiedSiblings.length} verified sibling obligations at revision ${goalRevision?.toJSON()}`
+        : "Supported claims match all predicate propositions"
+      : `Missing supported claims: ${missing.join(" | ")}`
+    return {
+      passed,
+      reasonCodes: passed ? ["CLAIMS_VERIFIED"] : ["CLAIM_NOT_ADMITTED"],
+      diagnostics,
+      evidenceSummary,
+    }
+  }
+
+  private recordClaimsOutcome(
+    events: EventV2.Interface,
+    request: VerificationRequest,
+    obligationId: ObligationId,
+    outcome: { passed: boolean; reasonCodes: string[]; diagnostics: string | null; evidenceSummary: string },
+  ) {
+    const evidenceId = createEvidenceId()
+    const receipt: VerificationReceipt = {
+      receiptId: createReceiptId(),
+      obligationId,
+      passed: outcome.passed,
+      evidenceId,
+      verifiedScope: request.targetScope,
+      reasonCodes: outcome.reasonCodes,
+      diagnostics: outcome.diagnostics,
+      timestamp: new Date().toISOString(),
+    }
+    const self = this
+    return Effect.gen(function* () {
+      yield* self.append(events, {
+        type: "evidence_recorded",
+        evidenceId,
+        source: "praxis.claims_verified",
+        summary: outcome.evidenceSummary,
+        timestamp: new Date().toISOString(),
+      })
+      yield* self.recordVerification(events, receipt)
+      return { type: "praxis" as const, receipt: { ...receipt, evidenceId } }
+    })
   }
 
   proposeVerification(
@@ -453,7 +756,11 @@ export class SessionSemantics {
       proposal,
       this.hardState.revision,
       this.hardState.openObligationIds(),
-      this.hardState.passingVerificationReceipts(),
+      this.hardState.closureReceiptIds(),
+      {
+        getKind: (id) => this.hardState.obligationKind(id),
+        getDescription: (id) => this.hardState.obligations.get(id) ?? id,
+      },
     )
   }
 
@@ -467,14 +774,33 @@ export class SessionSemantics {
     },
   ) {
     const proposal: CompletionProposal = {
-      taskId: input.taskId ?? createTaskId(),
+      taskId: input.taskId ?? this.hardState.activeTaskId ?? createTaskId(),
       summary: input.summary,
       claimsAddressed: [...(input.claimsAddressed ?? [])],
       baseRevision: input.baseRevision ?? this.hardState.revision,
       timestamp: new Date().toISOString(),
     }
     const decision = this.completionDecision(proposal)
-    if (!decision.completed || !decision.finalReceipt) return Effect.succeed(decision)
+    const readiness = AccpSemanticGate.checkCompletionReadiness({
+      unclosedObligations: this.hardState.openObligationIds(),
+      passingReceipts: this.hardState.closureReceiptIds(),
+      hasContradictions: this.hardState.contradictions.size > 0,
+      getKind: (id) => this.hardState.obligationKind(id),
+      getDescription: (id) => this.hardState.obligations.get(id) ?? id,
+      totalObligations: this.hardState.obligations.size + this.hardState.closedObligations.size,
+      hasActiveGoal: Boolean(this.hardState.goalDescription),
+    })
+    if (!decision.completed) {
+      return this.append(events, {
+        type: "completion_rejected",
+        taskId: proposal.taskId,
+        blockers: decision.blockers,
+        avoidable: readiness.status === "BLOCKED",
+        timestamp: decision.timestamp,
+      }).pipe(Effect.as(decision))
+    }
+
+    if (!decision.finalReceipt) return Effect.succeed(decision)
     return this.append(events, {
       type: "completion_accepted",
       taskId: decision.taskId,
@@ -483,12 +809,18 @@ export class SessionSemantics {
     }).pipe(Effect.as(decision))
   }
 
-  ensureGoal(events: EventV2.Interface, goal: string, repository: string) {
+  ensureGoal(events: EventV2.Interface, goal: string, repository: string, kind?: ObligationKind) {
     if (this.hardState.goalDescription === goal) return Effect.void
-    const compiled = GoalCompiler.compile(goal, repository, this.hardState.revision)
+    const compiled = GoalCompiler.compile(goal, repository, this.hardState.revision, kind)
     const self = this
     return Effect.gen(function* () {
-      yield* self.append(events, { type: "goal_set", goal, timestamp: new Date().toISOString() })
+      yield* self.append(events, {
+        type: "goal_set",
+        goal,
+        goalId: compiled.goalId,
+        timestamp: new Date().toISOString(),
+      })
+      self.hardState.activeTaskId = compiled.goalId
       yield* self.appendAll(
         events,
         [...compiled.graph.nodes.values()].map((obligation) => ({
@@ -496,6 +828,8 @@ export class SessionSemantics {
           obligationId: obligation.id,
           description: obligation.description,
           scope: obligation.targetScope,
+          kind: obligation.kind,
+          predicate: obligation.predicate,
           timestamp: new Date().toISOString(),
         })),
       )
@@ -544,24 +878,7 @@ export class SessionSemantics {
         mode: input.mode ?? "HYBRID",
       })
 
-      return new CognitiveView({
-        hardRevision: compiled.hardRevision,
-        repositoryId: compiled.repositoryId,
-        goalDescription: compiled.goalDescription,
-        activeClaims: [...compiled.activeClaims],
-        contradictions: compiled.contradictions.map((item) => `${item.claimId}: ${item.reason}`),
-        rejectedClaims: compiled.rejectedClaims.map((item) => `${item.claimId}: ${item.reason}`),
-        openObligations: compiled.openObligations.map(([id, description]) => `${id}: ${description}`),
-        recentEvidence: compiled.recentEvidence.map(([id, source, summary]) => `${id} [${source}]: ${summary}`),
-        repositorySignals: [...compiled.repositorySignals],
-        unknowns: [...compiled.unknowns],
-        activeHypotheses: [...compiled.hypotheses],
-        activeFocus: [...compiled.activeFocus],
-        relevantFiles: [...compiled.relevantFiles],
-        premiseConflicts: [...compiled.premiseConflicts],
-        memoryFrontier: compiled.memoryFrontier,
-        tokenBudgetHint: compiled.omittedSummary.tokenBudget,
-      })
+      return CognitiveViewCompiler.toCognitiveView(compiled)
     })
   }
 
@@ -640,7 +957,9 @@ export class SessionSemantics {
       }
 
       // 5. Build and Test Toolchains Claim
-      const toolchains = [...census.buildSystems, ...census.testFrameworks]
+      // buildSystems and testFrameworks overlap (e.g. pytest), dedupe to keep
+      // the canonical claim payload normalized.
+      const toolchains = Array.from(new Set([...census.buildSystems, ...census.testFrameworks]))
       if (toolchains.length > 0) {
         yield* self.append(events, {
           type: "claim_asserted",
@@ -657,6 +976,148 @@ export class SessionSemantics {
       }
     })
   }
+
+  /**
+   * Deep Repository Induction (hard scan):
+   * Deterministically reads a bounded set of key files per package, extracts
+   * package facts (entrypoints, imports, exports) and asserts architecture
+   * claims into Hard State. The result persists in the project's
+   * .rivet/induction.json marker so later sessions replay claims instead of
+   * rescanning. Progress streams as non-durable rivet.induction.* events so
+   * the TUI can show live scan status. Never blocks the calling drain when
+   * forked by the runner.
+   */
+  ensureDeepInduction(
+    events: EventV2.Interface,
+    directory: string,
+    options?: { force?: boolean; budgetMs?: number },
+  ): Effect.Effect<void> {
+    const self = this
+    return Effect.flatMap(Effect.sync(() => Induction.claimInFlight(directory)), (acquired) => {
+      if (!acquired) return Effect.void
+      return self.runDeepInduction(events, directory, options).pipe(
+        Effect.ensuring(Effect.sync(() => Induction.releaseInFlight(directory))),
+      )
+    })
+  }
+
+  private runDeepInduction(
+    events: EventV2.Interface,
+    directory: string,
+    options?: { force?: boolean; budgetMs?: number },
+  ): Effect.Effect<void> {
+    const self = this
+    return Effect.gen(function* () {
+      if (!options?.force) {
+        const hasInductionClaims = Array.from(self.hardState.claims.keys()).some((claimId) =>
+          claimId.startsWith("claim_induction_"),
+        )
+        if (hasInductionClaims) return
+      }
+
+      const marker = readInductionMarker(directory)
+      const cached = options?.force ? undefined : marker
+      if (cached?.result && (cached.status === "complete" || cached.status === "partial")) {
+        yield* self.appendAll(events, inductionClaimEvents(cached.result, self.scope(directory), self.hardState.revision))
+        yield* publishInductionCompleted(events, directory, cached.result, "Replayed cached deep induction (.rivet/induction.json)")
+        return
+      }
+
+      const runningElsewhere = options?.force ? undefined : marker
+      if (runningElsewhere?.status === "running" && !isMarkerStale(runningElsewhere)) return
+
+      const files = yield* Effect.sync(() => discoverWorkspaceFiles(directory))
+      if (files.length === 0) return
+
+      const startedAt = new Date().toISOString()
+      const head = gitHead(directory)
+      writeInductionMarker(directory, { status: "running", startedAt, gitHead: head, fileCount: files.length })
+
+      const census = RepositoryCensusProjector.projectFromFiles(files, self.hardState.revision)
+      const result = yield* RepositoryInduction.run({
+        directory,
+        files,
+        census,
+        budgetMs: options?.budgetMs,
+        onProgress: (progress) => events.publish(RivetInductionEvent.Progress, { directory, ...progress }).pipe(Effect.ignore),
+      })
+
+      const summary = `Deep induction read ${result.filesRead} files across ${result.packages.length} packages (${result.dependencyEdges.length} import edges${result.partial ? ", partial: budget reached" : ""}).`
+      yield* self.append(events, {
+        type: "evidence_recorded",
+        evidenceId: createEvidenceId("ev_induction_deep_scan"),
+        source: "repository_induction",
+        summary,
+        timestamp: new Date().toISOString(),
+      })
+      yield* self.append(events, {
+        type: "observation_recorded",
+        observation: {
+          observationId: "obs_induction_deep_scan",
+          actionId: "action_induction_deep_scan" as ActionId,
+          scope: self.scope(directory),
+          summary: `T0+ Deep Repository Induction ${result.partial ? "completed partially" : "completed"}: ${result.packages.length} packages, ${result.dependencyEdges.length} dependency edges, ${result.claims.length} claims.`,
+          timestamp: new Date().toISOString(),
+        },
+      })
+      yield* self.appendAll(events, inductionClaimEvents(result, self.scope(directory), self.hardState.revision))
+
+      writeInductionMarker(directory, {
+        status: result.partial ? "partial" : "complete",
+        startedAt,
+        completedAt: new Date().toISOString(),
+        gitHead: head,
+        fileCount: files.length,
+        result,
+      })
+      yield* publishInductionCompleted(events, directory, result, summary)
+    })
+  }
+}
+
+function gitHead(directory: string): string | undefined {
+  try {
+    const proc = Bun.spawnSync(["git", "rev-parse", "HEAD"], { cwd: directory, stdout: "pipe", stderr: "pipe" })
+    if (proc.exitCode !== 0) return undefined
+    return proc.stdout.toString().trim() || undefined
+  } catch {
+    return undefined
+  }
+}
+
+function inductionClaimEvents(result: InductionResult, scope: Scope, revision: Revision): NoesisEvent[] {
+  const evidenceId = createEvidenceId("ev_induction_deep_scan")
+  return result.claims.map((claim) => ({
+    type: "claim_asserted",
+    claimId: createClaimId(claim.claimId),
+    proposition: claim.proposition,
+    status: "supported",
+    evidence: [evidenceId],
+    scope,
+    validityPolicy: claim.validityPolicy,
+    dependencies: [...claim.dependencies],
+    validFromRevision: revision,
+    timestamp: new Date().toISOString(),
+  }))
+}
+
+function publishInductionCompleted(
+  events: EventV2.Interface,
+  directory: string,
+  result: InductionResult,
+  summary: string,
+): Effect.Effect<void> {
+  return events
+    .publish(RivetInductionEvent.Completed, {
+      directory,
+      status: result.partial ? "partial" : "complete",
+      claimCount: result.claims.length,
+      filesRead: result.filesRead,
+      packageCount: result.packages.length,
+      durationMs: result.durationMs,
+      summary,
+    })
+    .pipe(Effect.ignore)
 }
 
 function discoverWorkspaceFiles(directory: string): string[] {
@@ -745,4 +1206,66 @@ function decodeScope(value: unknown): Scope {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
+}
+
+/**
+ * Deterministic filesystem evaluation for file_constraint predicates.
+ * Runs harness-side: the model cannot fabricate this observation.
+ */
+function evaluateFileConstraintOnDisk(
+  repositoryRoot: string,
+  predicate: Extract<ObligationPredicate, { type: "file_constraint" }>,
+): { passed: boolean; reasonCodes: string[]; diagnostics: string | null; observation: string } {
+  const root = path.resolve(repositoryRoot)
+  const target = path.resolve(root, predicate.path)
+  if (target !== root && !target.startsWith(root + path.sep)) {
+    return {
+      passed: false,
+      reasonCodes: ["PATH_ESCAPES_REPOSITORY"],
+      diagnostics: `PATH_ESCAPES_REPOSITORY: "${predicate.path}" resolves outside the obligation scope (${repositoryRoot}). If the constraint is malformed, invalidate it via invalidate_obligation.`,
+      observation: `filesystem scope check failed for "${predicate.path}"`,
+    }
+  }
+  const exists = fs.existsSync(target)
+  if (predicate.mustExist && !exists) {
+    return {
+      passed: false,
+      reasonCodes: ["FILE_NOT_FOUND"],
+      diagnostics: `FILE_NOT_FOUND: "${predicate.path}" does not exist in ${repositoryRoot}. Create the target, or invalidate the obligation via invalidate_obligation if it is malformed.`,
+      observation: `filesystem observation: "${predicate.path}" missing`,
+    }
+  }
+  if (!predicate.mustExist && exists) {
+    return {
+      passed: false,
+      reasonCodes: ["FILE_EXISTS"],
+      diagnostics: `FILE_EXISTS: "${predicate.path}" must not exist`,
+      observation: `filesystem observation: "${predicate.path}" present`,
+    }
+  }
+  if (predicate.contentPattern) {
+    if (!exists) {
+      return {
+        passed: false,
+        reasonCodes: ["FILE_NOT_FOUND"],
+        diagnostics: `FILE_NOT_FOUND: "${predicate.path}" does not exist (required for content check)`,
+        observation: `filesystem observation: "${predicate.path}" missing`,
+      }
+    }
+    const content = fs.readFileSync(target, "utf8")
+    if (!content.includes(predicate.contentPattern)) {
+      return {
+        passed: false,
+        reasonCodes: ["CONTENT_MISMATCH"],
+        diagnostics: `CONTENT_MISMATCH: "${predicate.contentPattern}" not found in "${predicate.path}"`,
+        observation: `filesystem observation: content of "${predicate.path}" inspected`,
+      }
+    }
+  }
+  return {
+    passed: true,
+    reasonCodes: ["FILE_CONSTRAINT_SATISFIED"],
+    diagnostics: null,
+    observation: `filesystem observation: "${predicate.path}" ${exists ? "exists" : "absent as required"}`,
+  }
 }

@@ -46,6 +46,18 @@ const cassette =
       })
     : HttpRecorder.http("session-runner/openai-chat-streams-text", {
         directory: path.resolve(import.meta.dir, "fixtures/recordings"),
+        match: (incoming, recorded) => {
+          if (incoming.method !== recorded.method || incoming.url !== recorded.url) return false
+          try {
+            const inc = JSON.parse(incoming.body)
+            const rec = JSON.parse(recorded.body)
+            const incUser = inc.messages?.find((m: { role: string; content: string }) => m.role === "user")?.content
+            const recUser = rec.messages?.find((m: { role: string; content: string }) => m.role === "user")?.content
+            return inc.model === rec.model && incUser === recUser
+          } catch {
+            return false
+          }
+        },
       })
 const executor = RequestExecutor.layer.pipe(Layer.provide(cassette))
 const client = LLMClient.layer.pipe(Layer.provide(executor))

@@ -445,7 +445,13 @@ export function Autocomplete(props: {
   )
 
   const commands = createMemo((): AutocompleteOption[] => {
-    const results: AutocompleteOption[] = [...slashes()]
+    const results: AutocompleteOption[] = slashes().map((item) => ({
+      ...item,
+      onSelect: () => {
+        props.input().clear()
+        item.onSelect?.()
+      },
+    }))
 
     for (const serverCommand of sync.data.command) {
       if (serverCommand.source === "skill") continue

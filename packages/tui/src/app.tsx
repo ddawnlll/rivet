@@ -68,7 +68,6 @@ import { isDefaultTitle } from "./util/session"
 import { KVProvider, useKV } from "./context/kv"
 import * as Model from "./util/model"
 import { ArgsProvider, useArgs, type Args } from "./context/args"
-import open from "open"
 import { PromptRefProvider, usePromptRef } from "./context/prompt"
 import { TuiConfigProvider, useTuiConfig, type TuiConfig } from "./config"
 import { createTuiApiAdapters } from "./plugin/adapters"
@@ -905,15 +904,6 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
         category: "System",
       },
       {
-        name: "docs.open",
-        title: "Open docs",
-        run: () => {
-          open("https://opencode.ai/docs").catch(() => {})
-          dialog.clear()
-        },
-        category: "System",
-      },
-      {
         name: "app.exit",
         title: "Exit the app",
         slashName: "exit",
@@ -1035,10 +1025,23 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
       {
         name: "permission.mode",
         title:
-          local.permission.mode === "auto" ? "Disable auto-approve permissions" : "Enable auto-approve permissions",
+          local.permission.mode === "auto"
+            ? "Disable YOLO mode (require permission approval)"
+            : "Enable YOLO mode (auto-approve all permissions)",
+        description: "Bypass all permission prompts and auto-approve actions",
         category: "System",
+        slashName: "yolo",
+        slashAliases: ["bypass-permissions"],
         run: () => {
+          const next = local.permission.mode === "auto" ? "normal" : "auto"
           local.permission.toggle()
+          toast.show({
+            message:
+              next === "auto"
+                ? "YOLO mode enabled: auto-approving all permissions (dangerous!)"
+                : "YOLO mode disabled: permissions require approval",
+            variant: next === "auto" ? "warning" : "info",
+          })
           dialog.clear()
         },
       },

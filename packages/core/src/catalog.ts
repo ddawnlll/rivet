@@ -71,6 +71,10 @@ const layer = Layer.effect(
     const available = (provider: ProviderV2.Info, integration: Integration.Info | undefined) => {
       if (provider.disabled) return false
       if (typeof provider.request.body.apiKey === "string") return true
+      // Config-defined providers keep inline credentials in their aisdk
+      // settings (migrated from legacy `options.apiKey`); treat them as
+      // configured even when no integration connection exists.
+      if (provider.api?.type === "aisdk" && typeof provider.api.settings?.apiKey === "string") return true
       if (integration?.connections.length) return true
       return provider.integrationID === undefined && !integration
     }

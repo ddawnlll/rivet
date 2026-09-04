@@ -498,4 +498,52 @@ Recent work
       },
     ])
   })
+
+  test("lowers non-media file attachments into text parts rather than media", () => {
+    const htmlFile = FileAttachment.make({
+      uri: "file:///Users/hootie/src/rivet/site/index.html",
+      mime: "text/html",
+      name: "site/index.html",
+    })
+    const textDataFile = FileAttachment.make({
+      uri: `data:text/plain;base64,${Buffer.from("Hello world").toString("base64")}`,
+      mime: "text/plain",
+      name: "note.txt",
+    })
+    const imageFile = FileAttachment.make({
+      uri: "data:image/png;base64,aGVsbG8=",
+      mime: "image/png",
+      name: "pic.png",
+    })
+
+    const messages = toLLMMessages(
+      [
+        SessionMessage.User.make({
+          id: id("user-files"),
+          type: "user",
+          text: "sence bu @site/index.html'e gore duzeltilmeli mi?",
+          files: [htmlFile, textDataFile, imageFile],
+          time: { created },
+        }),
+      ],
+      model,
+    )
+
+    expect(messages).toHaveLength(1)
+    expect(messages[0]?.role).toBe("user")
+    expect(messages[0]?.content).toEqual([
+      {
+        type: "text",
+        text: "sence bu @site/index.html'e gore duzeltilmeli mi?\n\n[Attached file: site/index.html (text/html)]\n\n[Attached file: note.txt (text/plain)]\nHello world",
+      },
+      {
+        type: "media",
+        mediaType: "image/png",
+        data: "data:image/png;base64,aGVsbG8=",
+        filename: "pic.png",
+        metadata: undefined,
+      },
+    ])
+  })
 })
+

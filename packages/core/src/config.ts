@@ -157,8 +157,9 @@ const layer = Layer.effect(
       const input: unknown = parse(text, errors, { allowTrailingComma: true })
       if (errors.length) return
 
+      const isV1 = ConfigMigrateV1.isV1(input)
       const info = Option.getOrUndefined(
-        ConfigMigrateV1.isV1(input)
+        isV1
           ? decodeV1Info(input).pipe(Option.map(ConfigMigrateV1.migrate), Option.flatMap(decodeInfo))
           : decodeInfo(input),
       )

@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import {
   Revision,
   Scope,
+  canonicalRepositoryPath,
   isSafeRelativePath,
   shlexSplit,
   createSessionId,
@@ -52,6 +53,44 @@ describe("Rivet Types", () => {
     expect(isSafeRelativePath("foo/../../secrets.env")).toBe(false)
     expect(isSafeRelativePath("/etc/passwd")).toBe(false)
     expect(isSafeRelativePath("C:\\secrets.env")).toBe(false)
+  })
+
+  test("canonicalRepositoryPath unifies equivalent authorized spellings", () => {
+    const root = "/work/checkouts/rivet"
+    // Relative and absolute spellings of the same file canonicalize identically
+    expect(canonicalRepositoryPath(root, "packages/core/src/x.ts")).toBe("packages/core/src/x.ts")
+    expect(canonicalRepositoryPath(root, `${root}/packages/core/src/x.ts`)).toBe("packages/core/src/x.ts")
+    expect(canonicalRepositoryPath(root, `./packages/core/src/x.ts`)).toBe("packages/core/src/x.ts")
+    expect(canonicalRepositoryPath(root, `${root}/./packages//core/src/./x.ts`)).toBe("packages/core/src/x.ts")
+    expect(canonicalRepositoryPath(root, `${root}/packages/core/src/x.ts/`)).toBe("packages/core/src/x.ts")
+    // Repository root itself canonicalizes to "." in both spellings
+    expect(canonicalRepositoryPath(root, ".")).toBe(".")
+    expect(canonicalRepositoryPath(root, root)).toBe(".")
+    expect(canonicalRepositoryPath(root, `${root}/`)).toBe(".")
+    // Windows drive style is matched lexically, independent of host platform
+    expect(canonicalRepositoryPath("C:/repo/root", "C:/repo/root/src/x.ts")).toBe("src/x.ts")
+    expect(canonicalRepositoryPath("C:/repo/root", "C:\\repo\\root\\src\\x.ts")).toBe("src/x.ts")
+  })
+
+  test("canonicalRepositoryPath fails closed on non-repository-local targets", () => {
+    const root = "/work/checkouts/rivet"
+    // Absolute paths outside the root
+    expect(canonicalRepositoryPath(root, "/etc/passwd")).toBeUndefined()
+    // Sibling roots that share the repository name as a string prefix
+    expect(canonicalRepositoryPath(root, `${root}-evils/x.ts`)).toBeUndefined()
+    // Traversal hidden inside an absolute spelling
+    expect(canonicalRepositoryPath(root, `${root}/packages/../../secrets.env`)).toBeUndefined()
+    // Relative traversal in any position
+    expect(canonicalRepositoryPath(root, "../outside.ts")).toBeUndefined()
+    expect(canonicalRepositoryPath(root, "foo/../../etc/passwd")).toBeUndefined()
+    // Mixed path styles have no containment proof
+    expect(canonicalRepositoryPath(root, "C:/Windows/x.ts")).toBeUndefined()
+    expect(canonicalRepositoryPath("C:/repo/root", "/etc/passwd")).toBeUndefined()
+    // UNC network shares
+    expect(canonicalRepositoryPath(root, "//server/share/x")).toBeUndefined()
+    // Symbolic (non-path) repository identity cannot authorize absolute targets
+    expect(canonicalRepositoryPath("repo", "/repo/src/x.ts")).toBeUndefined()
+    expect(canonicalRepositoryPath("repo", "src/x.ts")).toBe("src/x.ts")
   })
 
   test("shlexSplit parses quotes and escapes", () => {

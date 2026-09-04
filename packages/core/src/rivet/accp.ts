@@ -1,18 +1,23 @@
 import {
   type ActionId,
   type ClaimId,
+  type CompletionBlocker,
+  type CompletionReadiness,
   type EpistemicStatus,
   type EvidenceId,
   type ObligationId,
+  type ObligationKind,
+  type ObligationVerifier,
   type ReceiptId,
   Revision,
   RivetError,
   Scope,
+  canonicalRepositoryPath,
   type TaskId,
   createActionId,
   createReceiptId,
-  isSafeRelativePath,
 } from "./types"
+import { isValidFilePathCandidate, type ObligationPredicate } from "./goal-compiler"
 
 export const ACCP_VERSION = "3.0"
 
@@ -38,6 +43,10 @@ export function compileReferencePrompt(): string {
     "Forbidden: VIEW/*, DECISION/*, RECEIPT/*, SIGNAL/* — never emit receipts.",
     "Rules: Use revision == view.hard_revision. Retrieved view state is context, not new evidence.",
     "Payloads: ACTION{capability,target,parameters,intent}, WORKSPACE_DELTA{add[],remove[]}, VERIFICATION{obligation_id,predicate,target_scope}, CLAIM{proposition}, COMPLETION{summary}.",
+    "",
+    "Obligation & Completion Rules:",
+    "- Inspect obligation closure requirements before attempting completion. Epistemic inquiries close via authoritative Noesis projection (query_epistemic_state); Praxis is NOT required.",
+    "- Only propose completion when COMPLETION READINESS is READY. On rejection, target only the reported blockers.",
   ].join("\n")
 }
 
@@ -148,6 +157,21 @@ export interface VerificationReceipt {
   readonly evidenceId: EvidenceId
   readonly verifiedScope: Scope
   readonly diagnostics?: string | null
+  readonly reasonCodes?: readonly string[]
+  readonly timestamp: string
+}
+
+/**
+ * Closure proof for epistemic inquiry obligations. The authoritative Noesis
+ * projection itself is the evidence: the receipt binds the obligation to the
+ * canonical revision the answer was grounded in. Praxis execution verification
+ * is neither required nor meaningful for read-only inquiries.
+ */
+export interface InquiryReceipt {
+  readonly receiptId: ReceiptId
+  readonly obligationId: ObligationId
+  readonly satisfiedAtRevision: Revision
+  readonly summary: string
   readonly timestamp: string
 }
 
@@ -174,6 +198,8 @@ export interface CompletionDecision {
   readonly unclosedObligations: ObligationId[]
   readonly finalReceipt?: ReceiptId | null
   readonly timestamp: string
+  readonly blockers: readonly string[]
+  readonly structuredBlockers: readonly CompletionBlocker[]
 }
 
 export interface ViewMessage {
@@ -335,17 +361,9 @@ export class AccpSemanticGate {
       return blocked("block", "Action proposal is stale for the current state revision")
     }
 
-    if (
-      proposal.scope.repository !== policy.repository ||
-      !policy.allowedScope.containsScope(proposal.scope) ||
-      !policy.allowedScope.allowsPath(
-        policy.repository,
-        proposal.target,
-        policy.currentRevision
-      ) ||
-      !isSafeRelativePath(proposal.target)
-    ) {
-      return blocked("block", "Action target or declared scope is outside Harness authority")
+    const violation = authorityViolation(proposal, policy)
+    if (violation) {
+      return blocked("block", `Action target or declared scope is outside Harness authority (${violation})`)
     }
 
     const capabilityAllowed = policy.allowedCapabilities.some((cap) => {
@@ -411,6 +429,153 @@ export class AccpSemanticGate {
     }
   }
 
+  static getClosureRequirement(kind: ObligationKind): {
+    readonly requiredProofKind: string
+    readonly verifier: ObligationVerifier
+    readonly praxisRequired: boolean
+    readonly actionableGuidance: string
+  } {
+    switch (kind) {
+      case "epistemic_inquiry":
+        return {
+          requiredProofKind: "AUTHORITATIVE_STATE_PROJECTION",
+          verifier: "NOESIS",
+          praxisRequired: false,
+          actionableGuidance: "Call query_epistemic_state to ground state. Praxis verification is NOT required.",
+        }
+      case "execution":
+        return {
+          requiredProofKind: "EXECUTION_RECEIPT + PRAXIS_VERIFICATION_RECEIPT",
+          verifier: "PRAXIS",
+          praxisRequired: true,
+          actionableGuidance: "Execute required command or edits, then call request_verification for Praxis receipt.",
+        }
+      case "verification":
+        return {
+          requiredProofKind: "PRAXIS_VERIFICATION_RECEIPT",
+          verifier: "PRAXIS",
+          praxisRequired: true,
+          actionableGuidance: "Call request_verification against bounded predicate.",
+        }
+      case "user_input":
+        return {
+          requiredProofKind: "USER_INPUT_RECORD",
+          verifier: "HARNESS",
+          praxisRequired: false,
+          actionableGuidance: "Wait for or request user input.",
+        }
+      case "artifact":
+        return {
+          requiredProofKind: "ARTIFACT_RECORD",
+          verifier: "HARNESS",
+          praxisRequired: false,
+          actionableGuidance: "Produce and save the required artifact.",
+        }
+      case "state_mutation":
+        return {
+          requiredProofKind: "STATE_TRANSITION_RECEIPT",
+          verifier: "HARNESS",
+          praxisRequired: false,
+          actionableGuidance: "Perform authorized state transition and advance revision.",
+        }
+    }
+  }
+
+  static checkCompletionReadiness(input: {
+    readonly unclosedObligations: readonly ObligationId[]
+    readonly passingReceipts: readonly ReceiptId[]
+    readonly hasContradictions?: boolean
+    readonly getKind?: (id: ObligationId) => ObligationKind
+    readonly getDescription?: (id: ObligationId) => string
+    readonly totalObligations?: number
+    readonly hasActiveGoal?: boolean
+  }): CompletionReadiness {
+    if (!input.hasActiveGoal && input.unclosedObligations.length === 0) {
+      return {
+        status: "NOT_REQUIRED",
+        blockers: [],
+        structuredBlockers: [],
+      }
+    }
+
+    const blockers: string[] = []
+    const structuredBlockers: CompletionBlocker[] = []
+
+    if (input.hasContradictions) {
+      const reason = "Active premise contradictions detected in HardState"
+      blockers.push(reason)
+      structuredBlockers.push({
+        reason,
+        actionableGuidance: "Resolve contradiction before requesting completion.",
+      })
+    }
+
+    for (const id of input.unclosedObligations) {
+      const kind = input.getKind?.(id) ?? "execution"
+      const desc = input.getDescription?.(id) ?? id
+      const closure = AccpSemanticGate.getClosureRequirement(kind)
+      const reason = `Obligation [${id}] "${desc}" requires ${closure.requiredProofKind} (${closure.verifier})`
+      blockers.push(reason)
+      structuredBlockers.push({
+        obligationId: id,
+        kind,
+        reason,
+        verifier: closure.verifier,
+        requiredProofKind: closure.requiredProofKind,
+        actionableGuidance: closure.actionableGuidance,
+      })
+    }
+
+    const totalObligations =
+      input.totalObligations ??
+      (input.hasActiveGoal ? 1 : input.unclosedObligations.length + input.passingReceipts.length)
+
+    if (totalObligations > 0 && input.unclosedObligations.length === 0 && input.passingReceipts.length === 0) {
+      const reason = "No passing closure receipts admitted for task"
+      blockers.push(reason)
+      structuredBlockers.push({
+        reason,
+        actionableGuidance: "Execute required action or epistemic query to admit closure receipt.",
+      })
+    }
+
+    return {
+      status: blockers.length === 0 ? "READY" : "BLOCKED",
+      blockers,
+      structuredBlockers,
+    }
+  }
+
+  /**
+   * Authority for model-proposed obligation invalidation.
+   *
+   * Fail-closed: only mechanically malformed file constraints (compiler
+   * artifacts whose path token is not a well-formed workspace path) may be
+   * invalidated. Substantive obligations keep their declared verifier; the
+   * model may not mint its own closure by waiving them.
+   */
+  static checkInvalidationAuthority(
+    predicate: ObligationPredicate | undefined,
+  ): { readonly allowed: boolean; readonly reason: string } {
+    if (predicate === undefined) {
+      return {
+        allowed: false,
+        reason:
+          "no machine-decidable predicate is attached to this obligation; close it through its declared verifier or ask the user to revise the goal",
+      }
+    }
+    if (predicate.type === "file_constraint" && !isValidFilePathCandidate(predicate.path)) {
+      return {
+        allowed: true,
+        reason: `path constraint '${predicate.path}' is not a well-formed workspace path (compiler artifact); invalidation is auditable`,
+      }
+    }
+    return {
+      allowed: false,
+      reason: `predicate '${predicate.type}' is a substantive contract; it must be closed through its declared verifier (Praxis receipt or authoritative projection), never waived by the model`,
+    }
+  }
+
   static checkCompletionAuthority(unclosedObligations: readonly ObligationId[]): void {
     if (unclosedObligations.length > 0) {
       throw new RivetError(
@@ -424,11 +589,55 @@ export class AccpSemanticGate {
     proposal: CompletionProposal,
     currentRevision: Revision,
     unclosedObligations: readonly ObligationId[],
-    passingReceipts: readonly ReceiptId[]
+    passingReceipts: readonly ReceiptId[],
+    obligationContext?: {
+      readonly getKind?: (id: ObligationId) => ObligationKind
+      readonly getDescription?: (id: ObligationId) => string
+    }
   ): CompletionDecision {
     const obligationsSatisfied = unclosedObligations.length === 0
     const revisionMatches = proposal.baseRevision.equals(currentRevision)
-    const completed = obligationsSatisfied && revisionMatches && passingReceipts.length > 0
+    const hasPassingReceipts = passingReceipts.length > 0
+    const completed = obligationsSatisfied && revisionMatches && hasPassingReceipts
+
+    const blockers: string[] = []
+    const structuredBlockers: CompletionBlocker[] = []
+
+    if (!revisionMatches) {
+      const reason = `Base revision ${proposal.baseRevision} does not match current state revision ${currentRevision}`
+      blockers.push(reason)
+      structuredBlockers.push({
+        reason,
+        actionableGuidance: "Refresh cognitive view to align with current state revision.",
+      })
+    }
+
+    if (!obligationsSatisfied) {
+      for (const id of unclosedObligations) {
+        const kind = obligationContext?.getKind?.(id) ?? "execution"
+        const desc = obligationContext?.getDescription?.(id) ?? id
+        const closure = AccpSemanticGate.getClosureRequirement(kind)
+        const reason = `Obligation [${id}] "${desc}" remains open (${kind})`
+        blockers.push(`${reason}. Requires ${closure.requiredProofKind} via ${closure.verifier}.`)
+        structuredBlockers.push({
+          obligationId: id,
+          kind,
+          reason,
+          verifier: closure.verifier,
+          requiredProofKind: closure.requiredProofKind,
+          actionableGuidance: closure.actionableGuidance,
+        })
+      }
+    }
+
+    if (obligationsSatisfied && revisionMatches && !hasPassingReceipts) {
+      const reason = "No passing closure receipts recorded for task completion"
+      blockers.push(reason)
+      structuredBlockers.push({
+        reason,
+        actionableGuidance: "Ensure required verification or epistemic query is recorded before completion.",
+      })
+    }
 
     return {
       taskId: proposal.taskId,
@@ -437,6 +646,33 @@ export class AccpSemanticGate {
       unclosedObligations: [...unclosedObligations],
       finalReceipt: completed ? passingReceipts[passingReceipts.length - 1] ?? null : null,
       timestamp: new Date().toISOString(),
+      blockers,
+      structuredBlockers,
     }
   }
+}
+
+/**
+ * Which authority predicate failed, reported without echoing target or root
+ * strings back into the decision reason. Fails closed: any target that cannot
+ * be canonicalized to a repository-relative identity is a violation.
+ */
+function authorityViolation(
+  proposal: ActionProposal,
+  policy: ActionAuthorizationPolicy
+): string | undefined {
+  if (proposal.scope.repository !== policy.repository) {
+    return "declared scope repository does not match Harness repository"
+  }
+  if (!policy.allowedScope.containsScope(proposal.scope)) {
+    return "declared scope is not contained in Harness allowed scope"
+  }
+  const canonicalTarget = canonicalRepositoryPath(policy.repository, proposal.target)
+  if (canonicalTarget === undefined) {
+    return "target cannot be established as repository-local under the Harness repository root"
+  }
+  if (!policy.allowedScope.allowsPath(policy.repository, canonicalTarget, policy.currentRevision)) {
+    return "canonicalized target is outside Harness allowed scope"
+  }
+  return undefined
 }

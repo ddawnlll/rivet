@@ -1,5 +1,6 @@
 import {
   type ObligationId,
+  type ObligationKind,
   type ReceiptId,
   Revision,
   Scope,
@@ -7,8 +8,10 @@ import {
   createObligationId,
   createTaskId,
 } from "./types"
+import { TurnAdmissionGate } from "./turn-admission"
 
 export type ObligationStatus = "open" | "satisfied" | "violated" | "waived"
+
 
 export type ObligationPredicate =
   | {
@@ -37,6 +40,7 @@ export interface ObligationNode {
   readonly description: string
   readonly targetScope: Scope
   readonly predicate: ObligationPredicate
+  readonly kind: ObligationKind
   status: ObligationStatus
   readonly dependencies: readonly ObligationId[]
   receiptId?: ReceiptId | null
@@ -78,6 +82,49 @@ export class ObligationGraph {
   }
 }
 
+const COMMON_FILE_EXTENSIONS = new Set([
+  "ts", "tsx", "js", "jsx", "mjs", "cjs",
+  "rs", "py", "json", "md", "toml", "yaml", "yml",
+  "css", "scss", "html", "sh", "bash", "zsh", "sql", "go", "c", "cpp", "h", "hpp",
+  "txt", "lock", "proto", "graphql", "wasm", "dockerfile", "env",
+])
+
+export function isValidFilePathCandidate(candidate: string): boolean {
+  if (candidate.length <= 3) return false
+  if (candidate.startsWith("http://") || candidate.startsWith("https://")) return false
+  if (candidate.endsWith(".") || candidate.endsWith("/") || candidate.endsWith("-")) return false
+  if (/^\d+(?:\.\d+)+$/.test(candidate)) return false
+  if (["e.g.", "i.e.", "etc.", "vs."].includes(candidate.toLowerCase())) return false
+  // Single-segment slash tokens ("/goal", "/inquiry") are command markers,
+  // never file targets; only multi-segment or dotted tokens can be paths.
+  if (candidate.startsWith("/") && !candidate.slice(1).includes("/")) return false
+
+  if (candidate.includes("/")) {
+    if (candidate.includes("..") && !candidate.startsWith("../") && !candidate.startsWith("./")) return false
+    // Slash alone is not evidence of a path ("and/or", "2024/01/15"). The
+    // basename must itself look like a real file for a mustExist constraint.
+    const base = candidate.slice(candidate.lastIndexOf("/") + 1)
+    return isValidFilePathCandidate(base)
+  }
+
+  const dotIndex = candidate.lastIndexOf(".")
+  if (dotIndex > 0 && dotIndex < candidate.length - 1) {
+    const ext = candidate.slice(dotIndex + 1).toLowerCase()
+    return COMMON_FILE_EXTENSIONS.has(ext)
+  }
+
+  return false
+}
+
+export function classifyGoalKind(userPrompt: string): ObligationKind {
+  const trimmed = userPrompt.trim()
+  if (trimmed.startsWith("/inquiry") || trimmed.startsWith("/ask")) {
+    return "epistemic_inquiry"
+  }
+  const admission = TurnAdmissionGate.classify(trimmed)
+  return admission.obligationKind ?? (admission.shouldCreateObligation ? "execution" : "epistemic_inquiry")
+}
+
 export interface GoalSpec {
   readonly goalId: TaskId
   readonly summary: string
@@ -90,11 +137,11 @@ export class GoalCompiler {
   static compile(
     userPrompt: string,
     repoName: string,
-    currentRevision: Revision
+    currentRevision: Revision,
+    kind: ObligationKind = classifyGoalKind(userPrompt),
   ): GoalSpec {
     const goalId = createTaskId()
     const graph = new ObligationGraph()
-    const promptLower = userPrompt.toLowerCase()
 
     const rootOblgId = createObligationId()
     const rootScope = Scope.global(repoName, currentRevision)
@@ -104,41 +151,53 @@ export class GoalCompiler {
       claimPropositions: [`Goal '${userPrompt}' fulfilled`],
     }
 
+    const rootKind = kind
+
     graph.addObligation({
       id: rootOblgId,
       title: "Fulfill requested goal requirements",
       description: userPrompt,
       targetScope: rootScope,
       predicate,
+      kind: rootKind,
       status: "open",
       dependencies: [],
       receiptId: null,
       createdAt: new Date().toISOString(),
     })
 
-    // Detect mentioned files
-    const words = userPrompt.split(/\s+/)
-    for (const word of words) {
-      if ((word.includes(".") || word.includes("/")) && !word.startsWith("http")) {
-        const cleanPath = word.replace(/^[^\w./-]+|[^\w./-]+$/g, "")
-        if (cleanPath.length > 3) {
-          const fileOblgId = createObligationId()
-          graph.addObligation({
-            id: fileOblgId,
-            title: `Ensure target path '${cleanPath}' is maintained`,
-            description: `File constraint for ${cleanPath}`,
-            targetScope: Scope.path(repoName, cleanPath, currentRevision),
-            predicate: {
-              type: "file_constraint",
-              path: cleanPath,
-              mustExist: true,
-              contentPattern: null,
-            },
-            status: "open",
-            dependencies: [],
-            receiptId: null,
-            createdAt: new Date().toISOString(),
-          })
+    // Detect mentioned files only for non-inquiry execution goals
+    if (rootKind !== "epistemic_inquiry") {
+      const words = userPrompt.split(/\s+/)
+      const seenPaths = new Set<string>()
+      for (const word of words) {
+        if ((word.includes(".") || word.includes("/")) && !word.startsWith("http")) {
+          const cleanPath = word
+            .replace(/^[^\w./-]+|[^\w./-]+$/g, "")
+            .replace(/[.,;:!?()\[\]{}"']+$/g, "")
+            .replace(/^[.,;:!?()\[\]{}"']+/g, "")
+          if (seenPaths.has(cleanPath)) continue
+          if (isValidFilePathCandidate(cleanPath)) {
+            seenPaths.add(cleanPath)
+            const fileOblgId = createObligationId()
+            graph.addObligation({
+              id: fileOblgId,
+              title: `Ensure target path '${cleanPath}' is maintained`,
+              description: `File constraint for ${cleanPath}`,
+              targetScope: Scope.path(repoName, cleanPath, currentRevision),
+              predicate: {
+                type: "file_constraint",
+                path: cleanPath,
+                mustExist: true,
+                contentPattern: null,
+              },
+              kind: "execution",
+              status: "open",
+              dependencies: [],
+              receiptId: null,
+              createdAt: new Date().toISOString(),
+            })
+          }
         }
       }
     }

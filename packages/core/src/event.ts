@@ -128,7 +128,7 @@ export interface Interface {
     definition: D,
     data: Data<D>,
     options?: PublishOptions,
-  ) => Effect.Effect<Payload<D>>
+  ) => Effect.Effect<Payload<D>, never, never>
   readonly subscribe: <D extends Definition>(definition: D) => Stream.Stream<Payload<D>>
   readonly all: () => Stream.Stream<Payload>
   readonly durable: (input: { readonly aggregateID: string; readonly after?: number }) => Stream.Stream<Payload>

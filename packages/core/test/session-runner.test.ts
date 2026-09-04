@@ -622,11 +622,11 @@ describe("SessionRunnerLLM", () => {
       streamStarted = undefined
       response = []
 
-      const message = yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Run automatically" }) })
+      const message = yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Automatically" }) })
 
       expect(requests).toHaveLength(1)
       expect(yield* session.messages({ sessionID })).toMatchObject([
-        { id: message.id, type: "user", text: "Run automatically" },
+        { id: message.id, type: "user", text: "Automatically" },
       ])
     }),
   )
@@ -636,7 +636,7 @@ describe("SessionRunnerLLM", () => {
       yield* setup
       const session = yield* SessionV2.Service
       yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "First" }), resume: false })
-      yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Second" }), resume: false })
+      yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "/goal Second" }), resume: false })
 
       requests.length = 0
       responses = undefined
@@ -645,20 +645,23 @@ describe("SessionRunnerLLM", () => {
       response = []
       yield* session.resume(sessionID)
 
-      expect(requests).toHaveLength(1)
+      // The active goal leaves its root obligation open, so the runner
+      // publishes one completion directive and re-drives exactly once.
+      expect(requests).toHaveLength(2)
       expect(requests[0]?.model).toBe(model)
       expect(requests[0]?.tools.map((tool) => tool.name)).toEqual([
         "echo",
         "defect",
         "request_completion",
         "request_verification",
+        "invalidate_obligation",
         "propose_claim",
         "query_epistemic_state",
         "retrieve_memory",
       ])
       expect(requests[0]?.messages.map((message) => ({ role: message.role, content: message.content }))).toEqual([
         { role: "user", content: [{ type: "text", text: "First" }] },
-        { role: "user", content: [{ type: "text", text: "Second" }] },
+        { role: "user", content: [{ type: "text", text: "/goal Second" }] },
       ])
       expect(yield* session.messages({ sessionID })).toHaveLength(2)
     }),
@@ -1367,6 +1370,7 @@ describe("SessionRunnerLLM", () => {
         "defect",
         "request_completion",
         "request_verification",
+        "invalidate_obligation",
         "propose_claim",
         "query_epistemic_state",
         "retrieve_memory",
@@ -1775,7 +1779,7 @@ describe("SessionRunnerLLM", () => {
     Effect.gen(function* () {
       yield* setup
       const session = yield* SessionV2.Service
-      yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Run once" }), resume: false })
+      yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Once" }), resume: false })
 
       requests.length = 0
       responses = undefined
@@ -1804,7 +1808,7 @@ describe("SessionRunnerLLM", () => {
 
       expect(requests).toHaveLength(1)
       expect(yield* session.context(sessionID)).toMatchObject([
-        { type: "user", text: "Run once" },
+        { type: "user", text: "Once" },
         { type: "assistant", finish: "stop", content: [{ type: "text", id: "text-once", text: "Once" }] },
       ])
     }),
@@ -1923,7 +1927,7 @@ describe("SessionRunnerLLM", () => {
       yield* Deferred.await(streamStarted)
       yield* session.prompt({
         sessionID,
-        prompt: Prompt.make({ text: "Run after interrupt" }),
+        prompt: Prompt.make({ text: "After interrupt" }),
         delivery: "queue",
       })
       yield* session.interrupt(sessionID)
@@ -1939,7 +1943,7 @@ describe("SessionRunnerLLM", () => {
 
       expect(requests).toHaveLength(2)
       expect(userTexts(requests[0]!)).toEqual(["Interrupt current work"])
-      expect(userTexts(requests[1]!)).toEqual(["Interrupt current work", "Run after interrupt"])
+      expect(userTexts(requests[1]!)).toEqual(["Interrupt current work", "After interrupt"])
     }),
   )
 
@@ -2412,7 +2416,7 @@ describe("SessionRunnerLLM", () => {
       )
       yield* session.prompt({
         sessionID,
-        prompt: Prompt.make({ text: "Run committed promotion" }),
+        prompt: Prompt.make({ text: "Committed promotion" }),
         resume: false,
       })
 
@@ -2420,7 +2424,7 @@ describe("SessionRunnerLLM", () => {
       yield* session.resume(sessionID)
 
       expect(requests).toHaveLength(1)
-      expect(userTexts(requests[0]!)).toEqual(["Run committed promotion"])
+      expect(userTexts(requests[0]!)).toEqual(["Committed promotion"])
     }),
   )
 
@@ -2503,12 +2507,12 @@ describe("SessionRunnerLLM", () => {
       const session = yield* SessionV2.Service
       yield* session.prompt({
         sessionID: longSessionID,
-        prompt: Prompt.make({ text: "Run long session" }),
+        prompt: Prompt.make({ text: "Long session" }),
         resume: false,
       })
       yield* session.prompt({
         sessionID: otherLongSessionID,
-        prompt: Prompt.make({ text: "Run other long session" }),
+        prompt: Prompt.make({ text: "Other long session" }),
         resume: false,
       })
 
@@ -3551,6 +3555,60 @@ describe("SessionRunnerLLM", () => {
       expect(requests[0]?.toolChoice).toBeUndefined()
       expect(requests[0]?.tools?.some((t) => t.name === "retrieve_memory")).toBe(true)
       expect(requests[0]?.system.some((part) => part.text.includes("You are Rivet's active Cognitive Controller."))).toBe(true)
+    }),
+  )
+
+  it.effect("conversational question settles cleanly in 1 turn without getting stuck in harness loop", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      requests.length = 0
+      yield* session.prompt({
+        sessionID,
+        prompt: Prompt.make({ text: "bu proje ne işe yarıyor?" }),
+        resume: false,
+      })
+      responses = [[
+        LLMEvent.textStart({ id: "text-q" }),
+        LLMEvent.textDelta({ id: "text-q", text: "Bu proje Rivet adında bir AI asistanıdır." }),
+        LLMEvent.textEnd({ id: "text-q" }),
+        LLMEvent.stepFinish({ index: 0, reason: "stop" }),
+        LLMEvent.finish({ reason: "stop" }),
+      ]]
+
+      yield* session.resume(sessionID)
+
+      expect(requests).toHaveLength(1)
+      const messages = yield* session.messages({ sessionID })
+      expect(messages.some((m) => m.type === "synthetic")).toBe(false)
+      const assistantMsg = messages.find((m) => m.type === "assistant")
+      expect(assistantMsg).toBeDefined()
+    }),
+  )
+
+  it.effect("conversational greeting settles cleanly in 1 turn", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      requests.length = 0
+      yield* session.prompt({
+        sessionID,
+        prompt: Prompt.make({ text: "selam" }),
+        resume: false,
+      })
+      responses = [[
+        LLMEvent.textStart({ id: "text-g" }),
+        LLMEvent.textDelta({ id: "text-g", text: "Selam! Nasıl yardımcı olabilirim?" }),
+        LLMEvent.textEnd({ id: "text-g" }),
+        LLMEvent.stepFinish({ index: 0, reason: "stop" }),
+        LLMEvent.finish({ reason: "stop" }),
+      ]]
+
+      yield* session.resume(sessionID)
+
+      expect(requests).toHaveLength(1)
+      const messages = yield* session.messages({ sessionID })
+      expect(messages.some((m) => m.type === "synthetic")).toBe(false)
     }),
   )
 })

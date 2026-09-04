@@ -1,6 +1,7 @@
 import {
   type ClaimId,
   type ActionId,
+  type CompletionReadiness,
   type DependencyRef,
   type EpistemicStatus,
   type EvidenceId,
@@ -8,6 +9,8 @@ import {
   type MemoryFrontier,
   type MemoryRef,
   type ObligationId,
+  type ObligationKind,
+  type ObligationViewRecord,
   type PremiseConflict,
   type Provenance,
   type ReceiptId,
@@ -20,7 +23,8 @@ import {
   type WorkspaceId,
   createWorkspaceId,
 } from "./types"
-import type { ExecutionReceipt, VerificationReceipt } from "./accp"
+import type { ExecutionReceipt, InquiryReceipt, VerificationReceipt } from "./accp"
+import type { ObligationPredicate } from "./goal-compiler"
 import { ValidityGraph } from "./validity"
 import { RepositoryFrontierCompiler, type RepositoryFrontier } from "./repository/repository-frontier"
 
@@ -100,6 +104,7 @@ export type NoesisEvent =
   | {
       readonly type: "goal_set"
       readonly goal: string
+      readonly goalId?: TaskId
       readonly timestamp: string
     }
   | {
@@ -187,6 +192,8 @@ export type NoesisEvent =
       readonly obligationId: ObligationId
       readonly description: string
       readonly scope: Scope
+      readonly kind?: ObligationKind
+      readonly predicate?: ObligationPredicate
       readonly timestamp: string
     }
   | {
@@ -196,12 +203,26 @@ export type NoesisEvent =
       readonly timestamp: string
     }
   | {
+      readonly type: "inquiry_satisfied"
+      readonly obligationId: ObligationId
+      readonly receiptId: ReceiptId
+      readonly satisfiedAtRevision: Revision
+      readonly summary: string
+      readonly timestamp: string
+    }
+  | {
       readonly type: "verification_recorded"
       readonly receipt: VerificationReceipt
       readonly timestamp: string
     }
   | {
       readonly type: "obligation_reopened"
+      readonly obligationId: ObligationId
+      readonly reason: string
+      readonly timestamp: string
+    }
+  | {
+      readonly type: "obligation_invalidated"
       readonly obligationId: ObligationId
       readonly reason: string
       readonly timestamp: string
@@ -242,6 +263,13 @@ export type NoesisEvent =
       readonly finalReceipt: ReceiptId
       readonly timestamp: string
     }
+  | {
+      readonly type: "completion_rejected"
+      readonly taskId: TaskId
+      readonly blockers: readonly string[]
+      readonly avoidable: boolean
+      readonly timestamp: string
+    }
 
 export interface ArchitectureEpoch {
   readonly id: string
@@ -250,6 +278,14 @@ export interface ArchitectureEpoch {
   readonly endRevision?: Revision
   readonly primaryLanguage?: string
   readonly description?: string
+}
+
+// Telemetry events are recorded for observability but carry no epistemic
+// mutation, so replaying them must not advance the canonical revision.
+const RUNTIME_TELEMETRY_EVENT_TYPES: ReadonlySet<string> = new Set(["model_invocation_recorded"])
+
+function isRuntimeTelemetryEvent(event: NoesisEvent): boolean {
+  return RUNTIME_TELEMETRY_EVENT_TYPES.has(event.type)
 }
 
 export class HardState {
@@ -261,7 +297,11 @@ export class HardState {
   readonly rejectedClaims: Map<ClaimId, RejectionRecord> = new Map()
   readonly obligations: Map<ObligationId, string> = new Map()
   readonly obligationScopes: Map<ObligationId, Scope> = new Map()
+  readonly obligationKinds: Map<ObligationId, ObligationKind> = new Map()
+  readonly obligationPredicates: Map<ObligationId, ObligationPredicate> = new Map()
   readonly closedObligations: Map<ObligationId, ReceiptId> = new Map()
+  readonly invalidatedObligations: Map<ObligationId, string> = new Map()
+  readonly inquiryReceipts: Map<ObligationId, InquiryReceipt> = new Map()
   readonly evidence: Map<EvidenceId, string> = new Map()
   readonly executionReceipts: ExecutionReceipt[] = []
   readonly observations: Map<string, Observation> = new Map()
@@ -273,6 +313,27 @@ export class HardState {
   readonly premiseConflicts: PremiseConflict[] = []
   readonly epochs: Map<string, ArchitectureEpoch> = new Map()
   currentEpochId?: string
+  completionAttempts: number = 0
+  gateRejectionCount: number = 0
+  avoidableGateRejectionCount: number = 0
+  verificationRetries: number = 0
+  toolCallsAfterRejection: number = 0
+  firstAttemptAccepted: boolean | null = null
+
+  getGateMetrics() {
+    return {
+      completionAttempts: this.completionAttempts,
+      gateRejectionCount: this.gateRejectionCount,
+      avoidableGateRejectionCount: this.avoidableGateRejectionCount,
+      verificationRetries: this.verificationRetries,
+      toolCallsAfterRejection: this.toolCallsAfterRejection,
+      firstAttemptAccepted: this.firstAttemptAccepted,
+      firstAttemptAcceptanceRate:
+        this.completionAttempts > 0
+          ? (this.firstAttemptAccepted ? 1 : 0) / (this.completedTasks.size || 1)
+          : 0,
+    }
+  }
 
   recordEpoch(epoch: ArchitectureEpoch): void {
     this.epochs.set(epoch.id, epoch)
@@ -300,11 +361,16 @@ export class HardState {
   }
 
   apply(event: NoesisEvent): void {
-    this.revision = this.revision.next()
+    // Runtime telemetry (model invocations, timings) is part of the event ledger
+    // but not an epistemic world mutation: read-only turns must not advance the
+    // canonical revision, otherwise validity windows and stale-base checks
+    // degrade into event-sequence noise.
+    if (!isRuntimeTelemetryEvent(event)) this.revision = this.revision.next()
 
     switch (event.type) {
       case "goal_set": {
         this.goalDescription = (event as any).goal ?? (event as any).description ?? null
+        if ((event as any).goalId) this.activeTaskId = (event as any).goalId
         break
       }
       case "claim_asserted": {
@@ -486,11 +552,27 @@ export class HardState {
       case "obligation_created": {
         this.obligations.set(event.obligationId, event.description)
         this.obligationScopes.set(event.obligationId, event.scope)
+        // Legacy events carry no kind; they were closed via Praxis execution
+        // verification, which stays the default closure semantics.
+        this.obligationKinds.set(event.obligationId, event.kind ?? "execution")
+        if (event.predicate) this.obligationPredicates.set(event.obligationId, event.predicate)
         break
       }
       case "obligation_closed": {
         this.obligations.delete(event.obligationId)
         this.closedObligations.set(event.obligationId, event.receiptId)
+        break
+      }
+      case "inquiry_satisfied": {
+        this.obligations.delete(event.obligationId)
+        this.closedObligations.set(event.obligationId, event.receiptId)
+        this.inquiryReceipts.set(event.obligationId, {
+          receiptId: event.receiptId,
+          obligationId: event.obligationId,
+          satisfiedAtRevision: event.satisfiedAtRevision,
+          summary: event.summary,
+          timestamp: event.timestamp,
+        })
         break
       }
       case "verification_recorded": {
@@ -514,6 +596,11 @@ export class HardState {
         this.completedTasks.clear()
         break
       }
+      case "obligation_invalidated": {
+        this.obligations.delete(event.obligationId)
+        this.invalidatedObligations.set(event.obligationId, event.reason)
+        break
+      }
       case "process_error_attributed": {
         this.processErrorAttributions.push(event.record)
         break
@@ -524,6 +611,21 @@ export class HardState {
       }
       case "completion_accepted": {
         this.completedTasks.set(event.taskId, event.finalReceipt)
+        this.completionAttempts++
+        if (this.firstAttemptAccepted === null) {
+          this.firstAttemptAccepted = true
+        }
+        break
+      }
+      case "completion_rejected": {
+        this.completionAttempts++
+        this.gateRejectionCount++
+        if (event.avoidable) {
+          this.avoidableGateRejectionCount++
+        }
+        if (this.firstAttemptAccepted === null) {
+          this.firstAttemptAccepted = false
+        }
         break
       }
     }
@@ -564,6 +666,10 @@ export class HardState {
     return evidenceIds.every((id) => this.evidence.has(id))
   }
 
+  obligationKind(obligationId: ObligationId): ObligationKind {
+    return this.obligationKinds.get(obligationId) ?? "execution"
+  }
+
   openObligationIds(): ObligationId[] {
     return Array.from(this.obligations.keys()).sort()
   }
@@ -574,6 +680,25 @@ export class HardState {
       if (receipt.passed) {
         receipts.push(receipt.receiptId)
       }
+    }
+    return receipts.sort()
+  }
+
+  /**
+   * All obligation closure proofs regardless of proof-object family: Praxis
+   * verification receipts for execution obligations and authoritative Noesis
+   * inquiry receipts for epistemic inquiries. Completion authority counts
+   * kind-appropriate closure proofs, not Praxis receipts alone.
+   */
+  closureReceiptIds(): ReceiptId[] {
+    const receipts: ReceiptId[] = []
+    for (const receipt of this.verificationReceipts.values()) {
+      if (receipt.passed) {
+        receipts.push(receipt.receiptId)
+      }
+    }
+    for (const receipt of this.inquiryReceipts.values()) {
+      receipts.push(receipt.receiptId)
     }
     return receipts.sort()
   }
@@ -657,6 +782,8 @@ export interface CognitiveViewInit {
   contradictions?: readonly string[]
   rejectedClaims?: readonly string[]
   openObligations?: readonly string[]
+  obligations?: readonly ObligationViewRecord[]
+  completionReadiness?: CompletionReadiness
   recentEvidence?: readonly string[]
   repositorySignals?: readonly string[]
   unknowns?: readonly string[]
@@ -678,6 +805,8 @@ export class CognitiveView {
   readonly contradictions: readonly string[]
   readonly rejectedClaims: readonly string[]
   readonly openObligations: readonly string[]
+  readonly obligations: readonly ObligationViewRecord[]
+  readonly completionReadiness: CompletionReadiness
   readonly recentEvidence: readonly string[]
   readonly repositorySignals: readonly string[]
   readonly unknowns: readonly string[]
@@ -698,6 +827,12 @@ export class CognitiveView {
     this.contradictions = init.contradictions ?? []
     this.rejectedClaims = init.rejectedClaims ?? []
     this.openObligations = init.openObligations ?? []
+    this.obligations = init.obligations ?? []
+    this.completionReadiness = init.completionReadiness ?? {
+      status: (init.openObligations ?? []).length === 0 ? "READY" : "BLOCKED",
+      blockers: (init.openObligations ?? []).map((o) => `Open obligation: ${o}`),
+      structuredBlockers: [],
+    }
     this.recentEvidence = init.recentEvidence ?? []
     this.repositorySignals = init.repositorySignals ?? []
     this.unknowns = init.unknowns ?? []
@@ -724,10 +859,81 @@ export class CognitiveView {
     lines.push("   - To inspect project knowledge, hard state status, or verified claims: CALL `query_epistemic_state`.")
     lines.push("   - To recall associative memories, past decisions, or conventions: CALL `retrieve_memory`.")
     lines.push("   - DO NOT make a planning list (todowrite) or execute bash commands when asked about state or memory.")
+    if (this.completionReadiness.status !== "NOT_REQUIRED" && this.goalDescription) {
+      lines.push("3. OBLIGATION CONTRACTS & COMPLETION READINESS:")
+      lines.push("   - Inspect the active obligation's closure contract and completion readiness BEFORE attempting completion.")
+      lines.push("   - An authoritative Noesis projection (`query_epistemic_state`) satisfies epistemic inquiries. Praxis is NOT required.")
+      lines.push("   - Do NOT call `request_verification` (Praxis) unless the obligation explicitly requires Praxis verification.")
+      lines.push("   - Only call `request_completion` when COMPLETION READINESS is READY. If BLOCKED, address ONLY the listed blockers.")
+      lines.push("   - If rejected, address ONLY the reported blocker. Do NOT run unrelated shell commands or invent verification work.")
+    } else {
+      lines.push("3. CONVERSATIONAL / CHAT PROJECTION MODE:")
+      lines.push("   - You are in conversational mode. Respond directly, politely, and helpfully in natural prose.")
+      lines.push("   - Do NOT recite internal state tables, obligations, or completion blockers unless the user specifically asks for status.")
+      lines.push("   - Do NOT call `request_completion` or `request_verification`.")
+    }
     lines.push("================================================================================\n")
-    lines.push(`### CURRENT GOAL (Revision: ${this.hardRevision})`)
-    lines.push(`Repository: ${this.repositoryId}`)
-    lines.push(`${this.goalDescription}\n`)
+    if (this.goalDescription) {
+      lines.push("### CURRENT GOAL")
+      lines.push(`Repository: ${this.repositoryId}`)
+      lines.push(`${this.goalDescription}\n`)
+    }
+
+    if (this.completionReadiness.status === "NOT_REQUIRED" || !this.goalDescription) {
+      lines.push("### CONVERSATIONAL MODE (No Active Autonomous Goal)")
+      lines.push("Harness gate: NOT_REQUIRED. Respond directly to the user in natural prose.")
+      lines.push("Do NOT invoke 'request_completion' or 'request_verification' for conversational turns or general questions.\n")
+    } else if (this.completionReadiness.status === "READY") {
+      lines.push(`### COMPLETION READINESS: READY`)
+      lines.push("All required obligations are closed and verified by authoritative receipts.")
+      lines.push("Harness gate allows completion: you may call 'request_completion' when ready.\n")
+    } else {
+      lines.push(`### COMPLETION READINESS: BLOCKED`)
+      lines.push("Completion is currently BLOCKED by Harness runtime gates.")
+      lines.push("Do NOT call 'request_completion' until all blockers below are resolved:")
+      for (const blocker of this.completionReadiness.blockers) {
+        lines.push(`- [BLOCKER] ${blocker}`)
+      }
+      lines.push("Directives: Address ONLY the blockers listed above. Do not invent verification work or run unrelated commands. For questions and inquiries, answer the user directly in prose.\n")
+    }
+
+    if (this.obligations.length > 0) {
+      lines.push("### OBLIGATION CONTRACTS & CLOSURE REQUIREMENTS:")
+      for (const o of this.obligations) {
+        lines.push(`- [OBLIGATION: ${o.id}]`)
+        lines.push(`  Type: ${o.type.toUpperCase()}`)
+        lines.push(`  Objective: ${o.objective}`)
+        lines.push(`  Status: ${o.status.toUpperCase()}`)
+        lines.push(`  Closure:`)
+      lines.push(`    Required Proof: ${o.closure.requiredProofKind}`)
+      lines.push(`    Verifier: ${o.closure.verifier}`)
+      lines.push(`    Praxis: ${o.closure.praxisRequired ? "REQUIRED" : "NOT REQUIRED"}`)
+      if (o.predicateSummary) lines.push(`    Predicate: ${o.predicateSummary}`)
+      if (o.legalTransitions && o.legalTransitions.length > 0) {
+        lines.push(`    Legal Transitions: ${o.legalTransitions.join(" | ")}`)
+      }
+      lines.push(`    Accepted Proof Refs: ${o.closure.acceptedProofRefs.length > 0 ? o.closure.acceptedProofRefs.join(", ") : "(None yet)"}`)
+        if (o.blockers.length > 0) {
+          lines.push(`  Blockers:`)
+          for (const b of o.blockers) {
+            lines.push(`    - ${b}`)
+          }
+        } else {
+          lines.push(`  Blockers: (None - satisfied)`)
+        }
+      }
+      lines.push("")
+    } else if (this.openObligations.length > 0) {
+      lines.push("### OPEN OBLIGATIONS TO VERIFY (Use internal ID only when proposing verification):")
+      for (const o of this.openObligations) {
+        lines.push(`- [ ] ${o}`)
+      }
+      lines.push("")
+    } else {
+      lines.push("### OPEN OBLIGATIONS TO VERIFY:")
+      lines.push("- (None open)")
+      lines.push("")
+    }
 
     if (this.premiseConflicts.length > 0) {
       lines.push("### DETECTED PREMISE CONFLICTS (User premise contradicts verified state):")
@@ -775,18 +981,6 @@ export class CognitiveView {
       for (const h of this.activeHypotheses) {
         lines.push(`- ${h}`)
       }
-      lines.push("")
-    }
-
-    if (this.openObligations.length > 0) {
-      lines.push("### OPEN OBLIGATIONS TO VERIFY (Use internal ID only when proposing verification):")
-      for (const o of this.openObligations) {
-        lines.push(`- [ ] ${o}`)
-      }
-      lines.push("")
-    } else {
-      lines.push("### OPEN OBLIGATIONS TO VERIFY:")
-      lines.push("- (None open)")
       lines.push("")
     }
 
@@ -859,7 +1053,7 @@ export class CognitiveView {
       lines.push("")
     }
 
-    lines.push(`### INVOCATION ACCOUNTING: ${this.modelInvocationCount} prior model calls`)
+    lines.push(`### RUNTIME STATE METADATA: HardState Revision ${this.hardRevision} · ${this.modelInvocationCount} prior model calls`)
 
     let out = lines.join("\n")
     const marker = "\n[view truncated]"

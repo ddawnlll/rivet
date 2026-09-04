@@ -112,12 +112,12 @@ export const TuiThreadCommand = cmd({
       })
       .option("yolo", {
         type: "boolean",
-        hidden: true,
+        describe: "bypass permissions (auto-approve all permissions, dangerous!)",
         default: false,
       })
       .option("dangerously-skip-permissions", {
         type: "boolean",
-        hidden: true,
+        describe: "bypass permissions (auto-approve all permissions, dangerous!)",
         default: false,
       })
       .option("mini", {

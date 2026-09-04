@@ -98,6 +98,57 @@ export type ValidityPolicy =
   | "PROCEDURAL"
   | "EPISTEMIC"
 
+/**
+ * Obligations are typed because each kind requires a different closure proof
+ * object: epistemic inquiries close via authoritative Noesis projections,
+ * execution obligations close via Praxis verification receipts over observed
+ * executions, and state mutations require an authorized action plus a revision
+ * transition. Treating them uniformly turns assurance into bureaucracy.
+ */
+export type ObligationKind =
+  | "epistemic_inquiry"
+  | "execution"
+  | "verification"
+  | "user_input"
+  | "artifact"
+  | "state_mutation"
+
+export type ObligationVerifier = "NOESIS" | "PRAXIS" | "HARNESS"
+
+export interface ObligationClosureSpec {
+  readonly requiredProofKind: string
+  readonly verifier: ObligationVerifier
+  readonly praxisRequired: boolean
+  readonly acceptedProofRefs: readonly string[]
+}
+
+export interface ObligationViewRecord {
+  readonly id: ObligationId
+  readonly type: ObligationKind
+  readonly objective: string
+  readonly status: "open" | "satisfied" | "invalidated"
+  readonly scope: Scope
+  readonly closure: ObligationClosureSpec
+  readonly blockers: readonly string[]
+  readonly predicateSummary?: string
+  readonly legalTransitions?: readonly string[]
+}
+
+export interface CompletionBlocker {
+  readonly obligationId?: ObligationId
+  readonly kind?: ObligationKind
+  readonly reason: string
+  readonly verifier?: ObligationVerifier
+  readonly requiredProofKind?: string
+  readonly actionableGuidance?: string
+}
+
+export interface CompletionReadiness {
+  readonly status: "READY" | "BLOCKED" | "NOT_REQUIRED"
+  readonly blockers: readonly string[]
+  readonly structuredBlockers: readonly CompletionBlocker[]
+}
+
 export type DependencyRef =
   | { readonly type: "file"; readonly path: string }
   | { readonly type: "file_pattern"; readonly pattern: string }
@@ -251,6 +302,56 @@ export function isSafeRelativePath(p: string): boolean {
     if (seg === "..") return false
   }
   return true
+}
+
+// Applied to backslash-normalized spellings: POSIX absolute and Windows
+// drive-letter paths are the two absolute forms a target or repository root
+// can take. Anything else has no canonical containment semantics.
+const looksAbsolute = (p: string) => p.startsWith("/") || /^[a-zA-Z]:\//.test(p)
+
+/**
+ * Map an action target to its canonical repository-relative spelling, or
+ * `undefined` when repository-local identity cannot be established.
+ *
+ * Repository-relative and absolute spellings of the same file under the
+ * declared repository root canonicalize to one value, so equivalent path
+ * representations can never produce contradictory authority decisions.
+ * Absolute targets outside the root, traversal segments, drive- or UNC-style
+ * externals, and absolute spellings against a symbolic (non-path) repository
+ * root all fail closed to `undefined`.
+ *
+ * This is a purely lexical boundary identity. Filesystem reality (symlinks,
+ * mount boundaries, case sensitivity) stays owned by the executor's canonical
+ * resolution (`LocationMutation`); ACCP authority is deliberately narrower or
+ * equal to what the executor can later prove canonical.
+ */
+export function canonicalRepositoryPath(repository: string, target: string): string | undefined {
+  const relativize = (value: string): string | undefined => {
+    const slashed = value.replace(/\\/g, "/")
+    const normalized = path.posix.normalize(slashed).replace(/\/+$/, "")
+    if (normalized === "" || normalized === ".") return "."
+    if (normalized === ".." || normalized.startsWith("../") || normalized.startsWith("/")) return undefined
+    return normalized
+  }
+
+  const slashedTarget = target.replace(/\\/g, "/")
+
+  if (!looksAbsolute(slashedTarget) && isSafeRelativePath(target)) return relativize(target)
+
+  // Absolute spellings (including Windows drive and UNC forms, independent of
+  // host platform) are repository-local only when lexically contained in the
+  // declared repository root, and only when that root is itself a path.
+  // Mixed path styles (e.g. a drive-letter target against a POSIX root) have
+  // no lexical containment proof and fail closed.
+  const slashedRoot = repository.replace(/\\/g, "/")
+  if (!looksAbsolute(slashedTarget) || !looksAbsolute(slashedRoot)) return undefined
+  if (slashedTarget.startsWith("/") !== slashedRoot.startsWith("/")) return undefined
+  const normRoot = path.posix.normalize(slashedRoot)
+  const normTarget = path.posix.normalize(slashedTarget)
+  if (normTarget === normRoot) return "."
+  const prefix = normRoot.endsWith("/") ? normRoot : `${normRoot}/`
+  if (!normTarget.startsWith(prefix)) return undefined
+  return relativize(normTarget.slice(prefix.length))
 }
 
 export function globMatch(pattern: string, text: string): boolean {

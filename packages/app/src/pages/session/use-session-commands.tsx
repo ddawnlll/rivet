@@ -638,6 +638,7 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
         ? language.t("command.permissions.autoaccept.disable")
         : language.t("command.permissions.autoaccept.enable"),
       keybind: "mod+shift+a",
+      slash: "yolo",
       disabled: false,
       onSelect: toggleAutoAccept,
     }),

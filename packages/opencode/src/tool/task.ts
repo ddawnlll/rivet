@@ -4,16 +4,18 @@ import { ToolJsonSchema } from "./json-schema"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { BackgroundJob } from "@/background/job"
 import { Session } from "@/session/session"
-import { SessionID, MessageID } from "../session/schema"
+import { SessionID, MessageID, PartID } from "../session/schema"
 import { MessageV2 } from "../session/message-v2"
 import { Agent } from "../agent/agent"
 import { deriveSubagentSessionPermission } from "../agent/subagent-permissions"
 import type { SessionPrompt } from "../session/prompt"
 import { Config } from "@/config/config"
-import { Effect, Exit, Schema, Scope } from "effect"
+import { Effect, Exit, Option, Schema, Scope } from "effect"
 import { EffectBridge } from "@/effect/bridge"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { Database } from "@opencode-ai/core/database/database"
+import { SessionV2 } from "@opencode-ai/core/session"
+import { SessionMessage } from "@opencode-ai/schema/session-message"
 
 export interface TaskPromptOps {
   cancel(sessionID: SessionID): Effect.Effect<void>
@@ -194,8 +196,76 @@ export const TaskTool = Tool.define(
         metadata,
       })
 
-      const ops = ctx.extra?.promptOps as TaskPromptOps
-      if (!ops) return yield* Effect.fail(new Error("TaskTool requires promptOps in ctx.extra"))
+      const sessionV2Opt = yield* Effect.serviceOption(SessionV2.Service)
+      const ops: TaskPromptOps =
+        (ctx.extra?.promptOps as TaskPromptOps) ??
+        (Option.isSome(sessionV2Opt)
+          ? {
+              cancel: (sessionID: SessionID) => sessionV2Opt.value.interrupt(sessionID).pipe(Effect.ignore),
+              resolvePromptParts: (template: string) =>
+                Effect.succeed([{ type: "text" as const, text: template }] as SessionPrompt.PromptInput["parts"]),
+              prompt: (input: SessionPrompt.PromptInput) =>
+                Effect.gen(function* () {
+                  const text = input.parts
+                    .filter((p): p is { type: "text"; text: string } => p.type === "text")
+                    .map((p) => p.text)
+                    .join("\n\n")
+                  yield* sessionV2Opt.value.prompt({
+                    sessionID: input.sessionID,
+                    prompt: { text },
+                  })
+                  yield* sessionV2Opt.value.resume(input.sessionID).pipe(Effect.ignore)
+                  const messages = yield* sessionV2Opt.value.messages({ sessionID: input.sessionID })
+                  const assistantMsg = messages.findLast(
+                    (msg): msg is SessionMessage.Assistant => msg.type === "assistant",
+                  )
+                  const texts =
+                    assistantMsg?.content
+                      .filter((c): c is SessionMessage.AssistantText => c.type === "text")
+                      .map((c) => c.text) ?? []
+                  const outputText = texts.join("\n\n")
+                  const failedTool = assistantMsg?.content.find(
+                    (c): c is SessionMessage.AssistantTool => c.type === "tool" && c.state.status === "error",
+                  )
+                  const messageID = input.messageID ?? MessageID.ascending()
+                  const parts: SessionV1.WithParts["parts"] = []
+                  if (failedTool && failedTool.state.status === "error") {
+                    parts.push({
+                      id: PartID.ascending(),
+                      sessionID: input.sessionID,
+                      messageID,
+                      type: "tool",
+                      callID: failedTool.id,
+                      tool: failedTool.name,
+                      state: {
+                        status: "error",
+                        error: failedTool.state.error ?? "Tool failed",
+                        input: {},
+                        time: { start: Date.now(), end: Date.now() },
+                      },
+                    } as any)
+                  }
+                  parts.push({
+                    id: PartID.ascending(),
+                    sessionID: input.sessionID,
+                    messageID,
+                    type: "text",
+                    text: outputText,
+                  } as any)
+                  return {
+                    info: {
+                      id: messageID,
+                      sessionID: input.sessionID,
+                      role: "assistant" as const,
+                      time: { created: Date.now() },
+                      error: assistantMsg?.error as any,
+                    },
+                    parts,
+                  } as SessionV1.WithParts
+                }),
+            }
+          : undefined!)
+      if (!ops) return yield* Effect.fail(new Error("TaskTool requires promptOps in ctx.extra or SessionV2.Service"))
 
       const runTask = Effect.fn("TaskTool.runTask")(function* () {
         const parts = yield* ops.resolvePromptParts(params.prompt)

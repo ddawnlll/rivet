@@ -20,6 +20,7 @@ import { Pty } from "./pty"
 import { Question } from "./question"
 import { QuestionV1 } from "./question-v1"
 import { Reference } from "./reference"
+import { RivetInductionEvent } from "./rivet-induction-event"
 import { ServerEvent } from "./server-event"
 import { SessionCompactionEvent } from "./session-compaction-event"
 import { SessionEvent } from "./session-event"
@@ -58,6 +59,7 @@ export const ServerDefinitions = Event.inventory(
   ...foundationDefinitions,
   ...featureDefinitions,
   ...SessionTodo.Event.Definitions,
+  ...RivetInductionEvent.Definitions,
 )
 
 export const Definitions = Event.inventory(

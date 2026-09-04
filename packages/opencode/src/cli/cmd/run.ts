@@ -189,7 +189,7 @@ export const RunCommand = effectCmd({
       })
       .option("attach", {
         type: "string",
-        describe: "attach to a running opencode server (e.g., http://localhost:4096)",
+        describe: "attach to a running rivet server (e.g., http://localhost:4096)",
       })
       .option("password", {
         alias: ["p"],
@@ -246,12 +246,12 @@ export const RunCommand = effectCmd({
       })
       .option("yolo", {
         type: "boolean",
-        hidden: true,
+        describe: "bypass permissions (auto-approve all permissions, dangerous!)",
         default: false,
       })
       .option("dangerously-skip-permissions", {
         type: "boolean",
-        hidden: true,
+        describe: "bypass permissions (auto-approve all permissions, dangerous!)",
         default: false,
       })
       .option("demo", {

@@ -35,6 +35,7 @@ export type CognitiveCommitment =
   | { readonly type: "completion_proposal"; readonly proposal: CompletionProposal }
   | { readonly type: "epistemic_query"; readonly includeFrontier: boolean }
   | { readonly type: "memory_retrieval"; readonly query?: string; readonly symbols: readonly string[] }
+  | { readonly type: "obligation_invalidation"; readonly obligationId: ObligationId; readonly reason: string }
 
 /**
  * Decode provider-native tool frames into Rivet commitments. This is the
@@ -96,6 +97,13 @@ export function parseProviderToolFrame(frame: ProviderToolFrame, scope: Scope): 
         type: "memory_retrieval",
         query: stringValue(args.query),
         symbols: Array.isArray(args.symbols) ? args.symbols.map(String) : [],
+      }
+    case "invalidate_obligation":
+    case "waive_obligation":
+      return {
+        type: "obligation_invalidation",
+        obligationId: obligationId(args),
+        reason: stringValue(args.reason) ?? "Inapplicable obligation invalidated by controller",
       }
     default:
       return {

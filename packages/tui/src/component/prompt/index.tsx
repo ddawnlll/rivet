@@ -51,7 +51,14 @@ import { createFadeIn } from "../../util/signal"
 import { DialogSkill } from "../dialog-skill"
 import { DialogWorkspaceUnavailable } from "../dialog-workspace-unavailable"
 import { useArgs } from "../../context/args"
-import { OPENCODE_BASE_MODE, useBindings, useCommandShortcut, useLeaderActive, useOpencodeKeymap } from "../../keymap"
+import {
+  OPENCODE_BASE_MODE,
+  useBindings,
+  useCommandShortcut,
+  useCommandSlashes,
+  useLeaderActive,
+  useOpencodeKeymap,
+} from "../../keymap"
 import { useTuiConfig } from "../../config"
 import { usePromptWorkspace } from "./workspace"
 import { usePromptMove } from "./move"
@@ -164,6 +171,7 @@ export function Prompt(props: PromptProps) {
   const history = usePromptHistory()
   const stash = usePromptStash()
   const keymap = useOpencodeKeymap()
+  const slashes = useCommandSlashes()
   const agentShortcut = useCommandShortcut("agent.cycle")
   const paletteShortcut = useCommandShortcut("command.palette.show")
   const renderer = useRenderer()
@@ -965,6 +973,56 @@ export function Prompt(props: PromptProps) {
       void exit()
       return true
     }
+    const [commandWord, ...commandArgs] = trimmed.split(/\s+/)
+    const lowerCommand = commandWord.toLowerCase()
+    if (lowerCommand === "/yolo" || lowerCommand === "/bypass-permissions") {
+      const arg = commandArgs[0]?.toLowerCase()
+      const targetMode =
+        arg === "on" ? "auto" : arg === "off" ? "normal" : local.permission.mode === "auto" ? "normal" : "auto"
+      local.permission.set(targetMode)
+      toast.show({
+        message:
+          targetMode === "auto"
+            ? "YOLO mode enabled: auto-approving all permissions (dangerous!)"
+            : "YOLO mode disabled: permissions require approval",
+        variant: targetMode === "auto" ? "warning" : "info",
+      })
+      history.append({
+        ...store.prompt,
+        mode: store.mode,
+      })
+      input.extmarks.clear()
+      setStore("prompt", {
+        input: "",
+        parts: [],
+      })
+      setStore("extmarkToPartIndex", new Map())
+      input.clear()
+      return true
+    }
+
+    const matchingSlash = lowerCommand.startsWith("/")
+      ? slashes().find(
+          (entry) =>
+            entry.display.toLowerCase() === lowerCommand ||
+            entry.aliases?.some((alias) => alias.toLowerCase() === lowerCommand),
+        )
+      : undefined
+    if (matchingSlash) {
+      input.clear()
+      matchingSlash.onSelect?.()
+      history.append({
+        ...store.prompt,
+        mode: store.mode,
+      })
+      input.extmarks.clear()
+      setStore("prompt", {
+        input: "",
+        parts: [],
+      })
+      setStore("extmarkToPartIndex", new Map())
+      return true
+    }
     const selectedModel = local.model.current()
     if (!selectedModel) {
       void promptModelWarning()
@@ -1450,7 +1508,9 @@ export function Prompt(props: PromptProps) {
                         {store.mode === "shell" ? "Shell" : Locale.titlecase(agent().name)}
                       </text>
                       <Show when={store.mode === "normal" && local.permission.mode === "auto"}>
-                        <text fg={fadeColor(theme.textMuted, agentMetaAlpha())}>auto</text>
+                        <text fg={fadeColor(theme.warning, agentMetaAlpha())}>
+                          <span style={{ bold: true }}>yolo</span>
+                        </text>
                       </Show>
                       <Show when={store.mode === "normal"}>
                         <box flexDirection="row" gap={1}>

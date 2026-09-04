@@ -32,6 +32,7 @@ const sentPrompts: string[] = []
 const promptInputs: unknown[] = []
 const sentCommands: unknown[] = []
 const commands: Array<{ name: string }> = []
+const builtinCommands: Array<{ id: string; slash?: string; disabled?: boolean; onSelect?: (source?: string) => void }> = []
 let serverSessionSyncs = 0
 
 let params: { id?: string } = {}
@@ -171,6 +172,10 @@ beforeAll(async () => {
     useServer: () => ({ key: "server-key" }),
   }))
 
+  mock.module("@/context/command", () => ({
+    useCommand: () => ({ options: builtinCommands }),
+  }))
+
   mock.module("@/context/tabs", () => ({
     useTabs: () => ({
       draft: () => ({ server: "project-server" }),
@@ -291,6 +296,7 @@ beforeEach(() => {
   promptInputs.length = 0
   sentCommands.length = 0
   commands.length = 0
+  builtinCommands.length = 0
   promptValue = [{ type: "text", content: "ls", start: 0, end: 2 }]
   params = {}
   search = {}
@@ -531,6 +537,42 @@ describe("prompt submit worktree selection", () => {
       },
     ])
     expect(serverSessionSyncs).toBe(0)
+  })
+
+  test("executes builtin slash commands (e.g. /yolo) without submitting to session API", async () => {
+    params = { id: "session-1" }
+    let executedSource: string | undefined
+    builtinCommands.push({
+      id: "permissions.autoaccept",
+      slash: "yolo",
+      onSelect: (source) => {
+        executedSource = source
+      },
+    })
+    promptValue = [{ type: "text", content: "/yolo", start: 0, end: 5 }]
+
+    const submit = createPromptSubmit({
+      prompt,
+      info: () => ({ id: "session-1" }),
+      imageAttachments: () => [],
+      commentCount: () => 0,
+      autoAccept: () => false,
+      mode: () => "normal",
+      working: () => false,
+      editor: () => undefined,
+      queueScroll: () => undefined,
+      promptLength: (value) => value.reduce((sum, part) => sum + ("content" in part ? part.content.length : 0), 0),
+      addToHistory: () => undefined,
+      resetHistoryNavigation: () => undefined,
+      setMode: () => undefined,
+      setPopover: () => undefined,
+    })
+
+    await submit.handleSubmit({ preventDefault: () => undefined } as unknown as Event)
+
+    expect(executedSource).toBe("slash")
+    expect(sentCommands).toHaveLength(0)
+    expect(sentPrompts).toHaveLength(0)
   })
 
   test("uses an injected model selection", async () => {

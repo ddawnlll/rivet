@@ -1,6 +1,13 @@
 import { PermissionV1 } from "@opencode-ai/core/v1/permission"
 import { Agent } from "@/agent/agent"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
+import { SessionV2 } from "@opencode-ai/core/session"
+import { PromptInput } from "@opencode-ai/schema/prompt-input"
+import { AgentAttachment } from "@opencode-ai/schema/prompt"
+import { SessionMessage } from "@opencode-ai/core/session/message"
+import { Database } from "@opencode-ai/core/database/database"
+import { SessionSemantics } from "@opencode-ai/core/session/semantics"
+import { inductionMarkerStatus, type InductionMarker } from "@opencode-ai/core/rivet/repository/induction"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { Command } from "@/command"
 import { Permission } from "@/permission"
@@ -14,9 +21,14 @@ import { SessionRunState } from "@/session/run-state"
 import { SessionStatus } from "@/session/status"
 import { SessionSummary } from "@/session/summary"
 import { Todo } from "@/session/todo"
+import { Provider } from "@/provider/provider"
+import { Config } from "@/config/config"
+import { ConfigMarkdown } from "@/config/markdown"
+import { Shell } from "@opencode-ai/core/shell"
+import { Process } from "@/util/process"
 import { MessageID, PartID, SessionID } from "@/session/schema"
 import { NamedError } from "@opencode-ai/core/util/error"
-import { Cause, Effect, Option, Schema, Scope } from "effect"
+import { Cause, Effect, Exit, Option, Schema, Scope } from "effect"
 import * as Stream from "effect/Stream"
 import { InstanceState } from "@/effect/instance-state"
 import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
@@ -26,6 +38,8 @@ import {
   CommandPayload,
   DiffQuery,
   ForkPayload,
+  InductionStartPayload,
+  InductionStatus,
   InitPayload,
   ListQuery,
   MessagesQuery,
@@ -45,11 +59,25 @@ const tryParseJson = (text: string) =>
     catch: () => new HttpApiError.BadRequest({}),
   })
 
+function toInductionStatus(marker: InductionMarker | undefined): InductionStatus {
+  if (!marker) return { status: "idle" }
+  return {
+    status: marker.status,
+    startedAt: marker.startedAt,
+    completedAt: marker.completedAt,
+    fileCount: marker.fileCount,
+    claimCount: marker.result?.claims.length,
+    packageCount: marker.result?.packages.length,
+    filesRead: marker.result?.filesRead,
+  }
+}
+
 export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", (handlers) =>
   Effect.gen(function* () {
     const session = yield* Session.Service
     const shareSvc = yield* SessionShare.Service
     const promptSvc = yield* SessionPrompt.Service
+    const sessionV2 = yield* SessionV2.Service
     const revertSvc = yield* SessionRevert.Service
     const compactSvc = yield* SessionCompaction.Service
     const runState = yield* SessionRunState.Service
@@ -59,6 +87,8 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     const todoSvc = yield* Todo.Service
     const summary = yield* SessionSummary.Service
     const events = yield* EventV2Bridge.Service
+    const commandSvc = yield* Command.Service
+    const config = yield* Config.Service
     const scope = yield* Scope.Scope
 
     const list = Effect.fn("SessionHttpApi.list")(function* (ctx: { query: typeof ListQuery.Type }) {
@@ -230,24 +260,8 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     })
 
     const abort = Effect.fn("SessionHttpApi.abort")(function* (ctx: { params: { sessionID: SessionID } }) {
+      yield* sessionV2.interrupt(ctx.params.sessionID)
       yield* promptSvc.cancel(ctx.params.sessionID)
-      return true
-    })
-
-    const init = Effect.fn("SessionHttpApi.init")(function* (ctx: {
-      params: { sessionID: SessionID }
-      payload: typeof InitPayload.Type
-    }) {
-      yield* requireSession(ctx.params.sessionID)
-      yield* promptSvc
-        .command({
-          sessionID: ctx.params.sessionID,
-          messageID: ctx.payload.messageID,
-          model: `${ctx.payload.providerID}/${ctx.payload.modelID}`,
-          command: Command.Default.INIT,
-          arguments: "",
-        })
-        .pipe(Effect.mapError(() => new HttpApiError.BadRequest({})))
       return true
     })
 
@@ -288,24 +302,101 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
         },
         auto: ctx.payload.auto ?? false,
       })
-      yield* promptSvc.loop({ sessionID: ctx.params.sessionID })
+      yield* sessionV2.resume(ctx.params.sessionID).pipe(Effect.ignore)
       return true
+    })
+
+    // Rivet harness admission: prompts enter durable SessionV2 input and are
+    // drained by the Rivet SessionRunner. The legacy SessionPrompt loop is
+    // decommissioned and rejects any direct call.
+    const toV2Prompt = (payload: typeof PromptPayload.Type): PromptInput.Prompt => {
+      const texts: string[] = []
+      const files: PromptInput.FileAttachment[] = []
+      const agents: AgentAttachment[] = []
+      for (const part of payload.parts) {
+        if (part.type === "text") texts.push(part.text)
+        if (part.type === "file")
+          files.push({ uri: part.url, ...(part.filename ? { name: part.filename } : {}) })
+        if (part.type === "agent") agents.push({ name: part.name })
+      }
+      return {
+        text: texts.join("\n\n"),
+        ...(files.length > 0 ? { files } : {}),
+        ...(agents.length > 0 ? { agents } : {}),
+      }
+    }
+
+    const admitRivetPrompt = Effect.fn("SessionHttpApi.admitRivetPrompt")(function* (
+      sessionID: SessionID,
+      payload: typeof PromptPayload.Type,
+      resume = true,
+    ) {
+      if (payload.agent) {
+        yield* sessionV2.switchAgent({ sessionID, agent: payload.agent }).pipe(
+          Effect.mapError(() => new HttpApiError.BadRequest({})),
+        )
+      }
+      if (payload.model) {
+        yield* sessionV2
+          .switchModel({
+            sessionID,
+            model: { id: payload.model.modelID, providerID: payload.model.providerID },
+          })
+          .pipe(
+          Effect.mapError(() => new HttpApiError.BadRequest({})),
+        )
+      }
+      return yield* sessionV2.prompt({
+        ...(payload.messageID ? { id: SessionMessage.ID.make(payload.messageID) } : {}),
+        sessionID,
+        prompt: toV2Prompt(payload),
+        ...(resume ? {} : { resume: false }),
+      })
     })
 
     const prompt = Effect.fn("SessionHttpApi.prompt")(function* (ctx: {
       params: { sessionID: SessionID }
       payload: typeof PromptPayload.Type
     }) {
-      yield* requireSession(ctx.params.sessionID)
-      const message = yield* promptSvc
-        .prompt({
-          ...ctx.payload,
-          sessionID: ctx.params.sessionID,
+      yield* revertSvc.cleanup(yield* requireSession(ctx.params.sessionID))
+      const respond = (message: unknown) =>
+        HttpServerResponse.stream(Stream.make(JSON.stringify(message)).pipe(Stream.encodeText), {
+          contentType: "application/json",
         })
-        .pipe(Effect.mapError(() => new HttpApiError.BadRequest({})))
-      return HttpServerResponse.stream(Stream.make(JSON.stringify(message)).pipe(Stream.encodeText), {
-        contentType: "application/json",
-      })
+      if (ctx.payload.noReply === true) {
+        const admitted = yield* admitRivetPrompt(ctx.params.sessionID, ctx.payload, false).pipe(
+          Effect.mapError(() => new HttpApiError.BadRequest({})),
+        )
+        return respond({
+          info: {
+            id: admitted.id,
+            role: "user",
+            sessionID: ctx.params.sessionID,
+            agent: ctx.payload.agent,
+            model: ctx.payload.model,
+            time: { created: Date.now() },
+          },
+          parts: ctx.payload.parts,
+        })
+      }
+      const admitted = yield* admitRivetPrompt(ctx.params.sessionID, ctx.payload).pipe(
+        Effect.mapError(() => new HttpApiError.BadRequest({})),
+      )
+      // Join the Rivet drain started by admission so the response reflects a
+      // completed turn, then read the projected assistant message.
+      const drainExit = yield* Effect.exit(sessionV2.resume(ctx.params.sessionID))
+      // The V2 projector materializes runner output asynchronously; wait
+      // briefly for the projected assistant turn before responding.
+      const deadline = Date.now() + (Exit.isSuccess(drainExit) ? 10_000 : 500)
+      let msgs: SessionV1.WithParts[] = []
+      let last: SessionV1.WithParts | undefined
+      while (Date.now() < deadline) {
+        msgs = yield* SessionError.mapStorageNotFound(session.messages({ sessionID: ctx.params.sessionID }))
+        last = msgs.findLast((entry) => entry.info.role !== "user")
+        if (last) break
+        yield* Effect.sleep("50 millis")
+      }
+      return respond(last ?? msgs.findLast((entry) => String(entry.info.id) === String(admitted.id)) ?? msgs.at(-1))
     })
 
     const promptAsync = Effect.fn("SessionHttpApi.promptAsync")(function* (ctx: {
@@ -313,7 +404,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       payload: typeof PromptPayload.Type
     }) {
       yield* requireSession(ctx.params.sessionID)
-      yield* promptSvc.prompt({ ...ctx.payload, sessionID: ctx.params.sessionID }).pipe(
+      yield* admitRivetPrompt(ctx.params.sessionID, ctx.payload, ctx.payload.noReply !== true).pipe(
         Effect.catchCause((cause) =>
           Effect.gen(function* () {
             yield* Effect.logError("prompt_async failed", { sessionID: ctx.params.sessionID, cause })
@@ -323,9 +414,151 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
             })
           }),
         ),
-        Effect.forkIn(scope, { startImmediately: true }),
       )
       return HttpApiSchema.NoContent.make()
+    })
+
+    const argsRegex = /(?:[^\s"']+|"[^"]*"|'[^']*')+/g
+    const quoteTrimRegex = /^["']|["']$/g
+    const placeholderRegex = /\$(\d+)/g
+    const bashRegex = /`([^`]+)`/g
+
+    const executeCommand = Effect.fn("SessionHttpApi.executeCommand")(function* (input: {
+      sessionID: SessionID
+      messageID?: MessageID
+      command: string
+      arguments: string
+      model?: string
+      agent?: string
+      variant?: string
+      parts?: ReadonlyArray<{ type: "file"; url: string; filename?: string; mime: string; source?: unknown }>
+    }) {
+      const cmd = yield* commandSvc.get(input.command)
+      if (!cmd) return yield* new HttpApiError.BadRequest({})
+
+      const agentName = cmd.agent ?? input.agent
+      const raw = input.arguments.match(argsRegex) ?? []
+      const args = raw.map((arg) => arg.replace(quoteTrimRegex, ""))
+      const templateCommand = yield* Effect.promise(async () => cmd.template)
+
+      const placeholders = templateCommand.match(placeholderRegex) ?? []
+      const last = placeholders.reduce((max, item) => Math.max(max, Number(item.slice(1))), 0)
+
+      const withArgs = templateCommand.replaceAll(placeholderRegex, (_, index) => {
+        const position = Number(index)
+        const argIndex = position - 1
+        if (argIndex >= args.length) return ""
+        if (position === last) return args.slice(argIndex).join(" ")
+        return args[argIndex]
+      })
+      const usesArgumentsPlaceholder = templateCommand.includes("$ARGUMENTS")
+      const templateWithArgs = withArgs.replaceAll("$ARGUMENTS", input.arguments)
+      const baseTemplate =
+        placeholders.length === 0 && !usesArgumentsPlaceholder && input.arguments.trim()
+          ? `${templateWithArgs}\n\n${input.arguments}`
+          : templateWithArgs
+
+      const shellMatches = ConfigMarkdown.shell(baseTemplate)
+      const expandedTemplate =
+        shellMatches.length > 0
+          ? yield* Effect.gen(function* () {
+              const cfg = yield* config.get()
+              const sh = Shell.preferred(cfg.shell)
+              const results = yield* Effect.promise(() =>
+                Promise.all(
+                  shellMatches.map(async ([, c]) => (await Process.text([c], { shell: sh, nothrow: true })).text),
+                ),
+              )
+              let index = 0
+              return baseTemplate.replace(bashRegex, () => results[index++])
+            })
+          : baseTemplate
+
+      const trimmedTemplate = expandedTemplate.trim()
+      const resolvedParts = yield* promptSvc.resolvePromptParts(trimmedTemplate)
+      const inputFiles = new Set(
+        input.parts?.filter((part) => part.url.startsWith("file:")).map((part) => new URL(part.url).pathname),
+      )
+      const uniqueParts = resolvedParts.filter(
+        (part) => part.type !== "file" || !inputFiles.has(new URL(part.url).pathname),
+      )
+
+      const parts: (typeof PromptPayload.Type)["parts"] = [
+        ...uniqueParts.map((p) => {
+          if (p.type === "file") return { type: "file" as const, url: p.url, filename: p.filename, mime: p.mime }
+          if (p.type === "agent") return { type: "agent" as const, name: p.name }
+          if (p.type === "subtask") return { type: "text" as const, text: p.prompt }
+          return { type: "text" as const, text: p.text }
+        }),
+        ...(input.parts ?? []).map((p) => ({
+          type: "file" as const,
+          url: p.url,
+          filename: p.filename,
+          mime: p.mime,
+        })),
+      ]
+
+      const parsedModel = input.model ? Provider.parseModel(input.model) : undefined
+
+      yield* admitRivetPrompt(input.sessionID, {
+        messageID: input.messageID,
+        agent: agentName,
+        model: parsedModel,
+        variant: input.variant,
+        parts,
+      }).pipe(Effect.mapError(() => new HttpApiError.BadRequest({})))
+      yield* sessionV2.resume(input.sessionID).pipe(Effect.mapError(() => new HttpApiError.BadRequest({})))
+
+      const msgs = yield* SessionError.mapStorageNotFound(session.messages({ sessionID: input.sessionID }))
+      const lastMessage = msgs.findLast((entry) => entry.info.role !== "user")
+      if (!lastMessage) return yield* new HttpApiError.BadRequest({})
+
+      yield* events.publish(Command.Event.Executed, {
+        name: input.command,
+        sessionID: input.sessionID,
+        arguments: input.arguments,
+        messageID: lastMessage.info.id,
+      })
+
+      return HttpServerResponse.stream(Stream.make(JSON.stringify(lastMessage)).pipe(Stream.encodeText), {
+        contentType: "application/json",
+      })
+    })
+
+    const init = Effect.fn("SessionHttpApi.init")(function* (ctx: {
+      params: { sessionID: SessionID }
+      payload: typeof InitPayload.Type
+    }) {
+      yield* requireSession(ctx.params.sessionID)
+      yield* executeCommand({
+        sessionID: ctx.params.sessionID,
+        messageID: ctx.payload.messageID,
+        model: `${ctx.payload.providerID}/${ctx.payload.modelID}`,
+        command: Command.Default.INIT,
+        arguments: "",
+      }).pipe(Effect.mapError(() => new HttpApiError.BadRequest({})))
+      return true
+    })
+
+    const inductionStatus = Effect.fn("SessionHttpApi.inductionStatus")(function* (ctx: {
+      params: { sessionID: SessionID }
+    }) {
+      const sess = yield* requireSession(ctx.params.sessionID)
+      return toInductionStatus(inductionMarkerStatus(sess.directory))
+    })
+
+    const inductionStart = Effect.fn("SessionHttpApi.inductionStart")(function* (ctx: {
+      params: { sessionID: SessionID }
+      payload?: typeof InductionStartPayload.Type
+    }) {
+      const sess = yield* requireSession(ctx.params.sessionID)
+      const force = ctx.payload?.force === true
+      const { db } = yield* Database.Service
+      const semantics = yield* SessionSemantics.load(db, sess.id)
+      yield* Effect.forkIn(scope)(
+        semantics.ensureDeepInduction(events, sess.directory, { force }).pipe(Effect.catch(() => Effect.void)),
+      )
+      return toInductionStatus(inductionMarkerStatus(sess.directory))
     })
 
     const command = Effect.fn("SessionHttpApi.command")(function* (ctx: {
@@ -333,9 +566,10 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       payload: typeof CommandPayload.Type
     }) {
       yield* requireSession(ctx.params.sessionID)
-      return yield* promptSvc
-        .command({ ...ctx.payload, sessionID: ctx.params.sessionID })
-        .pipe(Effect.mapError(() => new HttpApiError.BadRequest({})))
+      return yield* executeCommand({
+        ...ctx.payload,
+        sessionID: ctx.params.sessionID,
+      }).pipe(Effect.mapError(() => new HttpApiError.BadRequest({})))
     })
 
     const shell = Effect.fn("SessionHttpApi.shell")(function* (ctx: {
@@ -425,6 +659,8 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       .handleRaw("fork", forkRaw)
       .handle("abort", abort)
       .handle("init", init)
+      .handle("induction", inductionStatus)
+      .handle("inductionStart", inductionStart)
       .handle("share", share)
       .handle("unshare", unshare)
       .handle("summarize", summarize)

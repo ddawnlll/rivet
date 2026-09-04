@@ -16,19 +16,11 @@ export function StartupLoading(props: { ready: () => boolean }) {
         clearTimeout(wait)
         wait = undefined
       }
-      if (!show()) return
-      if (hold) return
-
-      const left = 3000 - (Date.now() - stamp)
-      if (left <= 0) {
-        setShow(false)
-        return
-      }
-
-      hold = setTimeout(() => {
+      if (hold) {
+        clearTimeout(hold)
         hold = undefined
-        setShow(false)
-      }, left).unref()
+      }
+      setShow(false)
       return
     }
 

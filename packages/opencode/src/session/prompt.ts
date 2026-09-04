@@ -60,6 +60,7 @@ import { SessionTools } from "./tools"
 import { LLMEvent, ToolDefinition, type JsonSchema } from "@opencode-ai/llm"
 import { SessionSemantics } from "@opencode-ai/core/session/semantics"
 import { createInvocationId } from "@opencode-ai/core/rivet/types"
+import { TurnAdmissionGate } from "@opencode-ai/core/rivet"
 import type { ModelInvocation } from "@opencode-ai/core/session/invocation"
 
 // @ts-ignore
@@ -85,6 +86,22 @@ IMPORTANT:
 - This tool provides your final answer - no further actions are taken after calling it`
 
 const STRUCTURED_OUTPUT_SYSTEM_PROMPT = `IMPORTANT: The user has requested structured output. You MUST use the StructuredOutput tool to provide your final response. Do NOT respond with plain text - you MUST call the StructuredOutput tool with your answer formatted according to the schema.`
+
+/**
+ * Constitutional Invariant: The legacy OpenCode harness loop is decommissioned and sabotaged.
+ * Prompts must enter through SessionV2 durable admission and are executed by the
+ * Rivet SessionRunner. Any direct invocation of the legacy loop is a constitutional violation.
+ */
+export class ConstitutionalViolationError extends Error {
+  constructor(operation: string) {
+    super(
+      `CONSTITUTIONAL INVARIANT VIOLATION: Direct OpenCode legacy harness execution (${operation}) is sabotaged. All model execution must proceed through Rivet SessionRunner.`,
+    )
+    this.name = "ConstitutionalViolationError"
+  }
+}
+
+
 
 function mcpResourceBase64Size(value: string) {
   const trimmed = value.replace(/\s/g, "")
@@ -1088,6 +1105,7 @@ const layer = Layer.effect(
     const prompt: (input: PromptInput) => Effect.Effect<SessionV1.WithParts, Image.Error> = Effect.fn(
       "SessionPrompt.prompt",
     )(function* (input: PromptInput) {
+      yield* Effect.die(new ConstitutionalViolationError("prompt"))
       const session = yield* sessions.get(input.sessionID).pipe(Effect.orDie)
       yield* revert.cleanup(session)
       const message = yield* createUserMessage(input)
@@ -1116,6 +1134,7 @@ const layer = Layer.effect(
 
     const runLoop: (sessionID: SessionID) => Effect.Effect<SessionV1.WithParts> = Effect.fn("SessionPrompt.run")(
       function* (sessionID: SessionID) {
+        yield* Effect.die(new ConstitutionalViolationError("runLoop"))
         const ctx = yield* InstanceState.context
         let structured: unknown
         let step = 0
@@ -1139,10 +1158,15 @@ const layer = Layer.effect(
             .map((part) => part.text)
             .join("\n")
           yield* semantics.ensureColdStart(events, session.directory)
-          if (goal) yield* semantics.ensureGoal(events, goal, session.directory)
+          if (goal) {
+            const admission = TurnAdmissionGate.classify(goal, semantics.hardState.goalDescription)
+            if (admission.shouldCreateGoal && admission.goalText && admission.goalText.length > 0) {
+              yield* semantics.ensureGoal(events, admission.goalText, session.directory, admission.obligationKind)
+            }
+          }
           const cognitiveView = yield* semantics.cognitiveView({
             repositoryId: session.directory,
-            goalDescription: semantics.hardState.goalDescription ?? goal,
+            goalDescription: semantics.hardState.goalDescription ?? undefined,
             userPrompt: goal,
           })
 
@@ -1339,29 +1363,14 @@ const layer = Layer.effect(
             ]
             const format = lastUser.format ?? { type: "text" as const }
             if (format.type === "json_schema") system.push(STRUCTURED_OUTPUT_SYSTEM_PROMPT)
-            const isHardStatePrompt = Boolean(
-              goal &&
-                /(hard[\s_]?state|epistemic|proje hakk[ıi]nda ne biliyors|ne biliyorsun.*hard|what do you know about (the |this )?project)/i.test(
-                  goal,
-                ),
-            )
-            const isMemoryPrompt = Boolean(
-              goal &&
-                !isHardStatePrompt &&
-                /(memory\s*retrieve|retrieve.*memory|recall.*memory|haf[ıi]za.*(durum|getir|kontrol|bak)|haf[ıi]zadan|bellek.*durum)/i.test(
-                  goal,
-                ),
-            )
+            // Regex-based Rivet tool steering was removed with the legacy
+            // harness; the Rivet SessionRunner owns cognitive tool steering.
             const toolChoice =
               format.type === "json_schema"
                 ? "required"
                 : isLastStep
                   ? "none"
-                  : step === 1 && isHardStatePrompt
-                    ? ({ type: "tool" as const, toolName: "query_epistemic_state" } as const)
-                    : step === 1 && isMemoryPrompt
-                      ? ({ type: "tool" as const, toolName: "retrieve_memory" } as const)
-                      : undefined
+                  : undefined
             const result = yield* handle.process({
               user: lastUser,
               agent,
@@ -1464,6 +1473,7 @@ const layer = Layer.effect(
     const loop: (input: LoopInput) => Effect.Effect<SessionV1.WithParts> = Effect.fn("SessionPrompt.loop")(function* (
       input: LoopInput,
     ) {
+      yield* Effect.die(new ConstitutionalViolationError("loop"))
       return yield* state.ensureRunning(input.sessionID, lastAssistant(input.sessionID), runLoop(input.sessionID))
     })
 
@@ -1475,6 +1485,7 @@ const layer = Layer.effect(
     })
 
     const command = Effect.fn("SessionPrompt.command")(function* (input: CommandInput) {
+      yield* Effect.die(new ConstitutionalViolationError("command"))
       yield* Effect.logInfo("command", {
         "session.id": input.sessionID,
         command: input.command,

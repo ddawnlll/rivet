@@ -620,6 +620,13 @@ export function projectRivetState(input: RivetSessionInput): RivetProjection {
     phase = "implementing"
   }
 
+  // Extract token economics from metadata if present
+  const metaEconomics = asRecord(metaRivet?.economics)
+  const cacheHitRatio = typeof metaEconomics?.cacheHitRatio === "number" ? metaEconomics.cacheHitRatio : undefined
+  const totalTokens = typeof metaEconomics?.totalTokens === "number" ? metaEconomics.totalTokens : undefined
+  const cachedTokens = typeof metaEconomics?.cachedTokens === "number" ? metaEconomics.cachedTokens : undefined
+  const recallLatencyMs = typeof metaEconomics?.recallLatencyMs === "number" ? metaEconomics.recallLatencyMs : undefined
+
   // Status rail
   const statusRail: UiRivetStatus = {
     revision: `r${revisionCounter}`,
@@ -627,6 +634,10 @@ export function projectRivetState(input: RivetSessionInput): RivetProjection {
     taskCount: obligationsList.length,
     changedFileCount: changedFiles.length > 0 ? changedFiles.length : editedFilePaths.size,
     verifyStatus: completionStatus === "ready" ? "ready" : completionStatus === "outdated" ? "outdated" : "blocked",
+    cacheHitRatio,
+    totalTokens,
+    cachedTokens,
+    recallLatencyMs,
   }
 
   const projectedChangedFiles: UiChangedFile[] = []

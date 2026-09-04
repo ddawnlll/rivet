@@ -10,13 +10,56 @@ import {
 import { SessionMessage } from "../message"
 import type { FileAttachment } from "../prompt"
 
-const media = (file: FileAttachment): ContentPart => ({
-  type: "media",
-  mediaType: file.mime,
-  data: file.uri,
-  filename: file.name,
-  metadata: file.description === undefined ? undefined : { description: file.description },
-})
+const isMediaMime = (mime: string) =>
+  mime.startsWith("image/") ||
+  mime === "application/pdf" ||
+  mime.startsWith("audio/") ||
+  mime.startsWith("video/")
+
+const isDataUrl = (uri: string) => uri.startsWith("data:")
+
+const decodeDataUrlText = (uri: string): string | undefined => {
+  const commaIndex = uri.indexOf(",")
+  if (commaIndex === -1) return undefined
+  const header = uri.slice(0, commaIndex)
+  const payload = uri.slice(commaIndex + 1)
+  try {
+    if (header.includes(";base64")) {
+      return Buffer.from(payload, "base64").toString("utf-8")
+    }
+    return decodeURIComponent(payload)
+  } catch {
+    return undefined
+  }
+}
+
+const fileAttachment = (file: FileAttachment): ContentPart => {
+  if (isMediaMime(file.mime) && (isDataUrl(file.uri) || /^[A-Za-z0-9+/]+={0,2}$/.test(file.uri))) {
+    return {
+      type: "media",
+      mediaType: file.mime,
+      data: file.uri,
+      filename: file.name,
+      metadata: file.description === undefined ? undefined : { description: file.description },
+    }
+  }
+
+  if (isDataUrl(file.uri) && (file.mime.startsWith("text/") || file.mime === "application/json")) {
+    const text = decodeDataUrlText(file.uri)
+    if (text !== undefined) {
+      const header = file.name ? `[Attached file: ${file.name} (${file.mime})]` : `[Attached content (${file.mime})]`
+      return {
+        type: "text",
+        text: `${header}\n${text}`,
+      }
+    }
+  }
+
+  return {
+    type: "text",
+    text: `[Attached file: ${file.name ?? file.uri} (${file.mime})]`,
+  }
+}
 
 const toolInput = (tool: SessionMessage.AssistantTool) => {
   if (tool.state.status !== "pending") return tool.state.input
@@ -117,18 +160,35 @@ function toLLMMessage(message: SessionMessage.Message, model: Model): Message[] 
     case "agent-switched":
     case "model-switched":
       return []
-    case "user":
+    case "user": {
+      const textParts = message.text ? [message.text] : []
+      const otherParts: ContentPart[] = []
+
+      for (const file of message.files ?? []) {
+        const part = fileAttachment(file)
+        if (part.type === "text") {
+          textParts.push(part.text)
+          continue
+        }
+        otherParts.push(part)
+      }
+
+      const content: ContentPart[] = textParts.length > 0 ? [{ type: "text", text: textParts.join("\n\n") }] : []
+      content.push(...otherParts)
+      if (content.length === 0) content.push({ type: "text", text: "" })
+
       return [
         Message.make({
           id: message.id,
           role: "user",
-          content: [{ type: "text", text: message.text }, ...(message.files ?? []).map(media)],
+          content,
           metadata: {
             ...message.metadata,
             ...(message.agents?.length ? { agents: message.agents } : {}),
           },
         }),
       ]
+    }
     case "synthetic":
       return [Message.make({ id: message.id, role: "user", content: message.text, metadata: message.metadata })]
     case "system":

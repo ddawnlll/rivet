@@ -31,6 +31,7 @@ import { SessionCompaction } from "../compaction"
 import { SessionEvent } from "../event"
 import { SessionHistory } from "../history"
 import { SessionInput } from "../input"
+import { SessionMessage } from "@opencode-ai/schema/session-message"
 import { SessionSchema } from "../schema"
 import { SessionStore } from "../store"
 import { SessionSemantics } from "../semantics"
@@ -42,7 +43,9 @@ import { MAX_STEPS_PROMPT } from "./max-steps"
 import { Snapshot } from "../../snapshot"
 import { makeLocationNode } from "../../effect/app-node"
 import { llmClient } from "../../effect/app-node-platform"
+import { TokenLedger } from "../../rivet/token-ledger"
 import { createInvocationId } from "../../rivet/types"
+import { TurnAdmissionGate } from "../../rivet/turn-admission"
 import { AutomaticRecallAdmissionHook } from "../../rivet/recall"
 import { type ModelInvocation, ModelInvocationGate, type ModelInvocationReceipt } from "../invocation"
 
@@ -112,6 +115,9 @@ const layer = Layer.effect(
     const config = yield* Config.Service
     const snapshots = yield* Snapshot.Service
     const db = (yield* Database.Service).db
+    // Process-lifetime fiber set so the background deep induction outlives the
+    // drain that started it without being joined by tool settlement.
+    const inductionFibers = yield* FiberSet.makeRuntime<never, void, never>()
     const compaction = SessionCompaction.make({ events, llm, config: yield* config.entries() })
     const getSession = Effect.fn("SessionRunner.getSession")(function* (sessionID: SessionSchema.ID) {
       const session = yield* store.get(sessionID)
@@ -187,6 +193,10 @@ const layer = Layer.effect(
         return yield* Effect.interrupt
       const semantics = yield* SessionSemantics.load(db, session.id)
       yield* semantics.ensureColdStart(events, session.location.directory)
+      // Fork the deep repository induction in the background: the first drain
+      // on a new project triggers the hard scan while the turn proceeds. Later
+      // sessions replay cached claims from .rivet/induction.json instantly.
+      inductionFibers(semantics.ensureDeepInduction(events, session.location.directory))
       const agent = yield* agents.select(session.agent)
       const initialized = yield* SessionContextEpoch.initialize(db, loadSystemContext(agent), session.id)
       const toolFibers = yield* FiberSet.make<void, ToolOutputStore.Error>()
@@ -208,38 +218,92 @@ const layer = Layer.effect(
       const model = yield* models.resolve(session)
       const entries = yield* SessionHistory.entriesForRunner(db, session.id, system.baselineSeq)
       const context = entries.map((entry) => entry.message)
-      const goal = context.findLast((message) => message.type === "user")?.text
-      if (goal) yield* semantics.ensureGoal(events, goal, session.location.directory)
+      const initialUserGoal = context.find((message) => message.type === "user")?.text
+      const latestUserMessage = context.findLast((message) => message.type === "user")?.text
+      const latestAdmission = latestUserMessage
+        ? TurnAdmissionGate.classify(latestUserMessage, semantics.hardState.goalDescription)
+        : undefined
+
+      let effectiveGoal = semantics.hardState.goalDescription
+      if (latestAdmission?.shouldCreateGoal && latestAdmission.goalText && latestAdmission.goalText.length > 0) {
+        if (semantics.hardState.goalDescription !== latestAdmission.goalText) {
+          yield* semantics.ensureGoal(
+            events,
+            latestAdmission.goalText,
+            session.location.directory,
+            latestAdmission.obligationKind,
+          )
+        }
+        effectiveGoal = latestAdmission.goalText
+      } else if (!effectiveGoal && initialUserGoal) {
+        const initialAdmission = TurnAdmissionGate.classify(initialUserGoal)
+        if (initialAdmission.shouldCreateGoal && initialAdmission.goalText && initialAdmission.goalText.length > 0) {
+          effectiveGoal = initialAdmission.goalText
+          if (!semantics.hardState.goalDescription) {
+            yield* semantics.ensureGoal(
+              events,
+              effectiveGoal,
+              session.location.directory,
+              initialAdmission.obligationKind,
+            )
+          }
+        }
+      }
       const isLastStep = agent.info?.steps !== undefined && currentStep >= agent.info.steps
       const toolMaterialization = isLastStep ? undefined : yield* tools.materialize(agent.info?.permissions)
       const promptCacheKey = /^ses_[0-9a-f]{64}$/.test(session.id) ? session.id.slice(4) : session.id
+      const hasAutonomousGoal = Boolean(
+        semantics.hardState.goalDescription ||
+        effectiveGoal ||
+        (latestAdmission && latestAdmission.shouldCreateGoal),
+      )
       const availableActions = isLastStep || !toolMaterialization || toolMaterialization.definitions.length === 0
         ? []
         : [
             ...toolMaterialization.definitions,
-            new ToolDefinition({
-              name: "request_completion",
-              description: "Propose completion only after all required work is verified.",
-              inputSchema: {
-                type: "object",
-                properties: { summary: { type: "string" } },
-                required: ["summary"],
-                additionalProperties: false,
-              },
-            }),
-            new ToolDefinition({
-              name: "request_verification",
-              description: "Ask Praxis to verify the latest observed test execution.",
-              inputSchema: {
-                type: "object",
-                properties: {
-                  predicate: { type: "string" },
-                  obligation_id: { type: "string" },
-                },
-                required: ["predicate"],
-                additionalProperties: false,
-              },
-            }),
+            ...(hasAutonomousGoal
+              ? [
+                  new ToolDefinition({
+                    name: "request_completion",
+                    description:
+                      "Propose completion only for active autonomous goals when COMPLETION READINESS is READY and all required obligations are closed and verified. Do NOT call when BLOCKED or for conversational inquiries.",
+                    inputSchema: {
+                      type: "object",
+                      properties: { summary: { type: "string" } },
+                      required: ["summary"],
+                      additionalProperties: false,
+                    },
+                  }),
+                  new ToolDefinition({
+                    name: "request_verification",
+                    description:
+                      "Ask Praxis to verify an observed execution (e.g. test run). Do NOT call this for epistemic inquiries; only call this when an execution obligation requires Praxis verification.",
+                    inputSchema: {
+                      type: "object",
+                      properties: {
+                        predicate: { type: "string" },
+                        obligation_id: { type: "string" },
+                      },
+                      required: ["predicate"],
+                      additionalProperties: false,
+                    },
+                  }),
+                  new ToolDefinition({
+                    name: "invalidate_obligation",
+                    description:
+                      "Invalidate or waive an inapplicable or malformed obligation (e.g. created from conversational text or an impossible predicate). Provide the obligation ID and clear rationale.",
+                    inputSchema: {
+                      type: "object",
+                      properties: {
+                        obligation_id: { type: "string", description: "The obligation ID to invalidate" },
+                        reason: { type: "string", description: "Clear explanation of why this obligation is invalid or inapplicable" },
+                      },
+                      required: ["obligation_id", "reason"],
+                      additionalProperties: false,
+                    },
+                  }),
+                ]
+              : []),
             new ToolDefinition({
               name: "propose_claim",
               description: "Propose a supported claim backed by already admitted evidence.",
@@ -283,8 +347,8 @@ const layer = Layer.effect(
       yield* semantics.recordInvocation(events, invocationID, model.id)
       const cognitiveView = yield* semantics.cognitiveView({
         repositoryId: session.location.directory,
-        goalDescription: semantics.hardState.goalDescription ?? goal,
-        userPrompt: goal,
+        goalDescription: (semantics.hardState.goalDescription ?? effectiveGoal) ?? undefined,
+        userPrompt: (latestUserMessage ?? effectiveGoal) ?? undefined,
       })
       const invocation: ModelInvocation = {
         systemContract: { name: "Rivet Harness", version: "1", authority: "Harness" },
@@ -327,6 +391,14 @@ const layer = Layer.effect(
         tools: availableActions,
         toolChoice,
       })
+      TokenLedger.record({
+        sessionID: session.id,
+        step: currentStep,
+        invocationID,
+        model: model.id,
+        provider: model.provider,
+        request,
+      })
       if (yield* compaction.compactIfNeeded({ sessionID: session.id, entries, model, request }))
         return yield* Effect.die(continueAfterCompaction(currentStep))
       const startSnapshot = yield* snapshots.capture()
@@ -357,6 +429,9 @@ const layer = Layer.effect(
             }
             yield* publish(event)
             if (event.type !== "tool-call") return
+            if (semantics.hardState.gateRejectionCount > 0) {
+              semantics.hardState.toolCallsAfterRejection++
+            }
             // Provider-hosted calls remain transport history. They do not
             // become local execution authority without a Rivet decision.
             if (event.providerExecuted) return
@@ -386,15 +461,24 @@ const layer = Layer.effect(
                 baseRevision: commitment.commitment.proposal.baseRevision,
               })
               completionAccepted = decision.completed
+              const rejectionMessage = !decision.completed
+                ? [
+                    "Rivet completion rejected: The proposed transition did not satisfy the contract.",
+                    "Status: BLOCKED",
+                    ...(decision.blockers.length > 0
+                      ? ["Blockers:", ...decision.blockers.map((b) => `- [BLOCKER] ${b}`)]
+                      : ["Blockers: Open obligations remain unverified."]),
+                    "Directive: Target ONLY the reported blockers above. Do NOT perform unrelated work, invent additional verification, or run unprompted shell commands.",
+                  ].join("\n")
+                : "Rivet completion accepted: All obligations satisfied and verified."
+
               yield* publish(
                 LLMEvent.toolResult({
                   id: event.id,
                   name: event.name,
                   result: {
                     type: decision.completed ? "text" : "error",
-                    value: decision.completed
-                      ? "Rivet completion accepted"
-                      : `Rivet completion rejected: ${decision.unclosedObligations.length ? "open obligations remain" : "verification is required"}`,
+                    value: rejectionMessage,
                   },
                 }),
               )
@@ -403,11 +487,67 @@ const layer = Layer.effect(
             if (commitment.commitment.type === "verification_request") {
               const verification = yield* semantics.verifyLastExecution(events, commitment.commitment.request).pipe(Effect.exit)
               if (Exit.isFailure(verification)) {
+                semantics.hardState.gateRejectionCount++
                 yield* publish(
                   LLMEvent.toolResult({
                     id: event.id,
                     name: event.name,
-                    result: { type: "error", value: `Praxis verification rejected: ${String(Cause.squash(verification.cause))}` },
+                    result: {
+                      type: "error",
+                      value: `Praxis verification rejected: ${String(Cause.squash(verification.cause))}\nDirective: Inspect and fix the failed check. Do NOT run unrelated commands.`,
+                    },
+                  }),
+                )
+                return
+              }
+              if (verification.value.type === "inquiry") {
+                yield* publish(
+                  LLMEvent.toolResult({
+                    id: event.id,
+                    name: event.name,
+                    result: {
+                      type: "text",
+                      value: "Praxis inquiry verification passed: Epistemic inquiry satisfied by authoritative projection.",
+                    },
+                  }),
+                )
+                return
+              }
+              const receipt = verification.value.receipt
+              const isPassed = receipt.passed
+              const diagnosticsMsg = receipt.diagnostics ? `\nDiagnostics: ${receipt.diagnostics}` : ""
+              const reasonCodesMsg = receipt.reasonCodes?.length ? `\nReason Codes: ${receipt.reasonCodes.join(", ")}` : ""
+              const resultMessage = isPassed
+                ? `Praxis verification passed for obligation [${receipt.obligationId}].`
+                : `Praxis verification failed for obligation [${receipt.obligationId}].${reasonCodesMsg}${diagnosticsMsg}\nDirective: Inspect and fix the reported test failure. Do NOT fabricate files or run unrelated commands.`
+              yield* publish(
+                LLMEvent.toolResult({
+                  id: event.id,
+                  name: event.name,
+                  result: {
+                    type: isPassed ? "text" : "error",
+                    value: resultMessage,
+                  },
+                }),
+              )
+              return
+            }
+            if (commitment.commitment.type === "obligation_invalidation") {
+              const invalidation = yield* semantics
+                .invalidateObligation(events, {
+                  obligationId: commitment.commitment.obligationId,
+                  reason: commitment.commitment.reason,
+                })
+                .pipe(Effect.exit)
+              if (Exit.isFailure(invalidation)) {
+                yield* publish(
+                  LLMEvent.toolResult({
+                    id: event.id,
+                    name: event.name,
+                    result: {
+                      type: "error",
+                      value: `Obligation invalidation rejected: ${String(Cause.squash(invalidation.cause))}`,
+                    },
                   }),
                 )
                 return
@@ -417,8 +557,8 @@ const layer = Layer.effect(
                   id: event.id,
                   name: event.name,
                   result: {
-                    type: verification.value.passed ? "text" : "error",
-                    value: verification.value.passed ? "Praxis verification passed" : "Praxis verification failed",
+                    type: "text",
+                    value: `Obligation [${commitment.commitment.obligationId}] successfully invalidated. Reason: ${commitment.commitment.reason}`,
                   },
                 }),
               )
@@ -479,11 +619,21 @@ const layer = Layer.effect(
                 ...snapshot.recentEvidence.map(([id, sum]) => `  - [${id}] ${sum}`),
               ].join("\n")
 
+              // The authoritative projection is itself the closure proof for
+              // open epistemic inquiry obligations: no execution, no Praxis.
+              const inquiryReceipts = yield* semantics.satisfyInquiries(events, {
+                summary: `Authoritative epistemic projection served at revision ${snapshot.revision.toJSON()}`,
+                atRevision: snapshot.revision,
+              })
+              const closureSummary = inquiryReceipts.length > 0
+                ? `\n✓ Epistemic inquiry satisfied by authoritative Noesis projection @${snapshot.revision.toJSON()}`
+                : ""
+
               yield* publish(
                 LLMEvent.toolResult({
                   id: event.id,
                   name: event.name,
-                  result: { type: "text", value: stateSummary },
+                  result: { type: "text", value: `${stateSummary}${closureSummary}` },
                   output: {
                     structured: {
                       revision: snapshot.revision.toJSON(),
@@ -492,19 +642,19 @@ const layer = Layer.effect(
                       obligations: snapshot.openObligations,
                       memories: memoryItems,
                     },
-                    content: [{ type: "text", text: stateSummary }],
+                    content: [{ type: "text", text: `${stateSummary}${closureSummary}` }],
                   },
                 }),
               )
               return
             }
             if (commitment.commitment.type === "memory_retrieval") {
-              const queryPrompt = commitment.commitment.query ?? goal ?? "Project context and conventions"
+              const queryPrompt = commitment.commitment.query ?? latestUserMessage ?? "Project context and conventions"
               const memoryFrontier = yield* AutomaticRecallAdmissionHook.admitRecall({
                 hardState: semantics.hardState,
                 recallStore: semantics.recallStore,
                 userPrompt: queryPrompt,
-                goalDescription: semantics.hardState.goalDescription ?? goal ?? "Retrieve project memory",
+                goalDescription: semantics.hardState.goalDescription ?? effectiveGoal ?? "Retrieve project memory",
                 repositoryId: session.location.directory,
                 focusSymbols: commitment.commitment.symbols,
               }).pipe(Effect.orElseSucceed(() => undefined))
@@ -646,6 +796,7 @@ const layer = Layer.effect(
           }
           const stepSettlement = publisher.stepSettlement()
           if (stepSettlement && !publisher.hasProviderError()) {
+            TokenLedger.recordUsage(session.id, currentStep, stepSettlement.tokens)
             const endSnapshot = yield* snapshots.capture()
             const files =
               startSnapshot && endSnapshot
@@ -673,9 +824,71 @@ const layer = Layer.effect(
           if (stream._tag === "Failure") return yield* Effect.failCause(stream.cause)
           if (settled._tag === "Failure" && Cause.hasInterrupts(settled.cause))
             return yield* Effect.failCause(settled.cause)
+
+          const openObligations = semantics.hardState.openObligationIds()
+          const openExecutionObligations = openObligations.filter(
+            (id) => semantics.hardState.obligationKind(id) === "execution",
+          )
+          const openInquiryObligations = openObligations.filter(
+            (id) => semantics.hardState.obligationKind(id) === "epistemic_inquiry",
+          )
+
+          if (!needsContinuation && openInquiryObligations.length > 0) {
+            yield* semantics.satisfyInquiries(events, {
+              summary: `Inquiry answered by model response at revision ${semantics.hardState.revision.toJSON()}`,
+              atRevision: semantics.hardState.revision,
+            })
+          }
+
+          const hasUnclosedObligations = openExecutionObligations.length > 0 && !completionAccepted
+          // Stagnation signature: open execution obligations plus the latest
+          // durable Praxis failure evidence per obligation. Deliberately
+          // excludes the revision counter because every recorded event bumps
+          // it, which would mask repeated identical failures. Genuine closure,
+          // new failing diagnostics, or invalidation all change this signature.
+          const stallSignature = [
+            [...openExecutionObligations].sort().join(","),
+            [...semantics.hardState.verificationReceipts.values()]
+              .filter((receipt) => !receipt.passed)
+              .map((receipt) => `${receipt.obligationId}:${receipt.diagnostics ?? "undocumented"}`)
+              .sort()
+              .join("|"),
+          ].join("#")
+          const maxAllowedSteps = agent.info?.steps ?? 50
+          const isMaxSteps = currentStep >= maxAllowedSteps
+          const lastUserIndex = context.findLastIndex((m) => m.type === "user")
+          const messagesSinceLastUser = lastUserIndex >= 0 ? context.slice(lastUserIndex) : context
+          const directivesSinceLastUser = messagesSinceLastUser.filter(
+            (m) => m.type === "synthetic" && m.text.includes("[RIVET COGNITIVE DIRECTIVE]"),
+          )
+          const hasPremiseConflict =
+            cognitiveView.premiseConflicts.length > 0 || semantics.hardState.premiseConflicts.length > 0
+          const isAutonomousGoal = Boolean(hasAutonomousGoal && latestAdmission?.shouldCreateGoal)
+          const shouldDirect =
+            hasUnclosedObligations &&
+            isAutonomousGoal &&
+            !hasPremiseConflict &&
+            directivesSinceLastUser.length === 0 &&
+            !isMaxSteps &&
+            !publisher.hasProviderError() &&
+            !needsContinuation
+
+          if (shouldDirect) {
+            yield* withPublication(
+              events.publish(SessionEvent.Synthetic, {
+                sessionID: session.id,
+                messageID: SessionMessage.ID.create(),
+                timestamp: yield* DateTime.now,
+                text: `[RIVET COGNITIVE DIRECTIVE] Completion rejected. Open obligations remain to be verified: ${openObligations.join(", ")}. Close each obligation through its declared verifier: perform the real work, call request_verification against an observed execution, then submit request_completion. If an obligation is structurally malformed (e.g. a file path constraint derived from ordinary prose rather than a real workspace path), call invalidate_obligation with its id and reason. NEVER create, rename, or fabricate files, outputs, or evidence to literally satisfy a constraint.`,
+              }),
+            )
+            needsContinuation = true
+          }
+
           return {
             needsContinuation: !completionAccepted && !publisher.hasProviderError() && needsContinuation,
             step: currentStep,
+            stallSignature,
           }
         }),
       )
@@ -684,7 +897,10 @@ const layer = Layer.effect(
       sessionID: SessionSchema.ID,
       promotion: SessionInput.Delivery | undefined,
       step: number,
-    ) => Effect.Effect<{ readonly needsContinuation: boolean; readonly step: number }, RunError>
+    ) => Effect.Effect<
+      { readonly needsContinuation: boolean; readonly step: number; readonly stallSignature: string },
+      RunError
+    >
 
     const runAfterOverflowCompaction: RunTurn = Effect.fnUntraced(function* (sessionID, promotion, step) {
       return yield* runTurnAttempt(sessionID, promotion, step).pipe(
@@ -727,9 +943,36 @@ const layer = Layer.effect(
       while (shouldRun) {
         let needsContinuation = true
         let step = 1
+        // Bounded retry policy: autonomous re-drive may continue only while
+        // obligation/verification state changes. An unchanged stall signature
+        // means the model is burning cycles on the same failure; stop the
+        // loop, keep obligations open (fail-closed), and surface the stall.
+        const maxStagnantDrives = 2
+        let lastStallSignature: string | undefined
+        let stagnantDrives = 0
         while (needsContinuation) {
           const result = yield* runTurn(input.sessionID, promotion, step)
           needsContinuation = result.needsContinuation
+          if (needsContinuation) {
+            if (result.stallSignature === lastStallSignature) stagnantDrives += 1
+            else {
+              stagnantDrives = 0
+              lastStallSignature = result.stallSignature
+            }
+            if (stagnantDrives >= maxStagnantDrives) {
+              yield* Effect.logWarning("stagnant autonomous drive halted; obligations remain open", {
+                "session.id": input.sessionID,
+                step: result.step,
+                stallSignature: result.stallSignature,
+              })
+              needsContinuation = false
+              stagnantDrives = 0
+              lastStallSignature = undefined
+            }
+          } else {
+            stagnantDrives = 0
+            lastStallSignature = undefined
+          }
           step = result.step + 1
           promotion = "steer"
           if (!needsContinuation) needsContinuation = yield* SessionInput.hasPending(db, input.sessionID, "steer")

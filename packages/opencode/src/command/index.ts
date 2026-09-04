@@ -46,6 +46,7 @@ export function hints(template: string) {
 export const Default = {
   INIT: "init",
   REVIEW: "review",
+  GOAL: "goal",
 } as const
 
 export interface Interface {
@@ -85,6 +86,15 @@ const layer = Layer.effect(
         },
         subtask: true,
         hints: hints(PROMPT_REVIEW),
+      }
+      commands[Default.GOAL] = {
+        name: Default.GOAL,
+        description: "initialize and execute an autonomous Rivet goal with ACCP governance and Praxis verification",
+        source: "command",
+        get template() {
+          return "[RIVET GOAL EXECUTION]\nGoal: $ARGUMENTS\nObligations: Compile GoalSpec and establish mechanical Praxis verification."
+        },
+        hints: ["$ARGUMENTS"],
       }
 
       for (const [name, command] of Object.entries(cfg.command ?? {})) {

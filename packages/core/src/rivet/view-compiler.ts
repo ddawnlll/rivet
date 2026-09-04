@@ -1,4 +1,5 @@
 import {
+  CognitiveView,
   SoftWorkspace,
   type ClaimRecord,
   type ContradictionRecord,
@@ -6,15 +7,19 @@ import {
   type RejectionRecord,
 } from "./noesis"
 import {
+  type CompletionReadiness,
   createSessionId,
   type EpistemicStatus,
   type EvidenceId,
   type MemoryFrontier,
   type ObligationId,
+  type ObligationViewRecord,
   type PremiseConflict,
   type Revision,
   Scope,
 } from "./types"
+import { AccpSemanticGate } from "./accp"
+import type { ObligationPredicate } from "./goal-compiler"
 import { ValidityEngine } from "./validity"
 import { RepositoryFrontierCompiler, type RepositoryFrontier } from "./repository/repository-frontier"
 
@@ -49,7 +54,7 @@ export interface OmittedSummary {
 export interface CompilationContext {
   readonly hardState: HardState
   readonly softWorkspace?: SoftWorkspace
-  readonly goalDescription: string
+  readonly goalDescription?: string
   readonly repositoryId: string
   readonly relevantFiles?: readonly string[]
   readonly repositorySignals?: readonly string[]
@@ -79,6 +84,8 @@ export interface CompiledViewPayload {
   readonly contradictions: readonly ContradictionRecord[]
   readonly rejectedClaims: readonly RejectionRecord[]
   readonly openObligations: readonly [ObligationId, string, Scope][]
+  readonly obligations: readonly ObligationViewRecord[]
+  readonly completionReadiness: CompletionReadiness
   readonly recentEvidence: readonly [EvidenceId, string, string][]
   readonly relevantFiles: readonly string[]
   readonly repositorySignals: readonly string[]
@@ -91,7 +98,8 @@ export interface CompiledViewPayload {
   readonly repositoryFrontier?: RepositoryFrontier
 }
 
-type ResolvedCompilationContext = CompilationContext & {
+type ResolvedCompilationContext = Omit<CompilationContext, "goalDescription"> & {
+  readonly goalDescription: string
   readonly softWorkspace: SoftWorkspace
   readonly relevantFiles: readonly string[]
   readonly repositorySignals: readonly string[]
@@ -102,6 +110,7 @@ export class CognitiveViewCompiler {
     const softWorkspace = ctxInput.softWorkspace ?? new SoftWorkspace(createSessionId(), ctxInput.hardState.revision)
     const ctx: ResolvedCompilationContext = {
       ...ctxInput,
+      goalDescription: ctxInput.goalDescription ?? ctxInput.hardState.goalDescription ?? "",
       softWorkspace,
       relevantFiles: ctxInput.relevantFiles ?? [],
       repositorySignals: ctxInput.repositorySignals ?? [],
@@ -113,6 +122,8 @@ export class CognitiveViewCompiler {
       historicalClaims,
       dirtyClaims,
       eligibleObligations,
+      obligationRecords,
+      completionReadiness,
       eligibleEvidence,
     } = this.stageEligibilityFilter(ctx)
 
@@ -173,6 +184,8 @@ export class CognitiveViewCompiler {
       contradictions,
       rejectedClaims,
       openObligations: eligibleObligations,
+      obligations: obligationRecords,
+      completionReadiness,
       recentEvidence: compressedEvidence,
       relevantFiles: ctx.relevantFiles,
       repositorySignals: compressedSignals,
@@ -186,18 +199,127 @@ export class CognitiveViewCompiler {
     }
   }
 
+  static toCognitiveView(compiled: CompiledViewPayload): CognitiveView {
+    return new CognitiveView({
+      hardRevision: compiled.hardRevision,
+      repositoryId: compiled.repositoryId,
+      goalDescription: compiled.goalDescription,
+      activeClaims: [...compiled.activeClaims],
+      contradictions: compiled.contradictions.map((item) => `${item.claimId}: ${item.reason}`),
+      rejectedClaims: compiled.rejectedClaims.map((item) => `${item.claimId}: ${item.reason}`),
+      openObligations: compiled.openObligations.map(([id, description]) => `${id}: ${description}`),
+      recentEvidence: compiled.recentEvidence.map(([id, source, summary]) => `${id} [${source}]: ${summary}`),
+      repositorySignals: [...compiled.repositorySignals],
+      unknowns: [...compiled.unknowns],
+      activeHypotheses: [...compiled.hypotheses],
+      activeFocus: [...compiled.activeFocus],
+      relevantFiles: [...compiled.relevantFiles],
+      premiseConflicts: [...compiled.premiseConflicts],
+      memoryFrontier: compiled.memoryFrontier,
+      tokenBudgetHint: compiled.omittedSummary.tokenBudget,
+      obligations: compiled.obligations,
+      completionReadiness: compiled.completionReadiness,
+    })
+  }
+
   private static stageEligibilityFilter(ctx: ResolvedCompilationContext) {
     // Enforce Read-Time Validity Barrier: DIRTY, STALE, and SUPERSEDED claims have ZERO operational authority
     const barrier = ValidityEngine.applyReadTimeBarrier(ctx.hardState, ctx.scope)
 
     const eligibleObligations: [ObligationId, string, Scope][] = []
+    const obligationRecords: ObligationViewRecord[] = []
+
     for (const [id, desc] of ctx.hardState.obligations) {
       const scope =
         ctx.hardState.obligationScopes.get(id) ??
         Scope.global(ctx.repositoryId, ctx.hardState.revision)
       eligibleObligations.push([id, desc, scope])
+
+      const kind = ctx.hardState.obligationKind(id)
+      const closure = AccpSemanticGate.getClosureRequirement(kind)
+      const predicate = ctx.hardState.obligationPredicates.get(id)
+      const blockers: string[] = []
+      if (kind === "epistemic_inquiry") {
+        blockers.push("Obligation requires authoritative Noesis projection. Call query_epistemic_state.")
+      } else if (kind === "execution") {
+        blockers.push("Obligation requires observed execution and Praxis verification receipt. Call request_verification.")
+      } else if (kind === "verification") {
+        blockers.push("Obligation requires Praxis verification receipt. Call request_verification.")
+      } else {
+        blockers.push(`Obligation requires ${closure.requiredProofKind} (${closure.verifier}).`)
+      }
+
+      obligationRecords.push({
+        id,
+        type: kind,
+        objective: desc,
+        status: "open",
+        scope,
+        closure: {
+          requiredProofKind: closure.requiredProofKind,
+          verifier: closure.verifier,
+          praxisRequired: closure.praxisRequired,
+          acceptedProofRefs: [],
+        },
+        predicateSummary: predicate ? describePredicate(predicate) : undefined,
+        legalTransitions: legalTransitionsFor(kind),
+        blockers,
+      })
+    }
+
+    for (const [id, reason] of ctx.hardState.invalidatedObligations) {
+      const kind = ctx.hardState.obligationKind(id)
+      const closure = AccpSemanticGate.getClosureRequirement(kind)
+      obligationRecords.push({
+        id,
+        type: kind,
+        objective: `Invalidated: ${reason}`,
+        status: "invalidated",
+        scope: Scope.global(ctx.repositoryId, ctx.hardState.revision),
+        closure: {
+          requiredProofKind: closure.requiredProofKind,
+          verifier: closure.verifier,
+          praxisRequired: closure.praxisRequired,
+          acceptedProofRefs: [],
+        },
+        blockers: [],
+      })
     }
     eligibleObligations.sort((a, b) => a[0].localeCompare(b[0]))
+
+    // Include closed/satisfied obligations
+    for (const [id, receiptId] of ctx.hardState.closedObligations) {
+      const kind = ctx.hardState.obligationKind(id)
+      const closure = AccpSemanticGate.getClosureRequirement(kind)
+      const scope = ctx.hardState.obligationScopes.get(id) ?? Scope.global(ctx.repositoryId, ctx.hardState.revision)
+      const inquiryReceipt = ctx.hardState.inquiryReceipts.get(id)
+      const desc = inquiryReceipt?.summary ?? ctx.hardState.obligations.get(id) ?? "Satisfied obligation"
+      obligationRecords.push({
+        id,
+        type: kind,
+        objective: desc,
+        status: "satisfied",
+        scope,
+        closure: {
+          requiredProofKind: closure.requiredProofKind,
+          verifier: closure.verifier,
+          praxisRequired: closure.praxisRequired,
+          acceptedProofRefs: [receiptId],
+        },
+        blockers: [],
+      })
+    }
+    obligationRecords.sort((a, b) => a.id.localeCompare(b.id))
+
+    const completionReadiness = AccpSemanticGate.checkCompletionReadiness({
+      unclosedObligations: ctx.hardState.openObligationIds(),
+      passingReceipts: ctx.hardState.closureReceiptIds(),
+      hasContradictions: ctx.hardState.contradictions.size > 0,
+      getKind: (id) => ctx.hardState.obligationKind(id),
+      getDescription: (id) => ctx.hardState.obligations.get(id) ?? id,
+      totalObligations: ctx.hardState.obligations.size + ctx.hardState.closedObligations.size,
+      hasActiveGoal: Boolean(ctx.hardState.goalDescription),
+    })
 
     const eligibleEvidence: [EvidenceId, string, string][] = []
     for (const [id, summary] of ctx.hardState.evidence) {
@@ -210,6 +332,8 @@ export class CognitiveViewCompiler {
       historicalClaims: [...barrier.historicalClaims],
       dirtyClaims: [...barrier.dirtyClaims],
       eligibleObligations,
+      obligationRecords,
+      completionReadiness,
       eligibleEvidence,
     }
   }
@@ -383,7 +507,7 @@ export class CognitiveViewCompiler {
     const lines: string[] = []
     lines.push("=== COGNITIVE STATE (RAW TEXT) ===")
     lines.push(`Repository: ${p.repositoryId} | Revision: ${p.hardRevision}`)
-    lines.push(`Goal: ${p.goalDescription}\n`)
+    lines.push(`Goal: ${p.goalDescription || "(None - Conversational Mode)"}\n`)
 
     if (p.premiseConflicts.length > 0) {
       lines.push("--- Premise Conflicts ---")
@@ -432,6 +556,27 @@ export class CognitiveViewCompiler {
       lines.push(`- [${id}] ${desc} (scope: ${scope.repository}@${scope.revision})`)
     }
 
+    lines.push(`\n--- Completion Readiness: ${p.completionReadiness.status} ---`)
+    if (p.completionReadiness.status === "NOT_REQUIRED") {
+      lines.push("- Status: NOT_REQUIRED (Conversational / Non-goal mode)")
+    } else if (p.completionReadiness.status === "READY") {
+      lines.push("- Status: READY for completion proposal")
+    } else {
+      lines.push("- Status: BLOCKED")
+      for (const b of p.completionReadiness.blockers) {
+        lines.push(`  * ${b}`)
+      }
+    }
+
+    if (p.obligations && p.obligations.length > 0) {
+      lines.push("\n--- Obligation Contracts ---")
+      for (const o of p.obligations) {
+        lines.push(
+          `- [${o.id}] ${o.type.toUpperCase()}: ${o.objective} (${o.status.toUpperCase()}) | verifier=${o.closure.verifier} | proof=${o.closure.requiredProofKind} | praxis=${o.closure.praxisRequired ? "REQUIRED" : "NOT_REQUIRED"}`,
+        )
+      }
+    }
+
     if (p.recentEvidence.length > 0) {
       lines.push("\n--- Recent Evidence ---")
       for (const [id, src, sum] of p.recentEvidence) {
@@ -462,6 +607,13 @@ export class CognitiveViewCompiler {
       lines.push(formatTriple(triple))
     }
 
+    for (const o of p.obligations) {
+      lines.push(formatTriple({ subject: `Obligation#${o.id}`, predicate: "type", object: o.type }))
+      lines.push(formatTriple({ subject: `Obligation#${o.id}`, predicate: "status", object: o.status }))
+      lines.push(formatTriple({ subject: `Obligation#${o.id}`, predicate: "verifier", object: o.closure.verifier }))
+    }
+    lines.push(formatTriple({ subject: "Completion", predicate: "readiness", object: p.completionReadiness.status }))
+
     if (p.repositoryFrontier) {
       lines.push(`\n# --- Repository Frontier ---`)
       lines.push(formatTriple({ subject: "Frontier#Repo", predicate: "description", object: p.repositoryFrontier.repositorySummary.description }))
@@ -483,6 +635,11 @@ export class CognitiveViewCompiler {
     for (const path of p.provenancePaths) {
       lines.push(formatProvenancePath(path))
     }
+
+    for (const o of p.obligations) {
+      lines.push(formatProvenancePath({ steps: [`Obligation(${o.id})`, o.type, o.status, o.closure.verifier] }))
+    }
+    lines.push(formatProvenancePath({ steps: ["Completion", "readiness", p.completionReadiness.status] }))
 
     if (p.repositoryFrontier) {
       for (const rel of p.repositoryFrontier.structure) {
@@ -513,6 +670,7 @@ export class CognitiveViewCompiler {
       `  hard_revision: "${p.hardRevision}"`,
       `  repository_id: "${p.repositoryId}"`,
       `  goal_description: "${p.goalDescription}"`,
+      `  completion_readiness: "${p.completionReadiness.status}"`,
       `  active_focus: ${JSON.stringify(p.activeFocus)}`,
       `  hypotheses: ${JSON.stringify(p.hypotheses)}`,
       `  active_claims_count: ${p.activeClaims.length}`,
@@ -526,4 +684,24 @@ export class CognitiveViewCompiler {
       "```",
     ].filter(Boolean).join("\n")
   }
+}
+
+function describePredicate(predicate: ObligationPredicate): string {
+  switch (predicate.type) {
+    case "file_constraint":
+      return `file_constraint: path "${predicate.path}" mustExist=${predicate.mustExist}${predicate.contentPattern ? ` content~"${predicate.contentPattern}"` : ""}`
+    case "claims_verified":
+      return `claims_verified: ${predicate.claimPropositions.join("; ")}`
+    case "command_pass":
+      return `command_pass: "${predicate.command}" exit=${predicate.expectedExitCode}`
+    case "human_approval":
+      return "human_approval: explicit user approval required"
+  }
+}
+
+function legalTransitionsFor(kind: string): string[] {
+  if (kind === "epistemic_inquiry") {
+    return ["query_epistemic_state (authoritative projection closes it)"]
+  }
+  return ["satisfy via request_verification", "invalidate_obligation if structurally malformed"]
 }
