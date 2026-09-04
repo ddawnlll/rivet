@@ -56,7 +56,13 @@ export interface RivetProjection {
   readonly semanticEvents: readonly UiSemanticEvent[]
 }
 
-const SEMANTIC_TOOLS = new Set(["propose_claim", "request_verification", "request_completion"])
+const SEMANTIC_TOOLS = new Set([
+  "propose_claim",
+  "request_verification",
+  "request_completion",
+  "query_epistemic_state",
+  "retrieve_memory",
+])
 
 function asRecord(val: unknown): Record<string, unknown> | undefined {
   if (val && typeof val === "object" && !Array.isArray(val)) {
@@ -111,6 +117,7 @@ export function projectRivetState(input: RivetSessionInput): RivetProjection {
   const testResultsList: UiTestResult[] = []
   const historyList: UiHistoryEntry[] = []
   const semanticEvents: UiSemanticEvent[] = []
+  const memoryList: UiMemoryItem[] = []
 
   let revisionCounter = 80 // realistic baseline revision counter
   let eventSequence = 0
@@ -259,6 +266,153 @@ export function projectRivetState(input: RivetSessionInput): RivetProjection {
           })
         }
       }
+    } else if (part.tool === "query_epistemic_state") {
+      revisionCounter += 1
+      const rev = `r${revisionCounter}`
+      const structured = asRecord((part.state as any).output?.structured)
+      let queriedClaims = 0
+      let queriedObligations = 0
+
+      if (structured) {
+        if (Array.isArray(structured.claims)) {
+          for (const raw of structured.claims) {
+            const c = asRecord(raw)
+            if (c) {
+              const id = asString(c.id) ?? `claim_${claimsMap.size + 1}`
+              claimsMap.set(id, {
+                id,
+                proposition: asString(c.proposition) ?? "",
+                status: (asString(c.status) as any) ?? "supported",
+                sinceRevision: rev,
+                evidence: Array.isArray(c.evidence) ? c.evidence.map(String) : [],
+                scope: asString(c.scope) ?? "global",
+              })
+              queriedClaims++
+            }
+          }
+        }
+        if (Array.isArray(structured.obligations)) {
+          for (const raw of structured.obligations) {
+            if (Array.isArray(raw) && raw.length >= 2) {
+              const id = String(raw[0])
+              const desc = String(raw[1])
+              obligationsMap.set(id, {
+                id,
+                description: desc,
+                status: "pending",
+                required: true,
+              })
+              queriedObligations++
+            }
+          }
+        }
+        if (Array.isArray(structured.memories)) {
+          for (const raw of structured.memories) {
+            const m = asRecord(raw)
+            if (m) {
+              const id = asString(m.id) ?? `mem_${memoryList.length + 1}`
+              memoryList.push({
+                id,
+                kind: (asString(m.type) as any) ?? "active",
+                summary: asString(m.summary) ?? "",
+                used: true,
+                symbols: Array.isArray(m.tags) ? m.tags.map(String) : [],
+              })
+            }
+          }
+        }
+      } else if (output) {
+        for (const line of output.split("\n")) {
+          const claimMatch = line.match(/^-\s+\[(verified|supported|dirty|superseded|rejected)\]\s+([^:]+):\s+(.+)$/i)
+          if (claimMatch) {
+            const [, status, id, prop] = claimMatch
+            claimsMap.set(id.trim(), {
+              id: id.trim(),
+              proposition: prop.trim(),
+              status: status.toLowerCase() as any,
+              sinceRevision: rev,
+              evidence: [],
+            })
+            queriedClaims++
+          }
+          const obMatch = line.match(/^-\s+\[([^\]]+)\]\s+(.+)$/)
+          if (obMatch && !line.includes("[PREMISE CONFLICT]")) {
+            const [, id, desc] = obMatch
+            if (id.startsWith("ob_") || desc.toLowerCase().includes("verify") || desc.toLowerCase().includes("test")) {
+              obligationsMap.set(id.trim(), {
+                id: id.trim(),
+                description: desc.trim(),
+                status: "pending",
+                required: true,
+              })
+              queriedObligations++
+            }
+          }
+          const memMatch = line.match(/^-\s+\[(active|episode|procedure|failure|rejected)\]\s+(.+)$/i)
+          if (memMatch) {
+            const [, kind, summary] = memMatch
+            memoryList.push({
+              id: `mem_${memoryList.length + 1}`,
+              kind: kind.toLowerCase() as any,
+              summary: summary.trim(),
+              used: true,
+            })
+          }
+        }
+      }
+
+      semanticEvents.push({
+        id: part.id,
+        type: "claim",
+        icon: "◆",
+        title: `Epistemic state queried (${rev})`,
+        detail: `${queriedClaims || claimsMap.size} claims · ${queriedObligations || obligationsMap.size} obligations`,
+        protocolDetail: { revision: rev, claims: claimsMap.size, obligations: obligationsMap.size },
+      })
+    } else if (part.tool === "retrieve_memory") {
+      const query = asString(toolInput.query) ?? asString(toolInput.prompt) ?? "project context"
+      const structured = asRecord((part.state as any).output?.structured)
+      let retrievedCount = 0
+
+      if (structured && Array.isArray(structured.items)) {
+        for (const raw of structured.items) {
+          const m = asRecord(raw)
+          if (m) {
+            retrievedCount++
+            const id = asString(m.id) ?? `mem_${memoryList.length + 1}`
+            memoryList.push({
+              id,
+              kind: (asString(m.type) as any) ?? "active",
+              summary: asString(m.summary) ?? "",
+              used: true,
+              symbols: Array.isArray(m.tags) ? m.tags.map(String) : [],
+            })
+          }
+        }
+      } else if (output) {
+        for (const line of output.split("\n")) {
+          const memMatch = line.match(/^-\s+\[(active|episode|procedure|failure|rejected)\]\s+(.+)$/i)
+          if (memMatch) {
+            retrievedCount++
+            const [, kind, summary] = memMatch
+            memoryList.push({
+              id: `mem_${memoryList.length + 1}`,
+              kind: kind.toLowerCase() as any,
+              summary: summary.trim(),
+              used: true,
+            })
+          }
+        }
+      }
+
+      semanticEvents.push({
+        id: part.id,
+        type: "memory_recalled",
+        icon: "🧠",
+        title: `Memory retrieved: "${query}"`,
+        detail: `${retrievedCount} records recalled into context`,
+        protocolDetail: { query, count: retrievedCount },
+      })
     }
   }
 
@@ -339,19 +493,21 @@ export function projectRivetState(input: RivetSessionInput): RivetProjection {
     activeFocus,
   }
 
-  // Memory
-  const memoryList: UiMemoryItem[] = []
+  // Memory from metadata
   const metaMemory = Array.isArray(metaRivet?.memory) ? (metaRivet!.memory as any[]) : []
   for (const m of metaMemory) {
-    memoryList.push({
-      id: m.id ?? `mem_${memoryList.length + 1}`,
-      kind: m.kind ?? (m.used ? "procedure" : "provisional"),
-      summary: m.summary ?? m.content ?? "",
-      relevance: m.relevance,
-      used: Boolean(m.used),
-      whyIgnored: Array.isArray(m.whyIgnored) ? m.whyIgnored.map(String) : undefined,
-      details: m.details,
-    })
+    const existing = memoryList.find((item) => item.id === m.id)
+    if (!existing) {
+      memoryList.push({
+        id: m.id ?? `mem_${memoryList.length + 1}`,
+        kind: m.kind ?? (m.used ? "procedure" : "provisional"),
+        summary: m.summary ?? m.content ?? "",
+        relevance: m.relevance,
+        used: Boolean(m.used),
+        whyIgnored: Array.isArray(m.whyIgnored) ? m.whyIgnored.map(String) : undefined,
+        details: m.details,
+      })
+    }
   }
 
   // Code Frontier

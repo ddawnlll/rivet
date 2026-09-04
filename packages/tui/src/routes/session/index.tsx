@@ -1793,6 +1793,12 @@ function ToolPart(props: { last: boolean; part: ToolPart; message: AssistantMess
         <Match when={display() === "request_completion"}>
           <RequestCompletion {...toolprops} />
         </Match>
+        <Match when={display() === "query_epistemic_state"}>
+          <QueryEpistemicState {...toolprops} />
+        </Match>
+        <Match when={display() === "retrieve_memory"}>
+          <RetrieveMemory {...toolprops} />
+        </Match>
         <Match when={true}>
           <GenericTool {...toolprops} />
         </Match>
@@ -2751,6 +2757,185 @@ function RequestCompletion(props: ToolProps) {
   )
 }
 
+function QueryEpistemicState(props: ToolProps) {
+  const { theme } = useTheme()
+  const [expanded, setExpanded] = createSignal(false)
+  const output = createMemo(() => props.output ?? "")
+  const rev = createMemo(() => {
+    const m = output().match(/Revision:\s*([^\n\r]+)/)
+    return m ? m[1].trim() : "current"
+  })
+  const claims = createMemo(() => {
+    const matches: string[] = []
+    let inClaims = false
+    for (const line of output().split("\n")) {
+      if (line.includes("Active Valid Claims")) inClaims = true
+      else if (
+        line.includes("Open Obligations") ||
+        line.includes("Memory Frontier") ||
+        line.includes("Premise Conflicts") ||
+        line.includes("Recent Evidence")
+      )
+        inClaims = false
+      else if (inClaims && line.trim().startsWith("- [")) {
+        matches.push(line.trim().slice(2))
+      }
+    }
+    return matches
+  })
+  const obligations = createMemo(() => {
+    const matches: string[] = []
+    let inObligations = false
+    for (const line of output().split("\n")) {
+      if (line.includes("Open Obligations")) inObligations = true
+      else if (
+        line.includes("Memory Frontier") ||
+        line.includes("Premise Conflicts") ||
+        line.includes("Recent Evidence")
+      )
+        inObligations = false
+      else if (inObligations && line.trim().startsWith("- [")) {
+        matches.push(line.trim().slice(2))
+      }
+    }
+    return matches
+  })
+  const memories = createMemo(() => {
+    const matches: string[] = []
+    let inMemories = false
+    for (const line of output().split("\n")) {
+      if (line.includes("Memory Frontier")) inMemories = true
+      else if (line.includes("Recent Evidence") || line.startsWith("===")) inMemories = false
+      else if (inMemories && line.trim().startsWith("- [")) {
+        matches.push(line.trim().slice(2))
+      }
+    }
+    return matches
+  })
+
+  const label = createMemo(
+    () => `Epistemic State: ${rev()} · ${claims().length} claims · ${obligations().length} tasks`,
+  )
+
+  return (
+    <Show
+      when={expanded()}
+      fallback={
+        <InlineTool
+          icon="◆"
+          pending="Querying epistemic state..."
+          complete={true}
+          part={props.part}
+          onClick={() => setExpanded(true)}
+        >
+          {label()}
+        </InlineTool>
+      }
+    >
+      <BlockTool title={`◆ ${label()}`} part={props.part} onClick={() => setExpanded(false)}>
+        <box flexDirection="column" gap={0}>
+          <text fg={theme.primary}>
+            Revision: <span style={{ fg: theme.text }}>{rev()}</span>
+          </text>
+          <Show when={claims().length > 0}>
+            <text fg={theme.textMuted} marginTop={1}>
+              Active Claims ({claims().length}):
+            </text>
+            <For each={claims()}>
+              {(claim) => <text fg={theme.text}>• {claim}</text>}
+            </For>
+          </Show>
+          <Show when={obligations().length > 0}>
+            <text fg={theme.textMuted} marginTop={1}>
+              Open Tasks ({obligations().length}):
+            </text>
+            <For each={obligations()}>
+              {(ob) => <text fg={theme.warning}>• {ob}</text>}
+            </For>
+          </Show>
+          <Show when={memories().length > 0}>
+            <text fg={theme.textMuted} marginTop={1}>
+              Memory Frontier ({memories().length}):
+            </text>
+            <For each={memories()}>
+              {(mem) => <text fg={theme.textMuted}>• {mem}</text>}
+            </For>
+          </Show>
+          <text fg={theme.textMuted} marginTop={1}>
+            Click to collapse
+          </text>
+        </box>
+      </BlockTool>
+    </Show>
+  )
+}
+
+function RetrieveMemory(props: ToolProps) {
+  const { theme } = useTheme()
+  const [expanded, setExpanded] = createSignal(false)
+  const output = createMemo(() => props.output ?? "")
+  const query = createMemo(
+    () => stringValue(props.input.query) ?? stringValue(props.input.prompt) ?? "project context",
+  )
+  const items = createMemo(() => {
+    const matches: string[] = []
+    let inItems = false
+    for (const line of output().split("\n")) {
+      if (line.includes("Recalled Records")) inItems = true
+      else if (line.includes("Related Symbols") || line.startsWith("===")) inItems = false
+      else if (inItems && line.trim().startsWith("- [")) {
+        matches.push(line.trim().slice(2))
+      }
+    }
+    return matches
+  })
+
+  const label = createMemo(() => `Memory Retrieved: ${items().length} records ("${query()}")`)
+
+  return (
+    <Show
+      when={expanded()}
+      fallback={
+        <InlineTool
+          icon="🧠"
+          pending="Retrieving project memory..."
+          complete={true}
+          part={props.part}
+          onClick={() => setExpanded(true)}
+        >
+          {label()}
+        </InlineTool>
+      }
+    >
+      <BlockTool title={`🧠 ${label()}`} part={props.part} onClick={() => setExpanded(false)}>
+        <box flexDirection="column" gap={0}>
+          <text fg={theme.primary}>
+            Query: <span style={{ fg: theme.text }}>"{query()}"</span>
+          </text>
+          <Show
+            when={items().length > 0}
+            fallback={
+              <text fg={theme.textMuted} marginTop={1}>
+                No relevant records found in associative memory.
+              </text>
+            }
+          >
+            <text fg={theme.textMuted} marginTop={1}>
+              Recalled Records ({items().length}):
+            </text>
+            <For each={items()}>
+              {(item) => <text fg={theme.text}>• {item}</text>}
+            </For>
+          </Show>
+          <text fg={theme.textMuted} marginTop={1}>
+            Click to collapse
+          </text>
+        </box>
+      </BlockTool>
+    </Show>
+  )
+}
+
 function Diagnostics(props: { diagnostics: unknown; filePath: string }) {
   const { theme } = useTheme()
   const terminalEnvironment = useTuiTerminalEnvironment()
@@ -2812,6 +2997,8 @@ const toolDisplays = new Set([
   "propose_claim",
   "request_verification",
   "request_completion",
+  "query_epistemic_state",
+  "retrieve_memory",
 ])
 
 export function toolDisplay(tool: string) {

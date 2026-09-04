@@ -31,6 +31,7 @@ export interface UiMemoryItem {
   readonly relevance?: "high" | "medium" | "low"
   readonly used: boolean
   readonly whyIgnored?: readonly string[]
+  readonly symbols?: readonly string[]
   readonly details?: {
     readonly sourceRefs?: readonly string[]
     readonly revision?: string
@@ -116,7 +117,7 @@ export interface UiRivetStatus {
 
 export interface UiSemanticEvent {
   readonly id: string
-  readonly type: "inspected" | "changed" | "test_passed" | "test_failed" | "claim" | "verification" | "memory_ignored" | "stale_warning"
+  readonly type: "inspected" | "changed" | "test_passed" | "test_failed" | "claim" | "verification" | "memory_ignored" | "memory_recalled" | "stale_warning"
   readonly icon: string
   readonly title: string
   readonly detail?: string

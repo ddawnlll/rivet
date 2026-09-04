@@ -260,6 +260,78 @@ describe("Rivet UI Projection", () => {
     expect(projection.completion.message).toBe("Verification predates latest edit")
   })
 
+  test("Epistemic state query: projects queried claims, obligations, and memories into state", () => {
+    const projection = projectRivetState({
+      sessionID: "ses_epistemic",
+      parts: [
+        {
+          id: "tool_epistemic",
+          type: "tool",
+          tool: "query_epistemic_state",
+          state: {
+            status: "completed",
+            input: { include_frontier: true },
+            output: {
+              structured: {
+                revision: "r12",
+                claims: [
+                  { id: "claim_1", proposition: "PostgreSQL port is 5432", status: "verified" },
+                ],
+                obligations: [
+                  ["ob_db_conn", "Verify DB connection timeout handling"],
+                ],
+                memories: [
+                  { id: "mem_1", type: "decision", summary: "Use connection pooling with max 20 clients" },
+                ],
+              },
+            },
+          },
+        } as unknown as ToolPart,
+      ],
+    })
+
+    expect(projection.hardState.length).toBe(1)
+    expect(projection.hardState[0].proposition).toBe("PostgreSQL port is 5432")
+    expect(projection.obligations.length).toBe(1)
+    expect(projection.obligations[0].id).toBe("ob_db_conn")
+    expect(projection.obligations[0].status).toBe("pending")
+    expect(projection.memory.length).toBe(1)
+    expect(projection.memory[0].summary).toBe("Use connection pooling with max 20 clients")
+    expect(projection.semanticEvents.some((e) => e.type === "claim" && e.title.includes("Epistemic state queried"))).toBe(true)
+  })
+
+  test("Memory retrieval: projects recalled memories and publishes semantic event", () => {
+    const projection = projectRivetState({
+      sessionID: "ses_mem",
+      parts: [
+        {
+          id: "tool_recall",
+          type: "tool",
+          tool: "retrieve_memory",
+          state: {
+            status: "completed",
+            input: { query: "database connection" },
+            output: {
+              structured: {
+                query: "database connection",
+                count: 2,
+                items: [
+                  { id: "mem_db_pool", type: "procedure", summary: "Close transactions in defer blocks" },
+                  { id: "mem_db_fail", type: "failure", summary: "Avoid unbounded connection pool growth" },
+                ],
+              },
+            },
+          },
+        } as unknown as ToolPart,
+      ],
+    })
+
+    expect(projection.memory.length).toBe(2)
+    expect(projection.memory[0].summary).toBe("Close transactions in defer blocks")
+    expect(projection.memory[0].used).toBe(true)
+    expect(projection.semanticEvents.some((e) => e.type === "memory_recalled" && e.title.includes("database connection"))).toBe(true)
+  })
+
   test("Empty state: gracefully handles empty inputs without errors", () => {
     const projection = projectRivetState({})
 
@@ -273,3 +345,4 @@ describe("Rivet UI Projection", () => {
     expect(projection.statusRail.taskCount).toBe(0)
   })
 })
+
