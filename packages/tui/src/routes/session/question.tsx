@@ -45,8 +45,23 @@ export function QuestionPrompt(props: { request: QuestionRequest; directory?: st
     return store.answers[store.tab]?.includes(value) ?? false
   })
 
-  function submit() {
-    const answers = questions().map((_, i) => store.answers[i] ?? [])
+  function sendReply(answers: QuestionAnswer[]) {
+    if (props.request.sessionID) {
+      void sdk.client.v2.session.question
+        .reply({
+          sessionID: props.request.sessionID,
+          requestID: props.request.id,
+          questionV2Reply: { answers },
+        })
+        .catch(() =>
+          sdk.client.question.reply({
+            requestID: props.request.id,
+            directory: props.directory,
+            answers,
+          }),
+        )
+      return
+    }
     void sdk.client.question.reply({
       requestID: props.request.id,
       directory: props.directory,
@@ -54,11 +69,34 @@ export function QuestionPrompt(props: { request: QuestionRequest; directory?: st
     })
   }
 
-  function reject() {
+  function sendReject() {
+    if (props.request.sessionID) {
+      void sdk.client.v2.session.question
+        .reject({
+          sessionID: props.request.sessionID,
+          requestID: props.request.id,
+        })
+        .catch(() =>
+          sdk.client.question.reject({
+            requestID: props.request.id,
+            directory: props.directory,
+          }),
+        )
+      return
+    }
     void sdk.client.question.reject({
       requestID: props.request.id,
       directory: props.directory,
     })
+  }
+
+  function submit() {
+    const answers = questions().map((_, i) => store.answers[i] ?? [])
+    sendReply(answers)
+  }
+
+  function reject() {
+    sendReject()
   }
 
   function pick(answer: string, custom: boolean = false) {
@@ -71,11 +109,7 @@ export function QuestionPrompt(props: { request: QuestionRequest; directory?: st
       setStore("custom", inputs)
     }
     if (single()) {
-      void sdk.client.question.reply({
-        requestID: props.request.id,
-        directory: props.directory,
-        answers: [[answer]],
-      })
+      sendReply([[answer]])
       return
     }
     setStore("tab", store.tab + 1)

@@ -42,6 +42,63 @@ const layer = Layer.effect(
           workspace: workspaceID,
           payload: { id: event.id, type: event.type, properties: event.data },
         })
+        if (event.type === "question.v2.asked") {
+          GlobalBus.emit("event", {
+            directory: event.location?.directory ?? ctx?.directory,
+            project: ctx?.project.id,
+            workspace: workspaceID,
+            payload: { id: event.id, type: "question.asked", properties: event.data },
+          })
+        }
+        if (event.type === "question.v2.replied") {
+          GlobalBus.emit("event", {
+            directory: event.location?.directory ?? ctx?.directory,
+            project: ctx?.project.id,
+            workspace: workspaceID,
+            payload: { id: event.id, type: "question.replied", properties: event.data },
+          })
+        }
+        if (event.type === "question.v2.rejected") {
+          GlobalBus.emit("event", {
+            directory: event.location?.directory ?? ctx?.directory,
+            project: ctx?.project.id,
+            workspace: workspaceID,
+            payload: { id: event.id, type: "question.rejected", properties: event.data },
+          })
+        }
+        if (event.type === "permission.v2.asked") {
+          const data = event.data as Record<string, unknown>
+          const source = data.source as Record<string, unknown> | undefined
+          GlobalBus.emit("event", {
+            directory: event.location?.directory ?? ctx?.directory,
+            project: ctx?.project.id,
+            workspace: workspaceID,
+            payload: {
+              id: event.id,
+              type: "permission.asked",
+              properties: {
+                id: data.id,
+                sessionID: data.sessionID,
+                permission: data.action,
+                patterns: data.resources,
+                always: data.save ?? [],
+                metadata: data.metadata ?? {},
+                tool:
+                  source?.type === "tool"
+                    ? { messageID: source.messageID, callID: source.callID }
+                    : undefined,
+              },
+            },
+          })
+        }
+        if (event.type === "permission.v2.replied") {
+          GlobalBus.emit("event", {
+            directory: event.location?.directory ?? ctx?.directory,
+            project: ctx?.project.id,
+            workspace: workspaceID,
+            payload: { id: event.id, type: "permission.replied", properties: event.data },
+          })
+        }
         if (event.durable === undefined) return
         GlobalBus.emit("event", {
           directory: event.location?.directory ?? ctx?.directory,

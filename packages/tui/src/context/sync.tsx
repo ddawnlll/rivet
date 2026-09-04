@@ -1,5 +1,11 @@
 import type {
   Message,
+  UserMessage,
+  AssistantMessage,
+  TextPart,
+  ReasoningPart,
+  ToolPart,
+  ToolState,
   Agent,
   Provider,
   Session,
@@ -28,7 +34,7 @@ import { useTuiStartup } from "./runtime"
 import { createSimpleContext } from "./helper"
 import { useExit } from "./exit"
 import { useArgs } from "./args"
-import { batch, onMount } from "solid-js"
+import { batch, createEffect, onMount } from "solid-js"
 import path from "path"
 import { useKV } from "./kv"
 import { usePermission } from "./permission"
@@ -53,6 +59,15 @@ function search<T>(items: T[], target: string, key: (item: T) => string) {
 
 function compareMessage(a: Message, b: Message) {
   return a.time.created - b.time.created || a.id.localeCompare(b.id)
+}
+
+function toMillis(t: unknown): number {
+  if (typeof t === "number") return t
+  if (typeof t === "string") {
+    const parsed = Date.parse(t)
+    return Number.isFinite(parsed) ? parsed : Date.now()
+  }
+  return Date.now()
 }
 
 const messageKey = (message: Message) => message.time.created + message.id
@@ -157,6 +172,50 @@ export const {
       hydratingSessions.get(sessionID)?.parts.add(partID)
     }
 
+    const trimMessages = (sessionID: string) => {
+      const updated = store.message[sessionID]
+      if (updated && updated.length > 100) {
+        const oldest = updated[0]
+        batch(() => {
+          setStore(
+            "message",
+            sessionID,
+            produce((draft) => {
+              draft.shift()
+            }),
+          )
+          setStore(
+            "part",
+            produce((draft) => {
+              delete draft[oldest.id]
+            }),
+          )
+        })
+      }
+    }
+
+    const putMessage = (sessionID: string, msg: Message) => {
+      touchMessage(sessionID, msg.id)
+      const messages = store.message[sessionID]
+      if (!messages) {
+        setStore("message", sessionID, [msg])
+        return
+      }
+      const result = search(messages, messageKey(msg), messageKey)
+      if (result.found) {
+        setStore("message", sessionID, result.index, reconcile(msg))
+        return
+      }
+      setStore(
+        "message",
+        sessionID,
+        produce((draft) => {
+          draft.splice(result.index, 0, msg)
+        }),
+      )
+      trimMessages(sessionID)
+    }
+
     function sessionListQuery(): { scope?: "project"; path?: string } {
       if (!kv.get("session_directory_filter_enabled", true)) return { scope: "project" }
       if (!project.data.instance.path.worktree || !project.data.instance.path.directory) return { scope: "project" }
@@ -224,7 +283,9 @@ export const {
           break
         }
 
+        case "question.v2.replied":
         case "question.replied":
+        case "question.v2.rejected":
         case "question.rejected": {
           const requests = store.question[event.properties.sessionID]
           if (!requests) break
@@ -240,6 +301,7 @@ export const {
           break
         }
 
+        case "question.v2.asked":
         case "question.asked": {
           const request = event.properties
           const requests = store.question[request.sessionID]
@@ -313,49 +375,572 @@ export const {
           break
         }
 
+        case "session.next.agent.switched": {
+          const result = search(store.session, event.properties.sessionID, (s) => s.id)
+          if (!result.found) break
+          setStore(
+            "session",
+            result.index,
+            produce((session) => {
+              session.agent = event.properties.agent
+              session.time.updated = toMillis(event.properties.timestamp)
+            }),
+          )
+          break
+        }
+
+        case "session.next.model.switched": {
+          const result = search(store.session, event.properties.sessionID, (s) => s.id)
+          if (!result.found) break
+          setStore(
+            "session",
+            result.index,
+            produce((session) => {
+              session.model = event.properties.model
+              session.time.updated = toMillis(event.properties.timestamp)
+            }),
+          )
+          break
+        }
+
+        case "session.next.prompted": {
+          const { sessionID, messageID, prompt, timestamp } = event.properties
+          const timeCreated = toMillis(timestamp)
+          const userMsg: UserMessage = {
+            id: messageID,
+            sessionID,
+            role: "user",
+            time: { created: timeCreated },
+            agent: prompt.agents?.[0]?.name ?? "build",
+            model: { providerID: "", modelID: "" },
+          }
+          putMessage(sessionID, userMsg)
+          const parts: Part[] = []
+          if (prompt.text) {
+            parts.push({
+              id: `${messageID}_text`,
+              sessionID,
+              messageID,
+              type: "text",
+              text: prompt.text,
+              time: { start: timeCreated, end: timeCreated },
+            })
+          }
+          if (prompt.files) {
+            for (let i = 0; i < prompt.files.length; i++) {
+              const file = prompt.files[i]
+              parts.push({
+                id: `${messageID}_file_${i}`,
+                sessionID,
+                messageID,
+                type: "file",
+                mime: file.mime ?? "application/octet-stream",
+                url: file.uri,
+                filename: file.name,
+              })
+            }
+          }
+          if (parts.length > 0) {
+            setStore("part", messageID, parts)
+          }
+          setStore("session_status", sessionID, { type: "busy" })
+          break
+        }
+
+        case "session.next.step.started": {
+          const { sessionID, assistantMessageID, agent, model, timestamp } = event.properties
+          const timeCreated = toMillis(timestamp)
+          const messages = store.message[sessionID] ?? []
+          const existing = messages.find((m) => m.id === assistantMessageID)
+          if (!existing) {
+            const lastUser = messages.findLast((m) => m.role === "user")
+            const assistantMsg: AssistantMessage = {
+              id: assistantMessageID,
+              sessionID,
+              role: "assistant",
+              parentID: lastUser?.id ?? "",
+              modelID: typeof model === "object" ? model.id : String(model ?? ""),
+              providerID: typeof model === "object" ? model.providerID : "",
+              mode: agent,
+              agent,
+              path: {
+                cwd: project.data.instance.path.directory ?? "",
+                root: project.data.instance.path.worktree ?? project.data.instance.path.directory ?? "",
+              },
+              cost: 0,
+              tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+              time: { created: timeCreated },
+            }
+            putMessage(sessionID, assistantMsg)
+          }
+          if (!store.part[assistantMessageID]) {
+            setStore("part", assistantMessageID, [])
+          }
+          setStore("session_status", sessionID, { type: "busy" })
+          break
+        }
+
+        case "session.next.step.ended": {
+          const { sessionID, assistantMessageID, finish, cost, tokens, timestamp } = event.properties
+          touchMessage(sessionID, assistantMessageID)
+          const timeCompleted = toMillis(timestamp)
+          const messages = store.message[sessionID]
+          if (messages) {
+            const index = messages.findIndex((m) => m.id === assistantMessageID)
+            if (index !== -1) {
+              setStore(
+                "message",
+                sessionID,
+                index,
+                produce((draft) => {
+                  const assistant = draft as AssistantMessage
+                  assistant.time = { ...assistant.time, completed: timeCompleted }
+                  assistant.finish = finish
+                  assistant.cost = cost
+                  assistant.tokens = tokens
+                }),
+              )
+            }
+          }
+          setStore("session_status", sessionID, { type: "idle" })
+          break
+        }
+
+        case "session.next.step.failed": {
+          const { sessionID, assistantMessageID, error, timestamp } = event.properties
+          touchMessage(sessionID, assistantMessageID)
+          const timeCompleted = toMillis(timestamp)
+          const messages = store.message[sessionID]
+          if (messages) {
+            const index = messages.findIndex((m) => m.id === assistantMessageID)
+            if (index !== -1) {
+              setStore(
+                "message",
+                sessionID,
+                index,
+                produce((draft) => {
+                  const assistant = draft as AssistantMessage
+                  assistant.time = { ...assistant.time, completed: timeCompleted }
+                  assistant.finish = "error"
+                  const errMessage =
+                    typeof error === "string"
+                      ? error
+                      : (error as any)?.message ?? JSON.stringify(error ?? "Step failed")
+                  assistant.error = {
+                    name: "UnknownError",
+                    data: { message: errMessage },
+                  }
+                }),
+              )
+            }
+          }
+          setStore("session_status", sessionID, { type: "idle" })
+          break
+        }
+
+        case "session.next.text.started": {
+          const { sessionID, assistantMessageID, textID, timestamp } = event.properties
+          touchPart(sessionID, textID)
+          const timeCreated = toMillis(timestamp)
+          const newPart: TextPart = {
+            id: textID,
+            sessionID,
+            messageID: assistantMessageID,
+            type: "text",
+            text: "",
+            time: { start: timeCreated },
+          }
+          const parts = store.part[assistantMessageID]
+          if (!parts) {
+            setStore("part", assistantMessageID, [newPart])
+            break
+          }
+          if (!parts.some((p) => p.id === textID)) {
+            setStore(
+              "part",
+              assistantMessageID,
+              produce((draft) => {
+                draft.push(newPart)
+              }),
+            )
+          }
+          break
+        }
+
+        case "session.next.text.delta": {
+          const { sessionID, assistantMessageID, textID, delta } = event.properties
+          touchPart(sessionID, textID)
+          const parts = store.part[assistantMessageID]
+          if (!parts) break
+          const index = parts.findIndex((p) => p.id === textID)
+          if (index !== -1) {
+            setStore(
+              "part",
+              assistantMessageID,
+              index,
+              produce((draft) => {
+                if (draft.type === "text") draft.text += delta
+              }),
+            )
+          } else {
+            const newPart: TextPart = {
+              id: textID,
+              sessionID,
+              messageID: assistantMessageID,
+              type: "text",
+              text: delta,
+              time: { start: Date.now() },
+            }
+            setStore(
+              "part",
+              assistantMessageID,
+              produce((draft) => {
+                draft.push(newPart)
+              }),
+            )
+          }
+          break
+        }
+
+        case "session.next.text.ended": {
+          const { sessionID, assistantMessageID, textID, text, timestamp } = event.properties
+          touchPart(sessionID, textID)
+          const timeEnded = toMillis(timestamp)
+          const parts = store.part[assistantMessageID]
+          if (!parts) break
+          const index = parts.findIndex((p) => p.id === textID)
+          if (index !== -1) {
+            setStore(
+              "part",
+              assistantMessageID,
+              index,
+              produce((draft) => {
+                const part = draft as TextPart
+                part.text = text
+                if (part.time) part.time.end = timeEnded
+              }),
+            )
+          }
+          break
+        }
+
+        case "session.next.reasoning.started": {
+          const { sessionID, assistantMessageID, reasoningID, timestamp } = event.properties
+          touchPart(sessionID, reasoningID)
+          const timeCreated = toMillis(timestamp)
+          const newPart: ReasoningPart = {
+            id: reasoningID,
+            sessionID,
+            messageID: assistantMessageID,
+            type: "reasoning",
+            text: "",
+            time: { start: timeCreated },
+          }
+          const parts = store.part[assistantMessageID]
+          if (!parts) {
+            setStore("part", assistantMessageID, [newPart])
+            break
+          }
+          if (!parts.some((p) => p.id === reasoningID)) {
+            setStore(
+              "part",
+              assistantMessageID,
+              produce((draft) => {
+                draft.push(newPart)
+              }),
+            )
+          }
+          break
+        }
+
+        case "session.next.reasoning.delta": {
+          const { sessionID, assistantMessageID, reasoningID, delta } = event.properties
+          touchPart(sessionID, reasoningID)
+          const parts = store.part[assistantMessageID]
+          if (!parts) break
+          const index = parts.findIndex((p) => p.id === reasoningID)
+          if (index !== -1) {
+            setStore(
+              "part",
+              assistantMessageID,
+              index,
+              produce((draft) => {
+                if (draft.type === "reasoning") draft.text += delta
+              }),
+            )
+          } else {
+            const newPart: ReasoningPart = {
+              id: reasoningID,
+              sessionID,
+              messageID: assistantMessageID,
+              type: "reasoning",
+              text: delta,
+              time: { start: Date.now() },
+            }
+            setStore(
+              "part",
+              assistantMessageID,
+              produce((draft) => {
+                draft.push(newPart)
+              }),
+            )
+          }
+          break
+        }
+
+        case "session.next.reasoning.ended": {
+          const { sessionID, assistantMessageID, reasoningID, text, timestamp } = event.properties
+          touchPart(sessionID, reasoningID)
+          const timeEnded = toMillis(timestamp)
+          const parts = store.part[assistantMessageID]
+          if (!parts) break
+          const index = parts.findIndex((p) => p.id === reasoningID)
+          if (index !== -1) {
+            setStore(
+              "part",
+              assistantMessageID,
+              index,
+              produce((draft) => {
+                const part = draft as ReasoningPart
+                part.text = text
+                if (part.time) part.time.end = timeEnded
+              }),
+            )
+          }
+          break
+        }
+
+        case "session.next.tool.input.started": {
+          const { sessionID, assistantMessageID, callID, name } = event.properties
+          touchPart(sessionID, callID)
+          const newPart: ToolPart = {
+            id: callID,
+            sessionID,
+            messageID: assistantMessageID,
+            type: "tool",
+            callID,
+            tool: name,
+            state: { status: "pending", input: {}, raw: "" },
+          }
+          const parts = store.part[assistantMessageID]
+          if (!parts) {
+            setStore("part", assistantMessageID, [newPart])
+            break
+          }
+          if (!parts.some((p) => p.id === callID)) {
+            setStore(
+              "part",
+              assistantMessageID,
+              produce((draft) => {
+                draft.push(newPart)
+              }),
+            )
+          }
+          break
+        }
+
+        case "session.next.tool.input.delta": {
+          const { sessionID, assistantMessageID, callID, delta } = event.properties
+          touchPart(sessionID, callID)
+          const parts = store.part[assistantMessageID]
+          if (!parts) break
+          const index = parts.findIndex((p) => p.id === callID)
+          if (index !== -1) {
+            setStore(
+              "part",
+              assistantMessageID,
+              index,
+              produce((part) => {
+                if (part.type === "tool" && part.state.status === "pending") {
+                  part.state.raw += delta
+                }
+              }),
+            )
+          }
+          break
+        }
+
+        case "session.next.tool.input.ended": {
+          const { sessionID, assistantMessageID, callID, text } = event.properties
+          touchPart(sessionID, callID)
+          const parts = store.part[assistantMessageID]
+          if (!parts) break
+          const index = parts.findIndex((p) => p.id === callID)
+          if (index !== -1) {
+            setStore(
+              "part",
+              assistantMessageID,
+              index,
+              produce((part) => {
+                if (part.type === "tool" && part.state.status === "pending") {
+                  part.state.raw = text
+                }
+              }),
+            )
+          }
+          break
+        }
+
+        case "session.next.tool.called": {
+          const { sessionID, assistantMessageID, callID, tool, input, timestamp } = event.properties
+          touchPart(sessionID, callID)
+          const timeRan = toMillis(timestamp)
+          const runningState: ToolState = {
+            status: "running",
+            input: (input as Record<string, unknown>) ?? {},
+            title: tool,
+            time: { start: timeRan },
+          }
+          const parts = store.part[assistantMessageID]
+          if (!parts) {
+            setStore("part", assistantMessageID, [
+              {
+                id: callID,
+                sessionID,
+                messageID: assistantMessageID,
+                type: "tool",
+                callID,
+                tool,
+                state: runningState,
+              },
+            ])
+            break
+          }
+          const index = parts.findIndex((p) => p.id === callID)
+          if (index !== -1) {
+            setStore(
+              "part",
+              assistantMessageID,
+              index,
+              produce((part) => {
+                if (part.type === "tool") {
+                  part.tool = tool
+                  part.state = runningState
+                }
+              }),
+            )
+          } else {
+            setStore(
+              "part",
+              assistantMessageID,
+              produce((draft) => {
+                draft.push({
+                  id: callID,
+                  sessionID,
+                  messageID: assistantMessageID,
+                  type: "tool",
+                  callID,
+                  tool,
+                  state: runningState,
+                })
+              }),
+            )
+          }
+          break
+        }
+
+        case "session.next.tool.progress": {
+          const { sessionID, assistantMessageID, callID, content } = event.properties
+          touchPart(sessionID, callID)
+          const parts = store.part[assistantMessageID]
+          if (!parts) break
+          const index = parts.findIndex((p) => p.id === callID)
+          if (index !== -1) {
+            setStore(
+              "part",
+              assistantMessageID,
+              index,
+              produce((part) => {
+                if (part.type === "tool" && part.state.status === "running") {
+                  const text = (content ?? [])
+                    .filter((c: any) => c.type === "text")
+                    .map((c: any) => c.text)
+                    .join("")
+                  if (text) {
+                    part.state.metadata = { ...(part.state.metadata ?? {}), progress: text }
+                  }
+                }
+              }),
+            )
+          }
+          break
+        }
+
+        case "session.next.tool.success": {
+          const { sessionID, assistantMessageID, callID, content, result, timestamp } = event.properties
+          touchPart(sessionID, callID)
+          const timeCompleted = toMillis(timestamp)
+          const parts = store.part[assistantMessageID]
+          if (!parts) break
+          const index = parts.findIndex((p) => p.id === callID)
+          if (index !== -1) {
+            setStore(
+              "part",
+              assistantMessageID,
+              index,
+              produce((part) => {
+                if (part.type === "tool") {
+                  const textContent = (content ?? [])
+                    .filter((c: any) => c.type === "text")
+                    .map((c: any) => c.text)
+                    .join("")
+                  const output = textContent || (typeof result === "string" ? result : JSON.stringify(result ?? ""))
+                  const start = (part.state as any).time?.start ?? timeCompleted
+                  part.state = {
+                    status: "completed",
+                    input: (part.state as any).input ?? {},
+                    output,
+                    title: part.tool,
+                    metadata: (part.state as any).metadata ?? {},
+                    time: { start, end: timeCompleted },
+                  }
+                }
+              }),
+            )
+          }
+          break
+        }
+
+        case "session.next.tool.failed": {
+          const { sessionID, assistantMessageID, callID, error, timestamp } = event.properties
+          touchPart(sessionID, callID)
+          const timeCompleted = toMillis(timestamp)
+          const parts = store.part[assistantMessageID]
+          if (!parts) break
+          const index = parts.findIndex((p) => p.id === callID)
+          if (index !== -1) {
+            setStore(
+              "part",
+              assistantMessageID,
+              index,
+              produce((part) => {
+                if (part.type === "tool") {
+                  const errorStr =
+                    typeof error === "string"
+                      ? error
+                      : (error as any)?.message ?? JSON.stringify(error ?? "Tool execution failed")
+                  const start = (part.state as any).time?.start ?? timeCompleted
+                  part.state = {
+                    status: "error",
+                    input: (part.state as any).input ?? {},
+                    error: errorStr,
+                    metadata: (part.state as any).metadata ?? {},
+                    time: { start, end: timeCompleted },
+                  }
+                }
+              }),
+            )
+          }
+          break
+        }
+
         case "session.status": {
           setStore("session_status", event.properties.sessionID, event.properties.status)
           break
         }
 
         case "message.updated": {
-          touchMessage(event.properties.info.sessionID, event.properties.info.id)
-          const messages = store.message[event.properties.info.sessionID]
-          if (!messages) {
-            setStore("message", event.properties.info.sessionID, [event.properties.info])
-            break
-          }
-          const result = search(messages, messageKey(event.properties.info), messageKey)
-          if (result.found) {
-            setStore("message", event.properties.info.sessionID, result.index, reconcile(event.properties.info))
-            break
-          }
-          setStore(
-            "message",
-            event.properties.info.sessionID,
-            produce((draft) => {
-              draft.splice(result.index, 0, event.properties.info)
-            }),
-          )
-          const updated = store.message[event.properties.info.sessionID]
-          if (updated.length > 100) {
-            const oldest = updated[0]
-            batch(() => {
-              setStore(
-                "message",
-                event.properties.info.sessionID,
-                produce((draft) => {
-                  draft.shift()
-                }),
-              )
-              setStore(
-                "part",
-                produce((draft) => {
-                  delete draft[oldest.id]
-                }),
-              )
-            })
-          }
+          putMessage(event.properties.info.sessionID, event.properties.info)
           break
         }
         case "message.removed": {
@@ -582,9 +1167,10 @@ export const {
           setStore("session", reconcile(list))
         },
         status(sessionID: string) {
+          const status = store.session_status[sessionID]
+          if (status?.type === "busy" || status?.type === "retry") return "working"
           const session = result.session.get(sessionID)
-          if (!session) return "idle"
-          if (session.time.compacting) return "compacting"
+          if (session?.time.compacting) return "compacting"
           const messages = store.message[sessionID] ?? []
           const last = messages.at(-1)
           if (!last) return "idle"
@@ -668,6 +1254,23 @@ export const {
       },
       bootstrap,
     }
+
+    createEffect(() => {
+      if (permission.mode !== "auto") return
+      for (const [sessionID, requests] of Object.entries(store.permission)) {
+        if (!requests?.length) continue
+        const session = result.session.get(sessionID)
+        const directory = session?.directory
+        for (const req of requests) {
+          void sdk.client.permission.reply({
+            requestID: req.id,
+            reply: "once",
+            directory,
+          })
+        }
+      }
+    })
+
     return result
   },
 })
