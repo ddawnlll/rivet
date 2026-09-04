@@ -121,7 +121,7 @@ describe("RIVET IDENTITY RECOVERY — Acceptance", () => {
 
   test("10-step Greenfield vs Existing Induction — share identical Hard/Soft semantics (Issue #2)", () => {
     // 1. Greenfield Setup (0 files census)
-    const greenfieldGoalPrompt = "Create new rust microservice in crates/server"
+    const greenfieldGoalPrompt = "Create new rust microservice in crates/server/Cargo.toml"
     const greenfieldState = new HardState()
     const greenfieldWs = new SoftWorkspace(createSessionId(), Revision.ZERO)
 

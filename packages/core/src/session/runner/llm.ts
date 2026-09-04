@@ -211,6 +211,7 @@ const layer = Layer.effect(
       let pendingCompletion = completionResponse
       let requireResponse = responseRequired
       let currentStep = step
+      let toolCallsInTurn = 0
       if (promotion) {
         const cutoff = yield* EventV2.latestSequence(db, session.id)
         let promoted = 0
@@ -243,14 +244,9 @@ const layer = Layer.effect(
           )
         : undefined
 
-      const isExplicitNonGoalTurn = Boolean(
-        latestAdmission &&
-        !latestAdmission.shouldCreateGoal &&
-        latestAdmission.category !== "goal_continuation" &&
-        latestAdmission.category !== "goal_revision",
-      )
-
-      let effectiveGoal = isExplicitNonGoalTurn ? null : semantics.hardState.goalDescription
+      // Active goal preservation: A persistent goal in HardState survives conversational follow-ups.
+      // A turn only erases/lacks a goal if HardState has NO active goal AND the current prompt creates no goal.
+      let effectiveGoal = semantics.hardState.goalDescription
       if (latestAdmission?.shouldCreateGoal && latestAdmission.goalText && latestAdmission.goalText.length > 0) {
         if (semantics.hardState.goalDescription !== latestAdmission.goalText) {
           yield* FlightRecorder.withSpanEffect(
@@ -266,7 +262,7 @@ const layer = Layer.effect(
           )
         }
         effectiveGoal = latestAdmission.goalText
-      } else if (!effectiveGoal && !isExplicitNonGoalTurn && initialUserGoal) {
+      } else if (!effectiveGoal && initialUserGoal) {
         const initialAdmission = TurnAdmissionGate.classify(initialUserGoal)
         if (initialAdmission.shouldCreateGoal && initialAdmission.goalText && initialAdmission.goalText.length > 0) {
           effectiveGoal = initialAdmission.goalText
@@ -285,12 +281,17 @@ const layer = Layer.effect(
           }
         }
       }
+
+      // Explicit non-goal turn only when neither HardState nor the current prompt has a goal
+      const isExplicitNonGoalTurn = !effectiveGoal && Boolean(
+        latestAdmission && !latestAdmission.shouldCreateGoal,
+      )
+
       const isLastStep = agent.info?.steps !== undefined && currentStep >= agent.info.steps
       const responseOnly = responseRequired
       const toolMaterialization = responseOnly || isLastStep ? undefined : yield* tools.materialize(agent.info?.permissions)
       const promptCacheKey = /^ses_[0-9a-f]{64}$/.test(session.id) ? session.id.slice(4) : session.id
-      const hasAutonomousGoal = !isExplicitNonGoalTurn && Boolean(
-        semantics.hardState.goalDescription ||
+      const hasAutonomousGoal = Boolean(
         effectiveGoal ||
         (latestAdmission && latestAdmission.shouldCreateGoal),
       )
@@ -518,6 +519,7 @@ const layer = Layer.effect(
             }
             yield* publish(event)
             if (event.type !== "tool-call") return
+            toolCallsInTurn += 1
             if (semantics.hardState.gateRejectionCount > 0) {
               semantics.hardState.toolCallsAfterRejection++
             }
@@ -632,29 +634,38 @@ const layer = Layer.effect(
               const isClaimNotAdmitted = receipt.reasonCodes?.includes("CLAIM_NOT_ADMITTED")
               const isTestFailure = receipt.reasonCodes?.includes("TEST_FAILED") || receipt.reasonCodes?.includes("TESTS_FAILED")
 
+              const gateRejections = semantics.hardState.gateRejectionCount
+              const maxGateRetries = 3
+              const canRetry = Boolean(hasAutonomousGoal && gateRejections < maxGateRetries)
+
               let directiveMsg = "Inspect and fix the failed check. Do NOT run unrelated commands."
-              let retryAllowed = true
+              let retryAllowed = canRetry
 
               if (isFileNotFound) {
-                directiveMsg = "The requested file or target was not found on disk. If the user asked whether the file exists, report that it does NOT exist. Do NOT search or debug Rivet harness source code."
-                retryAllowed = false
+                directiveMsg = hasAutonomousGoal
+                  ? "The requested file or target was not found on disk. Create or generate the required file using tools before requesting verification again. Do NOT fabricate fake files to satisfy constraints."
+                  : "The requested file or target was not found on disk. If the user asked whether the file exists, report that it does NOT exist. Do NOT search or debug Rivet harness source code."
+                retryAllowed = hasAutonomousGoal && canRetry
               } else if (isPathEscapes) {
                 directiveMsg = "Path resolves outside the permitted workspace scope. If the path constraint is malformed or inapplicable, call invalidate_obligation with the obligation ID and reason. Do NOT search or debug Rivet harness source code."
-                retryAllowed = false
+                retryAllowed = canRetry
               } else if (isClaimNotAdmitted) {
                 directiveMsg = "Required claim has not been admitted. If you observed evidence via tools, call propose_claim with the proposition and supporting evidence ID from RECENT AUTHORITATIVE EVIDENCE. Do NOT search or debug Rivet harness source code."
-                retryAllowed = true
+                retryAllowed = canRetry
               } else if (isTestFailure) {
                 directiveMsg = "Inspect and fix the reported test failure. Do NOT fabricate files or run unrelated commands."
-                retryAllowed = true
+                retryAllowed = canRetry
               } else if (!isPassed) {
                 directiveMsg = "Verification could not be satisfied. Report the unresolved verification state to the user. Do NOT search or debug Rivet harness source code."
-                retryAllowed = false
+                retryAllowed = canRetry
               }
 
               if (!isPassed && !retryAllowed) {
                 needsContinuation = false
                 requireResponse = true
+              } else if (!isPassed && retryAllowed) {
+                needsContinuation = true
+                requireResponse = false
               }
 
               const resultMessage = isPassed
@@ -1143,6 +1154,8 @@ const layer = Layer.effect(
             stallSignature,
             pendingCompletion,
             responseRequired: requireResponse && !publisher.hasUserFacingText(),
+            toolCallsCount: toolCallsInTurn,
+            hasActiveGoal: Boolean(hasAutonomousGoal && openExecutionObligations.length > 0),
           }
         }),
       )
@@ -1153,6 +1166,8 @@ const layer = Layer.effect(
       readonly stallSignature: string
       readonly pendingCompletion?: CompletionProposal
       readonly responseRequired: boolean
+      readonly toolCallsCount: number
+      readonly hasActiveGoal: boolean
     }
     type RunTurn = (
       sessionID: SessionSchema.ID,
@@ -1218,20 +1233,29 @@ const layer = Layer.effect(
           responseRequired = result.responseRequired
           needsContinuation = result.needsContinuation
           if (needsContinuation) {
-            if (result.stallSignature === lastStallSignature) stagnantDrives += 1
-            else {
+            // Stagnation guard applies only to autonomous goal re-drives where no forward progress
+            // (no tool calls) occurred in the turn and open obligations remain unchanged.
+            // Intra-turn tool sequences (e.g. read_file -> read_file -> answer) are normal progress and must not be killed.
+            if (result.hasActiveGoal && result.toolCallsCount === 0) {
+              if (result.stallSignature === lastStallSignature) {
+                stagnantDrives += 1
+              } else {
+                stagnantDrives = 0
+                lastStallSignature = result.stallSignature
+              }
+              if (stagnantDrives >= maxStagnantDrives) {
+                yield* Effect.logWarning("stagnant autonomous drive halted; obligations remain open", {
+                  "session.id": input.sessionID,
+                  step: result.step,
+                  stallSignature: result.stallSignature,
+                })
+                needsContinuation = false
+                stagnantDrives = 0
+                lastStallSignature = undefined
+              }
+            } else {
               stagnantDrives = 0
               lastStallSignature = result.stallSignature
-            }
-            if (stagnantDrives >= maxStagnantDrives) {
-              yield* Effect.logWarning("stagnant autonomous drive halted; obligations remain open", {
-                "session.id": input.sessionID,
-                step: result.step,
-                stallSignature: result.stallSignature,
-              })
-              needsContinuation = false
-              stagnantDrives = 0
-              lastStallSignature = undefined
             }
           } else {
             stagnantDrives = 0

@@ -306,7 +306,17 @@ describe("Epistemic Hell Prevention & Praxis Integrity Regressions", () => {
         "did the test suite pass?",
         "where is sqlite opened in this repository?",
         "does package.json contain effect?",
-        "what license does the README specify?",
+      ]
+
+      for (const prompt of naturalPrompts) {
+        const admission = TurnAdmissionGate.classify(prompt)
+        expect(admission.shouldCreateGoal).toBe(false)
+        expect(admission.shouldCreateObligation).toBe(false)
+        expect(admission.requiresPraxis).toBe(false)
+        expect(admission.category).toBe("conversational_query")
+      }
+
+      const naturalExecutionPrompts = [
         "config dosyasını oluştur",
         "package versionunu değiştir",
         "bu dosyayı sil",
@@ -317,12 +327,13 @@ describe("Epistemic Hell Prevention & Praxis Integrity Regressions", () => {
         "fix the test and verify it passes",
       ]
 
-      for (const prompt of naturalPrompts) {
+      for (const prompt of naturalExecutionPrompts) {
         const admission = TurnAdmissionGate.classify(prompt)
-        expect(admission.shouldCreateGoal).toBe(false)
-        expect(admission.shouldCreateObligation).toBe(false)
-        expect(admission.requiresPraxis).toBe(false)
-        expect(admission.category).toBe("conversational_query")
+        expect(admission.shouldCreateGoal).toBe(true)
+        expect(admission.shouldCreateObligation).toBe(true)
+        expect(admission.requiresPraxis).toBe(true)
+        expect(admission.requiresCompletion).toBe(true)
+        expect(admission.category).toBe("autonomous_goal")
       }
 
       // Explicit protocol markers & slash commands MUST create goals and obligations
