@@ -117,6 +117,16 @@ export function StatusRail(props: StatusRailProps) {
             <text fg={theme.textMuted}>Recall {Math.round(status().recallLatencyMs!)}ms</text>
           </Show>
         </box>
+        <Show when={width() > 100}>
+          <box flexDirection="row" gap={1} alignItems="center">
+            <text fg={theme.textMuted}>
+              {status().gitBranch}@{status().gitSha}
+              {status().isDirty ? " *" : ""}
+            </text>
+            <text fg={theme.textMuted}>·</text>
+            <text fg={theme.textMuted}>pid {status().pid}</text>
+          </box>
+        </Show>
       </Show>
     </box>
   )

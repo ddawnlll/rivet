@@ -1,4 +1,5 @@
 import { createMemo } from "solid-js"
+import { getProvenance } from "./provenance"
 import type { Part, ToolPart } from "@opencode-ai/sdk/v2"
 import type {
   UiChangedFile,
@@ -698,6 +699,7 @@ export function projectRivetState(input: RivetSessionInput): RivetProjection {
   }
 
   // Status rail
+  const prov = getProvenance()
   const statusRail: UiRivetStatus = {
     revision: `r${revisionCounter}`,
     phase,
@@ -710,6 +712,11 @@ export function projectRivetState(input: RivetSessionInput): RivetProjection {
     recallLatencyMs,
     flightTimeline,
     activeSpan,
+    gitBranch: prov.gitBranch,
+    gitSha: prov.gitSha,
+    isDirty: prov.isDirty,
+    pid: prov.pid,
+    processStartTime: prov.processStartTime,
   }
 
   const projectedChangedFiles: UiChangedFile[] = []

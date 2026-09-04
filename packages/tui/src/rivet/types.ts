@@ -147,6 +147,12 @@ export interface UiRivetStatus {
   readonly recallLatencyMs?: number
   readonly flightTimeline?: UiFlightTimeline
   readonly activeSpan?: UiActiveSpan
+  // Runtime provenance — set once at process startup, never changes
+  readonly gitBranch: string
+  readonly gitSha: string
+  readonly isDirty: boolean
+  readonly pid: number
+  readonly processStartTime: string
 }
 
 export interface UiSemanticEvent {
