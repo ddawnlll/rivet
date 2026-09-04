@@ -69,7 +69,7 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
       agentPrompt,
       ...input.system,
       ...(input.user.system ? [input.user.system] : []),
-      ...(rivetBlock && !input.system.some((s) => s.includes("=== AUTHORITATIVE EPISTEMIC STATE ==="))
+      ...(rivetBlock && !input.system.some((s) => s.includes("RIVET COGNITIVE VIEW"))
         ? [rivetBlock]
         : []),
     ]

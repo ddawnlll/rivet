@@ -2468,3 +2468,58 @@ noLLMServer.instance(
     }),
   30_000,
 )
+
+it.instance("steers toolChoice to query_epistemic_state and provides Rivet directives on hard state prompt", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig(providerCfg)
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const chat = yield* sessions.create({ title: "Epistemic Check" })
+    yield* prompt.prompt({
+      sessionID: chat.id,
+      agent: "build",
+      noReply: true,
+      parts: [{ type: "text", text: "hocam selam hard state ne durumda" }],
+    })
+    yield* llm.text("Hard state kontrol ediliyor.")
+
+    const result = yield* prompt.loop({ sessionID: chat.id })
+    expect(result.info.role).toBe("assistant")
+
+    const inputs = yield* llm.inputs
+    expect(inputs).toHaveLength(1)
+    expect(inputs[0]?.tool_choice).toMatchObject({ type: "function", function: { name: "query_epistemic_state" } })
+    const toolNames = (inputs[0]?.tools as any[])?.map((t: any) => t.function?.name ?? t.name)
+    expect(toolNames).toContain("query_epistemic_state")
+    expect(toolNames).toContain("retrieve_memory")
+    const systemMessages = (inputs[0]?.messages as any[])?.filter((m: any) => m.role === "system")
+    expect(systemMessages.some((m: any) => m.content?.includes("You are Rivet's active Cognitive Controller."))).toBe(true)
+    expect(systemMessages.some((m: any) => m.content?.includes("RIVET COGNITIVE VIEW"))).toBe(true)
+    expect(systemMessages.some((m: any) => m.content?.includes("CRITICAL HARNESS DIRECTIVES:"))).toBe(true)
+  }),
+)
+
+it.instance("steers toolChoice to retrieve_memory on memory retrieval prompt", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig(providerCfg)
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const chat = yield* sessions.create({ title: "Memory Check" })
+    yield* prompt.prompt({
+      sessionID: chat.id,
+      agent: "build",
+      noReply: true,
+      parts: [{ type: "text", text: "bi memory retrieve yapar misn" }],
+    })
+    yield* llm.text("Hafıza getiriliyor.")
+
+    const result = yield* prompt.loop({ sessionID: chat.id })
+    expect(result.info.role).toBe("assistant")
+
+    const inputs = yield* llm.inputs
+    expect(inputs).toHaveLength(1)
+    expect(inputs[0]?.tool_choice).toMatchObject({ type: "function", function: { name: "retrieve_memory" } })
+    const toolNames = (inputs[0]?.tools as any[])?.map((t: any) => t.function?.name ?? t.name)
+    expect(toolNames).toContain("retrieve_memory")
+  }),
+)
