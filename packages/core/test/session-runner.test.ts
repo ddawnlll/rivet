@@ -663,7 +663,7 @@ describe("SessionRunnerLLM", () => {
         { role: "user", content: [{ type: "text", text: "First" }] },
         { role: "user", content: [{ type: "text", text: "/goal Second" }] },
       ])
-      expect(yield* session.messages({ sessionID })).toHaveLength(2)
+      expect(yield* session.messages({ sessionID })).toHaveLength(3)
     }),
   )
 
@@ -1368,9 +1368,6 @@ describe("SessionRunnerLLM", () => {
       expect(requests[0]?.tools.map((tool) => tool.name)).toEqual([
         "echo",
         "defect",
-        "request_completion",
-        "request_verification",
-        "invalidate_obligation",
         "propose_claim",
         "query_epistemic_state",
         "retrieve_memory",
@@ -3453,7 +3450,7 @@ describe("SessionRunnerLLM", () => {
       yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Run and verify the semantic echo" }), resume: false })
       responses = [
         [
-          LLMEvent.toolCall({ id: "call-test-output", name: "echo", input: { text: "1 pass" } }),
+          LLMEvent.toolCall({ id: "call-test-output", name: "echo", input: { text: "semantic echo" } }),
           LLMEvent.stepFinish({ index: 0, reason: "tool-calls" }),
           LLMEvent.finish({ reason: "tool-calls" }),
         ],
@@ -3467,6 +3464,13 @@ describe("SessionRunnerLLM", () => {
           LLMEvent.stepFinish({ index: 0, reason: "tool-calls" }),
           LLMEvent.finish({ reason: "tool-calls" }),
         ],
+        [
+          LLMEvent.textStart({ id: "completion-answer" }),
+          LLMEvent.textDelta({ id: "completion-answer", text: "The semantic echo is verified and complete." }),
+          LLMEvent.textEnd({ id: "completion-answer" }),
+          LLMEvent.stepFinish({ index: 0, reason: "stop" }),
+          LLMEvent.finish({ reason: "stop" }),
+        ],
       ]
 
       yield* session.resume(sessionID)
@@ -3476,7 +3480,54 @@ describe("SessionRunnerLLM", () => {
       expect(semantic.hardState.passingVerificationReceipts()).toHaveLength(1)
       expect(semantic.hardState.openObligationIds()).toHaveLength(0)
       expect(semantic.hardState.completedTasks.size).toBe(1)
-      expect(requests).toHaveLength(3)
+      expect(requests).toHaveLength(4)
+      expect(
+        (yield* session.messages({ sessionID })).some(
+          (message) => message.type === "assistant" && message.content.some((part) => part.type === "text" && part.text.includes("semantic echo")),
+        ),
+      ).toBe(true)
+    }),
+  )
+
+  it.effect("delivers the provider configuration answer and reuses it after a correction", () =>
+    Effect.gen(function* () {
+      yield* setup
+      requests.length = 0
+      const session = yield* SessionV2.Service
+      const answer = "Configure the custom provider in ~/.config/rivet/config.json."
+      responses = [
+        [
+          LLMEvent.textStart({ id: "config-answer" }),
+          LLMEvent.textDelta({ id: "config-answer", text: answer }),
+          LLMEvent.textEnd({ id: "config-answer" }),
+          LLMEvent.stepFinish({ index: 0, reason: "stop" }),
+          LLMEvent.finish({ reason: "stop" }),
+        ],
+      ]
+
+      yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Where do we configure the custom provider?" }), resume: false })
+      yield* session.resume(sessionID)
+
+      const firstMessages = yield* session.messages({ sessionID })
+      expect(firstMessages.some((message) => message.type === "assistant" && message.content.some((part) => part.type === "text" && part.text === answer))).toBe(true)
+      expect(requests).toHaveLength(1)
+
+      responses = [
+        [
+          LLMEvent.textStart({ id: "config-correction-answer" }),
+          LLMEvent.textDelta({ id: "config-correction-answer", text: answer }),
+          LLMEvent.textEnd({ id: "config-correction-answer" }),
+          LLMEvent.stepFinish({ index: 0, reason: "stop" }),
+          LLMEvent.finish({ reason: "stop" }),
+        ],
+      ]
+      yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "You didn't answer my question." }), resume: false })
+      yield* session.resume(sessionID)
+
+      expect(requests).toHaveLength(2)
+      expect(requests[1]?.tools?.some((tool) => ["request_completion", "request_verification"].includes(tool.name))).toBe(false)
+      expect(requests[1]?.messages.some((message) => message.role === "assistant" && message.content.some((part) => part.type === "text" && part.text === answer))).toBe(true)
+      expect((yield* SessionSemantics.load((yield* Database.Service).db, sessionID)).hardState.goalDescription).toBeNull()
     }),
   )
 

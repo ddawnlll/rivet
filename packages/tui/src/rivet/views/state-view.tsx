@@ -530,9 +530,90 @@ export function StateView(props: StateViewProps) {
                   RUNTIME ECONOMICS & TOKEN EFFICIENCY
                 </text>
                 <text fg={theme.textMuted}>
-                  Real-time prompt-cache reuse, token expenditures, and SQLite associative recall latencies.
+                  Real-time flight recorder timeline, prompt-cache reuse, token expenditures, and latencies.
                 </text>
               </box>
+
+              {/* Flight Recorder Timeline Card */}
+              <Show when={rivet.statusRail.flightTimeline !== undefined || rivet.statusRail.activeSpan !== undefined}>
+                <box
+                  flexDirection="column"
+                  paddingLeft={2}
+                  paddingRight={2}
+                  paddingTop={1}
+                  paddingBottom={1}
+                  backgroundColor={theme.backgroundPanel}
+                  border={["left"]}
+                  borderColor={theme.primary}
+                >
+                  <text fg={theme.primary} attributes={TextAttributes.BOLD}>
+                    FLIGHT RECORDER · TURN {rivet.statusRail.flightTimeline?.turnId ?? 1} · {((rivet.statusRail.flightTimeline?.totalElapsedMs ?? 0) / 1000).toFixed(3)}s
+                  </text>
+                  <Show when={rivet.statusRail.activeSpan !== undefined}>
+                    <box flexDirection="row" gap={1} marginTop={1}>
+                      <text fg={theme.textMuted}>NOW:</text>
+                      <text fg={theme.info} attributes={TextAttributes.BOLD}>
+                        ● {rivet.statusRail.activeSpan?.label}
+                      </text>
+                    </box>
+                  </Show>
+                  <box flexDirection="column" marginTop={1} gap={0}>
+                    <text fg={theme.textMuted} attributes={TextAttributes.BOLD}>
+                      TURN TIMELINE
+                    </text>
+                    <box flexDirection="row" justifyContent="space-between">
+                      <text fg={theme.text}>Rivet-owned</text>
+                      <text fg={theme.text}>
+                        {rivet.statusRail.flightTimeline?.rivetOwnedMs !== undefined
+                          ? `${rivet.statusRail.flightTimeline.rivetOwnedMs.toFixed(1)} ms`
+                          : "—"}
+                      </text>
+                    </box>
+                    <box flexDirection="row" justifyContent="space-between">
+                      <text fg={theme.text}>Provider → TTFT</text>
+                      <text fg={theme.text}>
+                        {rivet.statusRail.flightTimeline?.providerTtftMs !== undefined
+                          ? `${rivet.statusRail.flightTimeline.providerTtftMs.toFixed(1)} ms`
+                          : "—"}
+                      </text>
+                    </box>
+                    <box flexDirection="row" justifyContent="space-between">
+                      <text fg={theme.text}>Provider generation</text>
+                      <text fg={theme.text}>
+                        {rivet.statusRail.flightTimeline?.providerGenerationMs !== undefined
+                          ? `${rivet.statusRail.flightTimeline.providerGenerationMs.toFixed(1)} ms`
+                          : "—"}
+                      </text>
+                    </box>
+                    <box flexDirection="row" justifyContent="space-between">
+                      <text fg={theme.text}>Tool execution</text>
+                      <text fg={theme.text}>
+                        {rivet.statusRail.flightTimeline?.toolExecutionMs !== undefined && rivet.statusRail.flightTimeline.toolExecutionMs > 0
+                          ? `${rivet.statusRail.flightTimeline.toolExecutionMs.toFixed(1)} ms`
+                          : "—"}
+                      </text>
+                    </box>
+                    <box flexDirection="row" justifyContent="space-between">
+                      <text fg={theme.text}>Settlement & Finalize</text>
+                      <text fg={theme.text}>
+                        {rivet.statusRail.flightTimeline?.providerFinalizeMs !== undefined && rivet.statusRail.flightTimeline.providerFinalizeMs > 0
+                          ? `${rivet.statusRail.flightTimeline.providerFinalizeMs.toFixed(1)} ms`
+                          : "—"}
+                      </text>
+                    </box>
+                    <box flexDirection="row" justifyContent="space-between" marginTop={1}>
+                      <text fg={theme.warning} attributes={TextAttributes.BOLD}>
+                        Unattributed
+                      </text>
+                      <text fg={theme.warning} attributes={TextAttributes.BOLD}>
+                        {rivet.statusRail.flightTimeline?.unattributedMs !== undefined
+                          ? `${rivet.statusRail.flightTimeline.unattributedMs.toFixed(1)} ms`
+                          : "—"}
+                      </text>
+                    </box>
+                  </box>
+                </box>
+              </Show>
 
               {/* Cache Efficiency Card */}
               <box

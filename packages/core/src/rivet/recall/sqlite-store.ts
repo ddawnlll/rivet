@@ -15,6 +15,7 @@ import { type EmbeddingProvider } from "./embedding"
 import { AssociativeRetrievalEngine, type RetrievalWeights, DEFAULT_RETRIEVAL_WEIGHTS } from "./engine"
 import { NoesisRecallProjector } from "./projector"
 import { Revision, Scope, createWorkspaceId } from "../types"
+import { FlightRecorder } from "../flight-recorder"
 
 /**
  * SqliteRecallStore serves exclusively as a DETERMINISTIC REFERENCE ORACLE and compatibility fallback.
@@ -187,6 +188,14 @@ export class SqliteRecallStore implements RecallStore {
   }
 
   recall = (query: RecallQuery): Effect.Effect<readonly RecallCandidate[], RecallError> => {
+    return FlightRecorder.withSpanEffect(
+      "recall",
+      "recall.query",
+      this.recallInternal(query),
+    )
+  }
+
+  private recallInternal = (query: RecallQuery): Effect.Effect<readonly RecallCandidate[], RecallError> => {
     const self = this
     return Effect.gen(function* () {
       // Check total document count

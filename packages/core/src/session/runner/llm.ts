@@ -45,9 +45,13 @@ import { makeLocationNode } from "../../effect/app-node"
 import { llmClient } from "../../effect/app-node-platform"
 import { TokenLedger } from "../../rivet/token-ledger"
 import { createInvocationId } from "../../rivet/types"
+import type { CompletionProposal } from "../../rivet/accp"
 import { TurnAdmissionGate } from "../../rivet/turn-admission"
 import { AutomaticRecallAdmissionHook } from "../../rivet/recall"
 import { type ModelInvocation, ModelInvocationGate, type ModelInvocationReceipt } from "../invocation"
+import { FlightRecorder, ExecutionEconomics, type ActiveSpanContext } from "../../rivet/flight-recorder"
+import { SessionTable } from "../sql"
+import { eq } from "drizzle-orm"
 
 /**
  * Runs one durable Rivet Session until its Harness-owned continuation settles.
@@ -187,6 +191,8 @@ const layer = Layer.effect(
       promotion: SessionInput.Delivery | undefined,
       step: number,
       recoverOverflow?: typeof compaction.compactAfterOverflow,
+      completionResponse?: CompletionProposal,
+      responseRequired = completionResponse !== undefined,
     ) {
       const session = yield* getSession(sessionID)
       if (session.location.directory !== location.directory || session.location.workspaceID !== location.workspaceID)
@@ -202,6 +208,8 @@ const layer = Layer.effect(
       const toolFibers = yield* FiberSet.make<void, ToolOutputStore.Error>()
       let needsContinuation = false
       let completionAccepted = false
+      let pendingCompletion = completionResponse
+      let requireResponse = responseRequired
       let currentStep = step
       if (promotion) {
         const cutoff = yield* EventV2.latestSequence(db, session.id)
@@ -216,43 +224,72 @@ const layer = Layer.effect(
       const system =
         initialized ?? (yield* SessionContextEpoch.prepare(db, events, loadSystemContext(agent), session.id))
       const model = yield* models.resolve(session)
+      const turnSpan = FlightRecorder.startSpan("turn", "turn.total", {
+        sessionId: session.id,
+        turnId: currentStep,
+        model: model.id,
+        provider: model.provider,
+      })
       const entries = yield* SessionHistory.entriesForRunner(db, session.id, system.baselineSeq)
       const context = entries.map((entry) => entry.message)
       const initialUserGoal = context.find((message) => message.type === "user")?.text
       const latestUserMessage = context.findLast((message) => message.type === "user")?.text
       const latestAdmission = latestUserMessage
-        ? TurnAdmissionGate.classify(latestUserMessage, semantics.hardState.goalDescription)
+        ? FlightRecorder.withSpan(
+            "turn",
+            "turn.admission",
+            () => TurnAdmissionGate.classify(latestUserMessage, semantics.hardState.goalDescription),
+            { sessionId: session.id, turnId: currentStep },
+          )
         : undefined
 
-      let effectiveGoal = semantics.hardState.goalDescription
+      const isExplicitNonGoalTurn = Boolean(
+        latestAdmission &&
+        !latestAdmission.shouldCreateGoal &&
+        latestAdmission.category !== "goal_continuation" &&
+        latestAdmission.category !== "goal_revision",
+      )
+
+      let effectiveGoal = isExplicitNonGoalTurn ? null : semantics.hardState.goalDescription
       if (latestAdmission?.shouldCreateGoal && latestAdmission.goalText && latestAdmission.goalText.length > 0) {
         if (semantics.hardState.goalDescription !== latestAdmission.goalText) {
-          yield* semantics.ensureGoal(
-            events,
-            latestAdmission.goalText,
-            session.location.directory,
-            latestAdmission.obligationKind,
+          yield* FlightRecorder.withSpanEffect(
+            "turn",
+            "goal.compile",
+            semantics.ensureGoal(
+              events,
+              latestAdmission.goalText,
+              session.location.directory,
+              latestAdmission.obligationKind,
+            ),
+            { sessionId: session.id, turnId: currentStep },
           )
         }
         effectiveGoal = latestAdmission.goalText
-      } else if (!effectiveGoal && initialUserGoal) {
+      } else if (!effectiveGoal && !isExplicitNonGoalTurn && initialUserGoal) {
         const initialAdmission = TurnAdmissionGate.classify(initialUserGoal)
         if (initialAdmission.shouldCreateGoal && initialAdmission.goalText && initialAdmission.goalText.length > 0) {
           effectiveGoal = initialAdmission.goalText
           if (!semantics.hardState.goalDescription) {
-            yield* semantics.ensureGoal(
-              events,
-              effectiveGoal,
-              session.location.directory,
-              initialAdmission.obligationKind,
+            yield* FlightRecorder.withSpanEffect(
+              "turn",
+              "goal.compile",
+              semantics.ensureGoal(
+                events,
+                effectiveGoal,
+                session.location.directory,
+                initialAdmission.obligationKind,
+              ),
+              { sessionId: session.id, turnId: currentStep },
             )
           }
         }
       }
       const isLastStep = agent.info?.steps !== undefined && currentStep >= agent.info.steps
-      const toolMaterialization = isLastStep ? undefined : yield* tools.materialize(agent.info?.permissions)
+      const responseOnly = responseRequired
+      const toolMaterialization = responseOnly || isLastStep ? undefined : yield* tools.materialize(agent.info?.permissions)
       const promptCacheKey = /^ses_[0-9a-f]{64}$/.test(session.id) ? session.id.slice(4) : session.id
-      const hasAutonomousGoal = Boolean(
+      const hasAutonomousGoal = !isExplicitNonGoalTurn && Boolean(
         semantics.hardState.goalDescription ||
         effectiveGoal ||
         (latestAdmission && latestAdmission.shouldCreateGoal),
@@ -345,11 +382,20 @@ const layer = Layer.effect(
           ]
       const invocationID = createInvocationId(`${session.id}:${currentStep}`)
       yield* semantics.recordInvocation(events, invocationID, model.id)
-      const cognitiveView = yield* semantics.cognitiveView({
-        repositoryId: session.location.directory,
-        goalDescription: (semantics.hardState.goalDescription ?? effectiveGoal) ?? undefined,
-        userPrompt: (latestUserMessage ?? effectiveGoal) ?? undefined,
-      })
+      const cognitiveView = yield* FlightRecorder.withSpanEffect(
+        "cognitive_view",
+        "cognitive_view.compile",
+        semantics.cognitiveView({
+          repositoryId: session.location.directory,
+          goalDescription: hasAutonomousGoal
+            ? ((semantics.hardState.goalDescription ?? effectiveGoal) ?? undefined)
+            : isExplicitNonGoalTurn
+              ? ""
+              : undefined,
+          userPrompt: (latestUserMessage ?? effectiveGoal) ?? undefined,
+        }),
+        { sessionId: session.id, turnId: currentStep },
+      )
       const invocation: ModelInvocation = {
         systemContract: { name: "Rivet Harness", version: "1", authority: "Harness" },
         cognitiveView,
@@ -363,34 +409,40 @@ const layer = Layer.effect(
         agent.info?.system === undefined
           ? `${AgentPlugin.BUILD_SYSTEM}\n\n${baseRivetSystem}`
           : baseRivetSystem
-      const toolChoice = isLastStep ? "none" : undefined
-      const request = LLM.request({
-        model,
-        http: {
-          headers: {
-            "x-session-affinity": session.id,
-            "X-Session-Id": session.id,
-            ...(session.parentID ? { "x-parent-session-id": session.parentID } : {}),
-          },
-        },
-        providerOptions: { openai: { promptCacheKey } },
-        system: [agent.info?.system, system.baseline, rivetStateSystem]
-          .filter((part): part is string => part !== undefined && part.length > 0)
-          .map(SystemPart.make),
-        cognitiveView,
-        invocation,
-        metadata: {
-          rivet: {
-            invocation: invocation.invocation,
-            hardRevision: cognitiveView.hardRevision.toJSON(),
-            goal: cognitiveView.goalDescription,
-            receipt: gateEvaluation.receipt,
-          },
-        },
-        messages: [...toLLMMessages(context, model), ...(isLastStep ? [Message.assistant(MAX_STEPS_PROMPT)] : [])],
-        tools: availableActions,
-        toolChoice,
-      })
+      const toolChoice = responseOnly || isLastStep ? "none" : undefined
+      const request = FlightRecorder.withSpan(
+        "cognitive_view",
+        "prompt.assemble",
+        () =>
+          LLM.request({
+            model,
+            http: {
+              headers: {
+                "x-session-affinity": session.id,
+                "X-Session-Id": session.id,
+                ...(session.parentID ? { "x-parent-session-id": session.parentID } : {}),
+              },
+            },
+            providerOptions: { openai: { promptCacheKey } },
+            system: [agent.info?.system, system.baseline, rivetStateSystem]
+              .filter((part): part is string => part !== undefined && part.length > 0)
+              .map(SystemPart.make),
+            cognitiveView,
+            invocation,
+            metadata: {
+              rivet: {
+                invocation: invocation.invocation,
+                hardRevision: cognitiveView.hardRevision.toJSON(),
+                goal: cognitiveView.goalDescription,
+                receipt: gateEvaluation.receipt,
+              },
+            },
+            messages: [...toLLMMessages(context, model), ...(isLastStep ? [Message.assistant(MAX_STEPS_PROMPT)] : [])],
+            tools: availableActions,
+            toolChoice,
+          }),
+        { sessionId: session.id, turnId: currentStep },
+      )
       TokenLedger.record({
         sessionID: session.id,
         step: currentStep,
@@ -417,9 +469,46 @@ const layer = Layer.effect(
       const publish = (event: LLMEvent, outputPaths: ReadonlyArray<string> = []) =>
         withPublication(publisher.publish(event, outputPaths))
       let overflowFailure: ProviderErrorEvent | undefined
+      const providerReqSpan = FlightRecorder.startSpan("provider", "provider.request", {
+        sessionId: session.id,
+        turnId: currentStep,
+        parentSpanId: turnSpan.spanId,
+        provider: model.provider,
+        model: model.id,
+      })
+      let ttftSpan: ActiveSpanContext | undefined = FlightRecorder.startSpan("provider", "provider.wait_first_token", {
+        sessionId: session.id,
+        turnId: currentStep,
+        parentSpanId: providerReqSpan.spanId,
+        provider: model.provider,
+        model: model.id,
+      })
+      let streamSpan: ActiveSpanContext | undefined = undefined
+      let firstTokenSeen = false
+
       const providerStream = llm.stream(request).pipe(
         Stream.runForEach((event) =>
           Effect.gen(function* () {
+            if (!firstTokenSeen && (
+              event.type === "text-start" ||
+              event.type === "text-delta" ||
+              event.type === "reasoning-start" ||
+              event.type === "reasoning-delta" ||
+              event.type === "tool-call"
+            )) {
+              firstTokenSeen = true
+              if (ttftSpan) {
+                FlightRecorder.endSpan(ttftSpan, { status: "ok" })
+                ttftSpan = undefined
+              }
+              streamSpan = FlightRecorder.startSpan("provider", "provider.stream", {
+                sessionId: session.id,
+                turnId: currentStep,
+                parentSpanId: providerReqSpan.spanId,
+                provider: model.provider,
+                model: model.id,
+              })
+            }
             if (overflowFailure || publisher.hasProviderError()) return
             if (LLMEvent.is.providerError(event)) {
               if (isContextOverflowFailure(event) && !publisher.hasAssistantStarted()) {
@@ -442,26 +531,39 @@ const layer = Layer.effect(
             needsContinuation = true
             const assistantMessageID = yield* publisher.assistantMessageID(event.id)
             const rivetScope = semantics.scope(session.location.directory)
-            const commitment = semantics.admitProviderCommitment(
-              { id: event.id, name: event.name, input: event.input },
-              rivetScope,
-              {
-                repository: session.location.directory,
-                currentRevision: semantics.hardState.revision,
-                allowedScope: rivetScope,
-                allowedCapabilities: ["file.read", "file.write", "process.exec", "tool.*"],
-                allowMaterial: true,
-                humanApproved: true,
-              },
+            const commitment = FlightRecorder.withSpan(
+              "governance",
+              "accp.evaluate",
+              () =>
+                semantics.admitProviderCommitment(
+                  { id: event.id, name: event.name, input: event.input },
+                  rivetScope,
+                  {
+                    repository: session.location.directory,
+                    currentRevision: semantics.hardState.revision,
+                    allowedScope: rivetScope,
+                    allowedCapabilities: ["file.read", "file.write", "process.exec", "tool.*"],
+                    allowMaterial: true,
+                    humanApproved: true,
+                  },
+                ),
+              { sessionId: session.id, turnId: currentStep, tool: event.name },
             )
             if (commitment.commitment.type === "completion_proposal") {
+              const proposal = commitment.commitment.proposal
               const decision = yield* semantics.proposeCompletion(events, {
-                summary: commitment.commitment.proposal.summary,
-                taskId: commitment.commitment.proposal.taskId,
-                baseRevision: commitment.commitment.proposal.baseRevision,
+                summary: proposal.summary,
+                taskId: proposal.taskId,
+                baseRevision: proposal.baseRevision,
+                responseDelivered: false,
               })
-              completionAccepted = decision.completed
-              const rejectionMessage = !decision.completed
+              if (decision.internalClosureReady) {
+                pendingCompletion = proposal
+                requireResponse = true
+              }
+              const rejectionMessage = decision.internalClosureReady
+                ? "Rivet internal completion checks passed. The requested answer has not been delivered yet; respond to the user with the answer before completion."
+                : !decision.completed
                 ? [
                     "Rivet completion rejected: The proposed transition did not satisfy the contract.",
                     "Status: BLOCKED",
@@ -477,7 +579,7 @@ const layer = Layer.effect(
                   id: event.id,
                   name: event.name,
                   result: {
-                    type: decision.completed ? "text" : "error",
+                    type: decision.internalClosureReady ? "text" : "error",
                     value: rejectionMessage,
                   },
                 }),
@@ -485,16 +587,23 @@ const layer = Layer.effect(
               return
             }
             if (commitment.commitment.type === "verification_request") {
-              const verification = yield* semantics.verifyLastExecution(events, commitment.commitment.request).pipe(Effect.exit)
+              const verification = yield* FlightRecorder.withSpanEffect(
+                "governance",
+                "praxis.evaluate",
+                semantics.verifyLastExecution(events, commitment.commitment.request),
+                { sessionId: session.id, turnId: currentStep },
+              ).pipe(Effect.exit)
               if (Exit.isFailure(verification)) {
                 semantics.hardState.gateRejectionCount++
+                needsContinuation = false
+                requireResponse = true
                 yield* publish(
                   LLMEvent.toolResult({
                     id: event.id,
                     name: event.name,
                     result: {
                       type: "error",
-                      value: `Praxis verification rejected: ${String(Cause.squash(verification.cause))}\nDirective: Inspect and fix the failed check. Do NOT run unrelated commands.`,
+                      value: `Praxis verification rejected: ${String(Cause.squash(verification.cause))}\nDirective: Non-actionable verifier rejection. State remains unresolved. Answer the user with available evidence. Do NOT search or debug Rivet harness source code.`,
                     },
                   }),
                 )
@@ -517,9 +626,40 @@ const layer = Layer.effect(
               const isPassed = receipt.passed
               const diagnosticsMsg = receipt.diagnostics ? `\nDiagnostics: ${receipt.diagnostics}` : ""
               const reasonCodesMsg = receipt.reasonCodes?.length ? `\nReason Codes: ${receipt.reasonCodes.join(", ")}` : ""
+
+              const isFileNotFound = receipt.reasonCodes?.includes("FILE_NOT_FOUND")
+              const isPathEscapes = receipt.reasonCodes?.includes("PATH_ESCAPES_REPOSITORY")
+              const isClaimNotAdmitted = receipt.reasonCodes?.includes("CLAIM_NOT_ADMITTED")
+              const isTestFailure = receipt.reasonCodes?.includes("TEST_FAILED") || receipt.reasonCodes?.includes("TESTS_FAILED")
+
+              let directiveMsg = "Inspect and fix the failed check. Do NOT run unrelated commands."
+              let retryAllowed = true
+
+              if (isFileNotFound) {
+                directiveMsg = "The requested file or target was not found on disk. If the user asked whether the file exists, report that it does NOT exist. Do NOT search or debug Rivet harness source code."
+                retryAllowed = false
+              } else if (isPathEscapes) {
+                directiveMsg = "Path resolves outside the permitted workspace scope. If the path constraint is malformed or inapplicable, call invalidate_obligation with the obligation ID and reason. Do NOT search or debug Rivet harness source code."
+                retryAllowed = false
+              } else if (isClaimNotAdmitted) {
+                directiveMsg = "Required claim has not been admitted. If you observed evidence via tools, call propose_claim with the proposition and supporting evidence ID from RECENT AUTHORITATIVE EVIDENCE. Do NOT search or debug Rivet harness source code."
+                retryAllowed = true
+              } else if (isTestFailure) {
+                directiveMsg = "Inspect and fix the reported test failure. Do NOT fabricate files or run unrelated commands."
+                retryAllowed = true
+              } else if (!isPassed) {
+                directiveMsg = "Verification could not be satisfied. Report the unresolved verification state to the user. Do NOT search or debug Rivet harness source code."
+                retryAllowed = false
+              }
+
+              if (!isPassed && !retryAllowed) {
+                needsContinuation = false
+                requireResponse = true
+              }
+
               const resultMessage = isPassed
                 ? `Praxis verification passed for obligation [${receipt.obligationId}].`
-                : `Praxis verification failed for obligation [${receipt.obligationId}].${reasonCodesMsg}${diagnosticsMsg}\nDirective: Inspect and fix the reported test failure. Do NOT fabricate files or run unrelated commands.`
+                : `Praxis verification failed for obligation [${receipt.obligationId}].${reasonCodesMsg}${diagnosticsMsg}\nDirective: ${directiveMsg}`
               yield* publish(
                 LLMEvent.toolResult({
                   id: event.id,
@@ -717,42 +857,104 @@ const layer = Layer.effect(
               return
             }
 
-            yield* Effect.uninterruptibleMask((restore) =>
-              restore(
-                toolMaterialization.settle({
-                  sessionID: session.id,
-                  agent: agent.id,
-                  assistantMessageID,
-                  action: authorizedAction,
+            const isRivetHarnessGoal = /debug\s+rivet|rivet\s+harness|develop\s+rivet|test\s+rivet/i.test(
+              (latestUserMessage ?? "") + " " + (effectiveGoal ?? ""),
+            )
+            const targetStr = String(event.input && typeof event.input === "object" ? JSON.stringify(event.input) : "")
+            const targetsHarnessInternals =
+              targetStr.includes("packages/core/src/rivet") ||
+              targetStr.includes("packages/core/src/session") ||
+              /\b(?:praxis\.ts|noesis\.ts|accp\.ts|goal-compiler\.ts)\b/i.test(targetStr)
+
+            if (!isRivetHarnessGoal && targetsHarnessInternals) {
+              needsContinuation = false
+              requireResponse = true
+              yield* publish(
+                LLMEvent.toolResult({
+                  id: event.id,
+                  name: event.name,
+                  result: {
+                    type: "error",
+                    value: "ACCP policy violation: Active goal cannot expand into inspecting or debugging Rivet's internal runtime harness or governance modules solely because internal verification or bookkeeping failed. Deliver the response to the user with existing workspace observations.",
+                  },
                 }),
-              ).pipe(
-                Effect.tap((settlement) => {
-                  if (!settlement.receipt) return Effect.void
-                  const receipt = settlement.receipt
-                  return withSemanticCommit(
-                    Effect.gen(function* () {
-                      yield* semantics.recordExecution(events, receipt)
-                      yield* semantics.recordObservation(events, receipt, receipt.outputSummary)
-                      yield* semantics.admitEvidence(events, receipt, receipt.capability, receipt.outputSummary)
-                    }),
-                  )
-                }),
-                Effect.flatMap((settlement) =>
-                  publish(
-                    LLMEvent.toolResult({
-                      id: event.id,
-                      name: event.name,
-                      result: settlement.result,
-                      output: settlement.output,
-                    }),
-                    settlement.outputPaths ?? [],
-                  ),
+              )
+              return
+            }
+
+            yield* FlightRecorder.withSpanEffect(
+              "tool",
+              "tool.execute",
+              Effect.uninterruptibleMask((restore) =>
+                restore(
+                  toolMaterialization.settle({
+                    sessionID: session.id,
+                    agent: agent.id,
+                    assistantMessageID,
+                    action: authorizedAction,
+                  }),
+                ).pipe(
+                  Effect.tap((settlement) => {
+                    if (!settlement.receipt) return Effect.void
+                    const receipt = settlement.receipt
+                    return withSemanticCommit(
+                      FlightRecorder.withSpanEffect(
+                        "tool",
+                        "tool.result_process",
+                        Effect.gen(function* () {
+                          yield* semantics.recordExecution(events, receipt)
+                          yield* semantics.recordObservation(events, receipt, receipt.outputSummary)
+                          yield* semantics.admitEvidence(events, receipt, receipt.capability, receipt.outputSummary)
+                        }),
+                        { sessionId: session.id, turnId: currentStep, tool: event.name },
+                      ),
+                    )
+                  }),
+                  Effect.flatMap((settlement) => {
+                    const result =
+                      settlement.receipt?.evidenceId && settlement.result.type === "text"
+                        ? {
+                            ...settlement.result,
+                            value: `${settlement.result.value}\n[Admitted Evidence ID: ${settlement.receipt.evidenceId}]`,
+                          }
+                        : settlement.result
+                    return publish(
+                      LLMEvent.toolResult({
+                        id: event.id,
+                        name: event.name,
+                        result,
+                        output: settlement.output,
+                      }),
+                      settlement.outputPaths ?? [],
+                    )
+                  }),
                 ),
               ),
+              { sessionId: session.id, turnId: currentStep, tool: event.name },
             ).pipe(FiberSet.run(toolFibers))
           }),
         ),
-        Effect.ensuring(withPublication(publisher.flush())),
+        Effect.ensuring(
+          withPublication(
+            FlightRecorder.withSpanEffect(
+              "provider",
+              "provider.finalize",
+              Effect.gen(function* () {
+                if (ttftSpan) {
+                  FlightRecorder.endSpan(ttftSpan, { status: "ok" })
+                  ttftSpan = undefined
+                }
+                if (streamSpan) {
+                  FlightRecorder.endSpan(streamSpan, { status: "ok" })
+                  streamSpan = undefined
+                }
+                FlightRecorder.endSpan(providerReqSpan, { status: "ok" })
+                yield* publisher.flush()
+              }),
+              { sessionId: session.id, turnId: currentStep },
+            ),
+          ),
+        ),
       )
 
       return yield* Effect.uninterruptibleMask((restore) =>
@@ -816,6 +1018,37 @@ const layer = Layer.effect(
                 files,
               }),
             )
+            FlightRecorder.endSpan(turnSpan, { status: "ok" })
+            const turnEconomics = ExecutionEconomics.getTurnEconomics(currentStep, session.id)
+            const sessionMeta = (session as any).metadata as Record<string, unknown> | undefined
+            yield* db
+              .update(SessionTable)
+              .set({
+                metadata: {
+                  ...(sessionMeta ?? {}),
+                  rivet: {
+                    ...((sessionMeta?.rivet as Record<string, unknown>) ?? {}),
+                    economics: {
+                      cacheHitRatio: turnEconomics.tokens.cacheHitRatio,
+                      totalTokens: turnEconomics.tokens.inputTokens,
+                      cachedTokens: turnEconomics.tokens.cacheReadTokens,
+                      recallLatencyMs: turnEconomics.timing.recallLatencyMs,
+                      wallClockMs: turnEconomics.timing.wallClockMs,
+                      rivetOwnedMs: turnEconomics.timing.rivetOwnedMs,
+                      providerTtftMs: turnEconomics.timing.providerTtftMs,
+                      providerGenerationMs: turnEconomics.timing.providerGenerationMs,
+                      toolExecutionMs: turnEconomics.timing.toolExecutionMs,
+                      unattributedMs: turnEconomics.timing.unattributedMs,
+                    },
+                    flightRecorder: {
+                      turnId: currentStep,
+                      breakdown: FlightRecorder.getTurnTimeline(currentStep, session.id),
+                    },
+                  },
+                },
+              })
+              .where(eq(SessionTable.id, session.id))
+              .pipe(Effect.orDie)
           }
           if (publisher.hasProviderError())
             yield* withPublication(publisher.failUnsettledTools("Tool execution interrupted"))
@@ -824,6 +1057,21 @@ const layer = Layer.effect(
           if (stream._tag === "Failure") return yield* Effect.failCause(stream.cause)
           if (settled._tag === "Failure" && Cause.hasInterrupts(settled.cause))
             return yield* Effect.failCause(settled.cause)
+
+          if (pendingCompletion && publisher.hasUserFacingText()) {
+            const proposal = pendingCompletion
+            const decision = yield* semantics.proposeCompletion(events, {
+              summary: proposal.summary,
+              taskId: proposal.taskId,
+              baseRevision: proposal.baseRevision,
+              responseDelivered: true,
+            })
+            completionAccepted = decision.completed
+            if (decision.completed) {
+              pendingCompletion = undefined
+              requireResponse = false
+            }
+          }
 
           const openObligations = semantics.hardState.openObligationIds()
           const openExecutionObligations = openObligations.filter(
@@ -863,10 +1111,11 @@ const layer = Layer.effect(
           )
           const hasPremiseConflict =
             cognitiveView.premiseConflicts.length > 0 || semantics.hardState.premiseConflicts.length > 0
-          const isAutonomousGoal = Boolean(hasAutonomousGoal && latestAdmission?.shouldCreateGoal)
+          const isAutonomousGoal = Boolean(hasAutonomousGoal && latestAdmission?.requiresCompletion)
           const shouldDirect =
             hasUnclosedObligations &&
             isAutonomousGoal &&
+            !responseOnly &&
             !hasPremiseConflict &&
             directivesSinceLastUser.length === 0 &&
             !isMaxSteps &&
@@ -886,45 +1135,56 @@ const layer = Layer.effect(
           }
 
           return {
-            needsContinuation: !completionAccepted && !publisher.hasProviderError() && needsContinuation,
+            needsContinuation:
+              !completionAccepted &&
+              !publisher.hasProviderError() &&
+              (needsContinuation || pendingCompletion !== undefined || (requireResponse && !publisher.hasUserFacingText())),
             step: currentStep,
             stallSignature,
+            pendingCompletion,
+            responseRequired: requireResponse && !publisher.hasUserFacingText(),
           }
         }),
       )
     }, Effect.scoped)
+    type RunTurnResult = {
+      readonly needsContinuation: boolean
+      readonly step: number
+      readonly stallSignature: string
+      readonly pendingCompletion?: CompletionProposal
+      readonly responseRequired: boolean
+    }
     type RunTurn = (
       sessionID: SessionSchema.ID,
       promotion: SessionInput.Delivery | undefined,
       step: number,
-    ) => Effect.Effect<
-      { readonly needsContinuation: boolean; readonly step: number; readonly stallSignature: string },
-      RunError
-    >
+      completionResponse?: CompletionProposal,
+      responseRequired?: boolean,
+    ) => Effect.Effect<RunTurnResult, RunError>
 
-    const runAfterOverflowCompaction: RunTurn = Effect.fnUntraced(function* (sessionID, promotion, step) {
-      return yield* runTurnAttempt(sessionID, promotion, step).pipe(
+    const runAfterOverflowCompaction: RunTurn = Effect.fnUntraced(function* (sessionID, promotion, step, completionResponse, responseRequired) {
+      return yield* runTurnAttempt(sessionID, promotion, step, undefined, completionResponse, responseRequired).pipe(
         Effect.catchDefect(
           Effect.fnUntraced(function* (defect) {
             if (!(defect instanceof TurnTransitionError)) return yield* Effect.die(defect)
             if (defect.transition._tag === "ContinueAfterOverflowCompaction")
               return yield* Effect.die("Post-compaction provider attempt cannot recover another overflow")
             yield* Effect.yieldNow
-            return yield* runAfterOverflowCompaction(sessionID, undefined, defect.transition.step)
+            return yield* runAfterOverflowCompaction(sessionID, undefined, defect.transition.step, completionResponse, responseRequired)
           }),
         ),
       )
     })
 
-    const runTurn: RunTurn = Effect.fnUntraced(function* (sessionID, promotion, step) {
-      return yield* runTurnAttempt(sessionID, promotion, step, compaction.compactAfterOverflow).pipe(
+    const runTurn: RunTurn = Effect.fnUntraced(function* (sessionID, promotion, step, completionResponse, responseRequired) {
+      return yield* runTurnAttempt(sessionID, promotion, step, compaction.compactAfterOverflow, completionResponse, responseRequired).pipe(
         Effect.catchDefect(
           Effect.fnUntraced(function* (defect) {
             if (!(defect instanceof TurnTransitionError)) return yield* Effect.die(defect)
             yield* Effect.yieldNow
             if (defect.transition._tag === "ContinueAfterOverflowCompaction")
-              return yield* runAfterOverflowCompaction(sessionID, undefined, defect.transition.step)
-            return yield* runTurn(sessionID, undefined, defect.transition.step)
+              return yield* runAfterOverflowCompaction(sessionID, undefined, defect.transition.step, completionResponse, responseRequired)
+            return yield* runTurn(sessionID, undefined, defect.transition.step, completionResponse, responseRequired)
           }),
         ),
       )
@@ -943,6 +1203,8 @@ const layer = Layer.effect(
       while (shouldRun) {
         let needsContinuation = true
         let step = 1
+        let pendingCompletion: CompletionProposal | undefined
+        let responseRequired = false
         // Bounded retry policy: autonomous re-drive may continue only while
         // obligation/verification state changes. An unchanged stall signature
         // means the model is burning cycles on the same failure; stop the
@@ -951,7 +1213,9 @@ const layer = Layer.effect(
         let lastStallSignature: string | undefined
         let stagnantDrives = 0
         while (needsContinuation) {
-          const result = yield* runTurn(input.sessionID, promotion, step)
+          const result: RunTurnResult = yield* runTurn(input.sessionID, promotion, step, pendingCompletion, responseRequired)
+          pendingCompletion = result.pendingCompletion
+          responseRequired = result.responseRequired
           needsContinuation = result.needsContinuation
           if (needsContinuation) {
             if (result.stallSignature === lastStallSignature) stagnantDrives += 1

@@ -248,6 +248,30 @@ describe("Rivet Constitutional Invariants (I-01 .. I-20 / CT-001 .. CT-008)", ()
     expect(decision.finalReceipt).toBeNull()
   })
 
+  test("I-11a: Internal closure readiness cannot substitute for response delivery", () => {
+    const proposal = {
+      taskId: createTaskId(),
+      summary: "Answer delivered",
+      claimsAddressed: [],
+      baseRevision: Revision.ZERO,
+      timestamp: new Date().toISOString(),
+    }
+    const decision = AccpSemanticGate.evaluateCompletion(
+      proposal,
+      Revision.ZERO,
+      [],
+      [createReceiptId()],
+      undefined,
+      false,
+    )
+
+    expect(decision.internalClosureReady).toBe(true)
+    expect(decision.responseDelivered).toBe(false)
+    expect(decision.completed).toBe(false)
+    expect(decision.finalReceipt).toBeNull()
+    expect(decision.blockers).toContain("User-facing response has not been delivered")
+  })
+
   test("I-12: Completion requires current-revision verification", () => {
     const proposal = {
       taskId: createTaskId(),

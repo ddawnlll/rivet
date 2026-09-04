@@ -176,6 +176,7 @@ export type NoesisEvent =
       readonly evidenceId: EvidenceId
       readonly source: string
       readonly summary: string
+      readonly executionReceiptId?: ReceiptId
       readonly timestamp: string
     }
   | {
@@ -291,6 +292,8 @@ function isRuntimeTelemetryEvent(event: NoesisEvent): boolean {
 export class HardState {
   revision: Revision = Revision.ZERO
   goalDescription: string | null = null
+  /** Revision at which the currently active goal was admitted. */
+  activeGoalRevision: Revision | null = null
   activeTaskId: TaskId | null = null
   readonly claims: Map<ClaimId, ClaimRecord> = new Map()
   readonly contradictions: Map<ClaimId, ContradictionRecord> = new Map()
@@ -303,6 +306,8 @@ export class HardState {
   readonly invalidatedObligations: Map<ObligationId, string> = new Map()
   readonly inquiryReceipts: Map<ObligationId, InquiryReceipt> = new Map()
   readonly evidence: Map<EvidenceId, string> = new Map()
+  readonly evidenceSources: Map<EvidenceId, string> = new Map()
+  readonly evidenceExecutionReceipts: Map<EvidenceId, ReceiptId> = new Map()
   readonly executionReceipts: ExecutionReceipt[] = []
   readonly observations: Map<string, Observation> = new Map()
   readonly verificationReceipts: Map<ObligationId, VerificationReceipt> = new Map()
@@ -370,6 +375,7 @@ export class HardState {
     switch (event.type) {
       case "goal_set": {
         this.goalDescription = (event as any).goal ?? (event as any).description ?? null
+        this.activeGoalRevision = this.revision
         if ((event as any).goalId) this.activeTaskId = (event as any).goalId
         break
       }
@@ -539,6 +545,8 @@ export class HardState {
       }
       case "evidence_recorded": {
         this.evidence.set(event.evidenceId, event.summary)
+        this.evidenceSources.set(event.evidenceId, event.source)
+        if (event.executionReceiptId) this.evidenceExecutionReceipts.set(event.evidenceId, event.executionReceiptId)
         break
       }
       case "execution_recorded": {
@@ -693,14 +701,38 @@ export class HardState {
   closureReceiptIds(): ReceiptId[] {
     const receipts: ReceiptId[] = []
     for (const receipt of this.verificationReceipts.values()) {
-      if (receipt.passed) {
+      if (
+        receipt.passed &&
+        this.isCurrentGoalReceipt(receipt.verifiedScope.revision) &&
+        this.verificationReceiptMatchesPredicate(receipt)
+      ) {
         receipts.push(receipt.receiptId)
       }
     }
     for (const receipt of this.inquiryReceipts.values()) {
-      receipts.push(receipt.receiptId)
+      if (this.isCurrentGoalReceipt(receipt.satisfiedAtRevision)) receipts.push(receipt.receiptId)
     }
     return receipts.sort()
+  }
+
+  private isCurrentGoalReceipt(revision: Revision): boolean {
+    return this.activeGoalRevision === null || revision.value >= this.activeGoalRevision.value
+  }
+
+  private verificationReceiptMatchesPredicate(receipt: VerificationReceipt): boolean {
+    const predicate = this.obligationPredicates.get(receipt.obligationId)
+    if (!predicate) return true
+    if (!receipt.predicate) return false
+    switch (predicate.type) {
+      case "command_pass":
+        return receipt.predicate === `command_pass: "${predicate.command}" exit=${predicate.expectedExitCode}`
+      case "file_constraint":
+        return receipt.predicate === `file_constraint: path "${predicate.path}" mustExist=${predicate.mustExist}${predicate.contentPattern ? ` content~"${predicate.contentPattern}"` : ""}`
+      case "claims_verified":
+        return receipt.predicate === `claims_verified: ${predicate.claimPropositions.join("; ")}`
+      case "human_approval":
+        return receipt.predicate === "human_approval: explicit user approval required"
+    }
   }
 
   static replay(events: readonly NoesisEvent[]): HardState {
@@ -897,38 +929,40 @@ export class CognitiveView {
       lines.push("Directives: Address ONLY the blockers listed above. Do not invent verification work or run unrelated commands. For questions and inquiries, answer the user directly in prose.\n")
     }
 
-    if (this.obligations.length > 0) {
-      lines.push("### OBLIGATION CONTRACTS & CLOSURE REQUIREMENTS:")
-      for (const o of this.obligations) {
-        lines.push(`- [OBLIGATION: ${o.id}]`)
-        lines.push(`  Type: ${o.type.toUpperCase()}`)
-        lines.push(`  Objective: ${o.objective}`)
-        lines.push(`  Status: ${o.status.toUpperCase()}`)
-        lines.push(`  Closure:`)
-      lines.push(`    Required Proof: ${o.closure.requiredProofKind}`)
-      lines.push(`    Verifier: ${o.closure.verifier}`)
-      lines.push(`    Praxis: ${o.closure.praxisRequired ? "REQUIRED" : "NOT REQUIRED"}`)
-      if (o.predicateSummary) lines.push(`    Predicate: ${o.predicateSummary}`)
-      if (o.legalTransitions && o.legalTransitions.length > 0) {
-        lines.push(`    Legal Transitions: ${o.legalTransitions.join(" | ")}`)
-      }
-      lines.push(`    Accepted Proof Refs: ${o.closure.acceptedProofRefs.length > 0 ? o.closure.acceptedProofRefs.join(", ") : "(None yet)"}`)
-        if (o.blockers.length > 0) {
-          lines.push(`  Blockers:`)
-          for (const b of o.blockers) {
-            lines.push(`    - ${b}`)
+    if (this.completionReadiness.status !== "NOT_REQUIRED" && Boolean(this.goalDescription)) {
+      if (this.obligations.length > 0) {
+        lines.push("### OBLIGATION CONTRACTS & CLOSURE REQUIREMENTS:")
+        for (const o of this.obligations) {
+          lines.push(`- [OBLIGATION: ${o.id}]`)
+          lines.push(`  Type: ${o.type.toUpperCase()}`)
+          lines.push(`  Objective: ${o.objective}`)
+          lines.push(`  Status: ${o.status.toUpperCase()}`)
+          lines.push(`  Closure:`)
+          lines.push(`    Required Proof: ${o.closure.requiredProofKind}`)
+          lines.push(`    Verifier: ${o.closure.verifier}`)
+          lines.push(`    Praxis: ${o.closure.praxisRequired ? "REQUIRED" : "NOT REQUIRED"}`)
+          if (o.predicateSummary) lines.push(`    Predicate: ${o.predicateSummary}`)
+          if (o.legalTransitions && o.legalTransitions.length > 0) {
+            lines.push(`    Legal Transitions: ${o.legalTransitions.join(" | ")}`)
           }
-        } else {
-          lines.push(`  Blockers: (None - satisfied)`)
+          lines.push(`    Accepted Proof Refs: ${o.closure.acceptedProofRefs.length > 0 ? o.closure.acceptedProofRefs.join(", ") : "(None yet)"}`)
+          if (o.blockers.length > 0) {
+            lines.push(`  Blockers:`)
+            for (const b of o.blockers) {
+              lines.push(`    - ${b}`)
+            }
+          } else {
+            lines.push(`  Blockers: (None - satisfied)`)
+          }
         }
+        lines.push("")
+      } else if (this.openObligations.length > 0) {
+        lines.push("### OPEN OBLIGATIONS TO VERIFY (Use internal ID only when proposing verification):")
+        for (const o of this.openObligations) {
+          lines.push(`- [ ] ${o}`)
+        }
+        lines.push("")
       }
-      lines.push("")
-    } else if (this.openObligations.length > 0) {
-      lines.push("### OPEN OBLIGATIONS TO VERIFY (Use internal ID only when proposing verification):")
-      for (const o of this.openObligations) {
-        lines.push(`- [ ] ${o}`)
-      }
-      lines.push("")
     } else {
       lines.push("### OPEN OBLIGATIONS TO VERIFY:")
       lines.push("- (None open)")

@@ -17,6 +17,9 @@ import type {
   UiTestFile,
   UiTestResult,
   UiWorkspace,
+  UiFlightTimeline,
+  UiTimelinePhase,
+  UiActiveSpan,
 } from "./types"
 
 export interface RivetSessionInput {
@@ -620,12 +623,79 @@ export function projectRivetState(input: RivetSessionInput): RivetProjection {
     phase = "implementing"
   }
 
-  // Extract token economics from metadata if present
+  // Extract token economics and flight recorder from metadata if present
   const metaEconomics = asRecord(metaRivet?.economics)
   const cacheHitRatio = typeof metaEconomics?.cacheHitRatio === "number" ? metaEconomics.cacheHitRatio : undefined
   const totalTokens = typeof metaEconomics?.totalTokens === "number" ? metaEconomics.totalTokens : undefined
   const cachedTokens = typeof metaEconomics?.cachedTokens === "number" ? metaEconomics.cachedTokens : undefined
   const recallLatencyMs = typeof metaEconomics?.recallLatencyMs === "number" ? metaEconomics.recallLatencyMs : undefined
+
+  const metaFlight = asRecord(metaRivet?.flightRecorder)
+  let flightTimeline: UiFlightTimeline | undefined
+  if (metaFlight && metaFlight.breakdown) {
+    const bd = asRecord(metaFlight.breakdown)
+    if (bd) {
+      const phasesRaw = Array.isArray(bd.phaseBreakdown) ? (bd.phaseBreakdown as any[]) : []
+      const phases: UiTimelinePhase[] = phasesRaw.map((p) => {
+        const op = asString(p.operation) ?? "unknown"
+        let label = op
+        if (op === "turn.admission") label = "Admission"
+        else if (op === "hardstate.load") label = "HardState"
+        else if (op === "recall.query") label = "Recall"
+        else if (op === "cognitive_view.compile") label = "Cognitive View"
+        else if (op === "prompt.assemble") label = "Prompt assembly"
+        else if (op === "provider.wait_first_token") label = "Provider → TTFT"
+        else if (op === "provider.stream") label = "Provider generation"
+        else if (op === "provider.finalize") label = "Settlement"
+        else if (op === "tool.execute") label = "Tool execution"
+        else if (op === "praxis.evaluate") label = "Praxis"
+        else if (op === "tui.render") label = "TUI render"
+
+        return {
+          operation: op,
+          label,
+          category: asString(p.category) ?? "runtime",
+          durationMs: typeof p.durationMs === "number" ? p.durationMs : 0,
+          exclusiveMs: typeof p.exclusiveDurationMs === "number" ? p.exclusiveDurationMs : undefined,
+        }
+      })
+
+      flightTimeline = {
+        turnId: typeof metaFlight.turnId === "number" ? metaFlight.turnId : 1,
+        totalElapsedMs: typeof bd.totalElapsedMs === "number" ? bd.totalElapsedMs : 0,
+        rivetOwnedMs: typeof bd.rivetOwnedMs === "number" ? bd.rivetOwnedMs : 0,
+        providerTtftMs: typeof bd.providerTtftMs === "number" ? bd.providerTtftMs : 0,
+        providerGenerationMs: typeof bd.providerGenerationMs === "number" ? bd.providerGenerationMs : 0,
+        providerFinalizeMs: typeof bd.providerFinalizeMs === "number" ? bd.providerFinalizeMs : 0,
+        toolExecutionMs: typeof bd.toolExecutionMs === "number" ? bd.toolExecutionMs : 0,
+        unattributedMs: typeof bd.unattributedMs === "number" ? bd.unattributedMs : 0,
+        phases,
+      }
+    }
+  }
+
+  // Active span calculation if turn is busy
+  let activeSpan: UiActiveSpan | undefined
+  if (input.sessionStatus === "busy") {
+    const runningTool = toolParts.find((p) => p.state.status === "running")
+    if (runningTool) {
+      activeSpan = {
+        operation: "tool.execute",
+        label: `Tool: ${runningTool.tool}`,
+        category: "tool",
+        elapsedMs: 0,
+        startTimestamp: Date.now(),
+      }
+    } else {
+      activeSpan = {
+        operation: "provider.stream",
+        label: "Provider generation",
+        category: "provider",
+        elapsedMs: 0,
+        startTimestamp: Date.now(),
+      }
+    }
+  }
 
   // Status rail
   const statusRail: UiRivetStatus = {
@@ -638,6 +708,8 @@ export function projectRivetState(input: RivetSessionInput): RivetProjection {
     totalTokens,
     cachedTokens,
     recallLatencyMs,
+    flightTimeline,
+    activeSpan,
   }
 
   const projectedChangedFiles: UiChangedFile[] = []

@@ -97,6 +97,7 @@ const registryLayer = Layer.effect(
         idempotencyKey: toolCallID,
         actionFingerprint: JSON.stringify(input.action.proposal.parameters),
         capability: input.action.proposal.capability,
+        target: input.action.proposal.target,
         success: result.type !== "error",
         exitCode: result.type === "error" ? 1 : 0,
         scope: input.action.scope,

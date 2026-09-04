@@ -4,6 +4,14 @@
 - The default branch in this repo is `dev`.
 - Local `main` ref may not exist; use `dev` or `origin/dev` for diffs.
 
+## Mandatory repository context
+
+Before changing code, read `MIGRATION.md`, `IMPLEMENTATION.md`, and `AUDIT.md`.
+The active Rivet runtime is the TypeScript implementation under `packages/core`
+and `packages/opencode`. `legacy/rivet-rust` is an archived reference
+implementation; do not modify it unless the user explicitly requests Rust or
+archived-reference work.
+
 ## Branch Names
 
 Use a short branch name of at most three words, separated by hyphens. Do not use slashes or type prefixes such as `feat/` or `fix/`.

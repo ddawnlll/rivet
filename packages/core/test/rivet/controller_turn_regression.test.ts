@@ -124,11 +124,10 @@ describe("Controller Turn & Epistemic Boundary Regressions", () => {
 
   test("5. Explicit code execution requests create autonomous execution goals", () => {
     const executionPrompts = [
-      "Fix memory leak in session buffer",
+      "/goal Fix memory leak in session buffer",
       "/goal migrate database to sqlite",
       "[RIVET GOAL EXECUTION]\nGoal: Refactor auth module",
-      "Implement user login endpoint in server",
-      "düzelt şu bug'ı ve testleri geçir",
+      "/goal Implement user login endpoint in server",
     ]
 
     for (const prompt of executionPrompts) {
@@ -145,7 +144,7 @@ describe("Controller Turn & Epistemic Boundary Regressions", () => {
     expect(classifyGoalKind("Selam nasılsın")).toBe("epistemic_inquiry")
     expect(classifyGoalKind("Can you explain Praxis?")).toBe("epistemic_inquiry")
     expect(classifyGoalKind("/inquiry hard state ne durumda?")).toBe("epistemic_inquiry")
-    expect(classifyGoalKind("Fix the bug in parser.ts")).toBe("execution")
+    expect(classifyGoalKind("/goal fix the bug in parser.ts")).toBe("execution")
     expect(classifyGoalKind("/goal implement feature X")).toBe("execution")
   })
 
@@ -268,5 +267,17 @@ describe("Controller Turn & Epistemic Boundary Regressions", () => {
     expect(decision.completed).toBe(true)
     expect(decision.finalReceipt).toBe(passingReceipt)
     expect(decision.blockers).toHaveLength(0)
+  })
+
+  test("10. A response complaint reuses conversation state instead of creating execution work", () => {
+    const correction = TurnAdmissionGate.classify("You didn't answer my question.", "Existing execution goal")
+    expect(correction.shouldCreateGoal).toBe(false)
+    expect(correction.shouldCreateObligation).toBe(false)
+    expect(correction.requiresPraxis).toBe(false)
+    expect(correction.requiresCompletion).toBe(false)
+
+    const configQuestion = TurnAdmissionGate.classify("Where do we configure the custom provider?")
+    expect(configQuestion.shouldCreateGoal).toBe(false)
+    expect(configQuestion.shouldCreateObligation).toBe(false)
   })
 })

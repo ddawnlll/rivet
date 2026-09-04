@@ -121,6 +121,8 @@ export interface ExecutionReceipt {
   readonly idempotencyKey: string
   readonly actionFingerprint: string
   readonly capability: string
+  /** The authoritative action target, used to bind verification to execution. */
+  readonly target?: string
   readonly success: boolean
   readonly exitCode?: number | null
   readonly scope: Scope
@@ -156,6 +158,10 @@ export interface VerificationReceipt {
   readonly passed: boolean
   readonly evidenceId: EvidenceId
   readonly verifiedScope: Scope
+  /** Canonical predicate description that this receipt actually evaluated. */
+  readonly predicate?: string
+  /** The concrete execution receipt used by execution-backed verification. */
+  readonly executionReceiptId?: ReceiptId
   readonly diagnostics?: string | null
   readonly reasonCodes?: readonly string[]
   readonly timestamp: string
@@ -194,6 +200,9 @@ export interface CompletionProposal {
 export interface CompletionDecision {
   readonly taskId: TaskId
   readonly completed: boolean
+  /** Internal obligation/receipt closure is distinct from user-facing delivery. */
+  readonly internalClosureReady: boolean
+  readonly responseDelivered: boolean
   readonly requiredObligationsSatisfied: boolean
   readonly unclosedObligations: ObligationId[]
   readonly finalReceipt?: ReceiptId | null
@@ -490,7 +499,7 @@ export class AccpSemanticGate {
     readonly totalObligations?: number
     readonly hasActiveGoal?: boolean
   }): CompletionReadiness {
-    if (!input.hasActiveGoal && input.unclosedObligations.length === 0) {
+    if (input.hasActiveGoal === false) {
       return {
         status: "NOT_REQUIRED",
         blockers: [],
@@ -593,12 +602,14 @@ export class AccpSemanticGate {
     obligationContext?: {
       readonly getKind?: (id: ObligationId) => ObligationKind
       readonly getDescription?: (id: ObligationId) => string
-    }
+    },
+    responseDelivered = true,
   ): CompletionDecision {
     const obligationsSatisfied = unclosedObligations.length === 0
     const revisionMatches = proposal.baseRevision.equals(currentRevision)
     const hasPassingReceipts = passingReceipts.length > 0
-    const completed = obligationsSatisfied && revisionMatches && hasPassingReceipts
+    const internalClosureReady = obligationsSatisfied && revisionMatches && hasPassingReceipts
+    const completed = internalClosureReady && responseDelivered
 
     const blockers: string[] = []
     const structuredBlockers: CompletionBlocker[] = []
@@ -639,9 +650,20 @@ export class AccpSemanticGate {
       })
     }
 
+    if (internalClosureReady && !responseDelivered) {
+      const reason = "User-facing response has not been delivered"
+      blockers.push(reason)
+      structuredBlockers.push({
+        reason,
+        actionableGuidance: "Emit the requested answer before accepting internal completion.",
+      })
+    }
+
     return {
       taskId: proposal.taskId,
       completed,
+      internalClosureReady,
+      responseDelivered,
       requiredObligationsSatisfied: obligationsSatisfied && revisionMatches,
       unclosedObligations: [...unclosedObligations],
       finalReceipt: completed ? passingReceipts[passingReceipts.length - 1] ?? null : null,

@@ -92,6 +92,12 @@ export function StatusRail(props: StatusRailProps) {
           <text fg={theme.text}>{status().changedFileCount} changed</text>
           <text fg={theme.textMuted}>·</text>
           <text fg={verifyLabel().fg}>{verifyLabel().full}</text>
+          <Show when={status().activeSpan !== undefined}>
+            <text fg={theme.textMuted}>·</text>
+            <text fg={theme.info} attributes={TextAttributes.BOLD}>
+              ● {status().activeSpan!.label}
+            </text>
+          </Show>
           <Show when={status().cacheHitRatio !== undefined}>
             <text fg={theme.textMuted}>·</text>
             <text

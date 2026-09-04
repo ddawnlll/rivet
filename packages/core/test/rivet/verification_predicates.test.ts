@@ -3,6 +3,7 @@ import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { Effect, Exit } from "effect"
+import type { ExecutionReceipt } from "@opencode-ai/core/rivet/accp"
 import { Database } from "@opencode-ai/core/database/database"
 import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
@@ -10,7 +11,7 @@ import { EventV2 } from "@opencode-ai/core/event"
 import { SessionV2 } from "@opencode-ai/core/session"
 import { SessionSemantics } from "@opencode-ai/core/session/semantics"
 import { AbsolutePath } from "@opencode-ai/core/schema"
-import { createObligationId, createClaimId, createEvidenceId } from "../../src/rivet/types"
+import { createObligationId, createClaimId, createEvidenceId, createReceiptId } from "../../src/rivet/types"
 import { testEffect } from "../lib/effect"
 
 const it = testEffect(
@@ -173,6 +174,76 @@ describe("Predicate-scoped Praxis verification (file_constraint / claims_verifie
       expect(result.receipt.passed).toBe(false)
       expect(result.receipt.reasonCodes).toContain("PATH_ESCAPES_REPOSITORY")
       expect(semantics.hardState.openObligationIds()).toContain(escapingId)
+    }),
+  )
+
+  it.effect("does not launder an unrelated passing test into config-location authority", () =>
+    Effect.gen(function* () {
+      const events = yield* EventV2.Service
+      const { db } = yield* Database.Service
+      const sessionID = SessionV2.ID.make("ses_verify_predicates_laundering")
+      const tmp = yield* Effect.acquireRelease(
+        Effect.sync(() => fs.mkdtempSync(path.join(os.tmpdir(), "rivet-laundering-"))),
+        (dir) => Effect.sync(() => fs.rmSync(dir, { recursive: true, force: true })),
+      )
+      const semantics = yield* SessionSemantics.load(db, sessionID)
+      yield* semantics.ensureGoal(events, "Locate the custom provider configuration", tmp, "execution")
+
+      const obligationId = semantics.hardState.openObligationIds()[0]!
+      const evidenceId = createEvidenceId("ev-unrelated-test")
+      const execution: ExecutionReceipt = {
+        receiptId: createReceiptId("rcpt-unrelated-test"),
+        actionId: "act-unrelated-test" as ExecutionReceipt["actionId"],
+        idempotencyKey: "unrelated-test",
+        actionFingerprint: JSON.stringify({ command: "bun test" }),
+        capability: "process.exec",
+        target: "bun test",
+        success: true,
+        exitCode: 0,
+        scope: semantics.scope(tmp),
+        risk: "inspect",
+        humanApproved: false,
+        outputSummary: "1 passing test",
+        observations: { value: "1 pass\n0 fail" },
+        evidenceId,
+        executionDurationMs: 1,
+        timestamp: new Date().toISOString(),
+      }
+      yield* semantics.append(events, { type: "execution_recorded", receipt: execution, timestamp: execution.timestamp })
+      yield* semantics.append(events, {
+        type: "evidence_recorded",
+        evidenceId,
+        source: "process.exec",
+        summary: "bun test completed: 1 pass",
+        executionReceiptId: execution.receiptId,
+        timestamp: new Date().toISOString(),
+      })
+
+      const predicate = semantics.hardState.obligationPredicates.get(obligationId)
+      expect(predicate?.type).toBe("claims_verified")
+      if (predicate?.type !== "claims_verified") return
+      yield* semantics.append(events, {
+        type: "claim_asserted",
+        claimId: createClaimId("claim-unrelated-config"),
+        proposition: predicate.claimPropositions[0]!,
+        status: "supported",
+        evidence: [evidenceId],
+        scope: semantics.scope(tmp),
+        timestamp: new Date().toISOString(),
+      })
+
+      const result = yield* semantics.verifyLastExecution(events, {
+        obligationId,
+        predicate: "bun test",
+        targetScope: semantics.scope(tmp),
+        timeoutSeconds: 30,
+        timestamp: new Date().toISOString(),
+      })
+      expect(result.type).toBe("praxis")
+      if (result.type !== "praxis") return
+      expect(result.receipt.passed).toBe(false)
+      expect(result.receipt.reasonCodes).toContain("CLAIM_EVIDENCE_NOT_RELEVANT")
+      expect(semantics.hardState.openObligationIds()).toContain(obligationId)
     }),
   )
 

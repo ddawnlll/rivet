@@ -197,6 +197,7 @@ export class PraxisEngine {
       passed,
       evidenceId: createEvidenceId(),
       verifiedScope: req.targetScope,
+      predicate: req.predicate,
       diagnostics,
       reasonCodes,
       timestamp: new Date().toISOString(),

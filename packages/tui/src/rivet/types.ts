@@ -107,6 +107,34 @@ export interface UiHistoryEntry {
 
 export type UiTaskPhase = "orientation" | "diagnosis" | "planning" | "implementing" | "verifying" | "idle"
 
+export interface UiTimelinePhase {
+  readonly operation: string
+  readonly label: string
+  readonly category: string
+  readonly durationMs: number
+  readonly exclusiveMs?: number
+}
+
+export interface UiFlightTimeline {
+  readonly turnId: number
+  readonly totalElapsedMs: number
+  readonly rivetOwnedMs: number
+  readonly providerTtftMs: number
+  readonly providerGenerationMs: number
+  readonly providerFinalizeMs: number
+  readonly toolExecutionMs: number
+  readonly unattributedMs: number
+  readonly phases: readonly UiTimelinePhase[]
+}
+
+export interface UiActiveSpan {
+  readonly operation: string
+  readonly label: string
+  readonly category: string
+  readonly elapsedMs: number
+  readonly startTimestamp: number
+}
+
 export interface UiRivetStatus {
   readonly revision: string
   readonly phase: UiTaskPhase
@@ -117,6 +145,8 @@ export interface UiRivetStatus {
   readonly totalTokens?: number
   readonly cachedTokens?: number
   readonly recallLatencyMs?: number
+  readonly flightTimeline?: UiFlightTimeline
+  readonly activeSpan?: UiActiveSpan
 }
 
 export interface UiSemanticEvent {

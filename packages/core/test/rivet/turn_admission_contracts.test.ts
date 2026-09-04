@@ -8,8 +8,8 @@ import {
 } from "../../src/rivet"
 
 describe("Turn Semantics & Lifecycle Admission Gate (v0.3.1 / I-21)", () => {
-  test("I-21.1: Phatic turns do not create goals or obligations", () => {
-    const phaticExamples = [
+  test("I-21.1: Natural language conversational turns (phatic, conversational, queries) do not create goals or obligations", () => {
+    const conversationalExamples = [
       "Selam",
       "selam!",
       "merhaba",
@@ -22,83 +22,63 @@ describe("Turn Semantics & Lifecycle Admission Gate (v0.3.1 / I-21)", () => {
       "hi there",
       "thanks!",
       "nasılsın?",
-    ]
-
-    for (const text of phaticExamples) {
-      const decision = TurnAdmissionGate.classify(text)
-      expect(decision.category).toBe("phatic")
-      expect(decision.shouldCreateGoal).toBe(false)
-      expect(decision.shouldCreateObligation).toBe(false)
-      expect(decision.requiresPraxis).toBe(false)
-      expect(decision.requiresCompletion).toBe(false)
-      expect(decision.goalText).toBeNull()
-    }
-  })
-
-  test("I-21.2: Acknowledgements do not create goals or obligations", () => {
-    const ackExamples = ["tamam", "anladım", "ok", "peki", "hmm", "anlaşıldı", "sure", "got it"]
-
-    for (const text of ackExamples) {
-      const decision = TurnAdmissionGate.classify(text)
-      expect(decision.category).toBe("acknowledgement")
-      expect(decision.shouldCreateGoal).toBe(false)
-      expect(decision.shouldCreateObligation).toBe(false)
-      expect(decision.requiresPraxis).toBe(false)
-      expect(decision.requiresCompletion).toBe(false)
-      expect(decision.goalText).toBeNull()
-    }
-  })
-
-  test("I-21.3: Conversational queries do not create goals or obligations", () => {
-    const convExamples = [
+      "tamam",
+      "anladım",
+      "ok",
+      "peki",
+      "hmm",
+      "anlaşıldı",
+      "sure",
+      "got it",
       "Rust ne?",
       "hangi modeldesin?",
       "sen kimsin?",
       "what model are you?",
       "what do you think?",
       "TypeScript nedir?",
-    ]
-
-    for (const text of convExamples) {
-      const decision = TurnAdmissionGate.classify(text)
-      expect(decision.category).toBe("conversational_query")
-      expect(decision.shouldCreateGoal).toBe(false)
-      expect(decision.shouldCreateObligation).toBe(false)
-      expect(decision.requiresPraxis).toBe(false)
-      expect(decision.requiresCompletion).toBe(false)
-    }
-  })
-
-  test("I-21.4: Epistemic state queries inspect without mutating or creating goals", () => {
-    const queryExamples = [
-      "/inquiry",
-      "/ask",
       "proje ne durumda? hard state'de neler var",
       "projede hangi DB kullanıyoruz?",
       "hard state'de ne var?",
       "show state",
     ]
 
-    for (const text of queryExamples) {
+    for (const text of conversationalExamples) {
       const decision = TurnAdmissionGate.classify(text)
-      expect(decision.category).toBe("state_query")
+      expect(decision.category).toBe("conversational_query")
       expect(decision.shouldCreateGoal).toBe(false)
       expect(decision.shouldCreateObligation).toBe(false)
       expect(decision.requiresPraxis).toBe(false)
       expect(decision.requiresCompletion).toBe(false)
+      expect(decision.goalText).toBeNull()
     }
   })
 
-  test("I-21.5: Autonomous goals with mutation verbs or directives create goals and obligations", () => {
-    const goalExamples = [
-      "[RIVET GOAL EXECUTION]\nGoal: Fix memory leak in buffer",
-      "/goal migrate database to sqlite",
-      "bu bug'ı düzelt ve testleri geçir",
-      "refactor the session runner module",
-      "implement error boundary in frontend",
+  test("I-21.2: Epistemic state slash commands (/inquiry, /ask) create read-only inspection goals", () => {
+    const queryCommands = [
+      "/inquiry",
+      "/ask",
+      "/inquiry hard state inspection",
+      "/ask what is the current revision",
     ]
 
-    for (const text of goalExamples) {
+    for (const text of queryCommands) {
+      const decision = TurnAdmissionGate.classify(text)
+      expect(decision.category).toBe("state_query")
+      expect(decision.requiresPraxis).toBe(false)
+      expect(decision.requiresCompletion).toBe(false)
+      expect(decision.obligationKind).toBe("epistemic_inquiry")
+    }
+  })
+
+  test("I-21.3: Explicit autonomous execution commands (/goal, [RIVET GOAL EXECUTION]) create goals and obligations", () => {
+    const goalCommands = [
+      "[RIVET GOAL EXECUTION]\nGoal: Fix memory leak in buffer",
+      "/goal migrate database to sqlite",
+      "/goal refactor the session runner module",
+      "/goal implement error boundary in frontend",
+    ]
+
+    for (const text of goalCommands) {
       const decision = TurnAdmissionGate.classify(text)
       expect(decision.category).toBe("autonomous_goal")
       expect(decision.shouldCreateGoal).toBe(true)
@@ -110,21 +90,6 @@ describe("Turn Semantics & Lifecycle Admission Gate (v0.3.1 / I-21)", () => {
     }
   })
 
-  test("I-21.6: Goal continuation & revision binds to active goal without re-compiling duplicate root", () => {
-    const activeGoal = "Fix syntax error in parser"
-
-    const contDecision = TurnAdmissionGate.classify("devam", activeGoal)
-    expect(contDecision.category).toBe("goal_continuation")
-    expect(contDecision.shouldCreateGoal).toBe(false)
-    expect(contDecision.requiresCompletion).toBe(true)
-    expect(contDecision.goalText).toBe(activeGoal)
-
-    const revDecision = TurnAdmissionGate.classify("bunu biraz aç", activeGoal)
-    expect(revDecision.category).toBe("goal_revision")
-    expect(revDecision.shouldCreateGoal).toBe(false)
-    expect(revDecision.requiresCompletion).toBe(true)
-    expect(revDecision.goalText).toBe(activeGoal)
-  })
 
   test("I-21.7: Completion contract v2 returns NOT_REQUIRED when no active goal exists", () => {
     const readiness = AccpSemanticGate.checkCompletionReadiness({

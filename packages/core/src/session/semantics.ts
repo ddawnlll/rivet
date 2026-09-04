@@ -1,6 +1,6 @@
 import fs from "fs"
 import path from "path"
-import { Cause, DateTime, Effect, Exit } from "effect"
+import { DateTime, Effect } from "effect"
 import { SessionDurable } from "@opencode-ai/schema/durable-event-manifest"
 import { Database } from "../database/database"
 import { EventV2 } from "../event"
@@ -8,7 +8,7 @@ import { Global } from "../global"
 import { SessionEvent } from "./event"
 import { SessionSchema } from "./schema"
 import { CognitiveView, HardState, SoftWorkspace, type ClaimRecord, type NoesisEvent, type Observation } from "../rivet/noesis"
-import { CognitiveViewCompiler, type RepresentationMode } from "../rivet/view-compiler"
+import { CognitiveViewCompiler, describePredicate, type RepresentationMode } from "../rivet/view-compiler"
 import {
   AccpSemanticGate,
   type ActionAuthorizationPolicy,
@@ -20,7 +20,6 @@ import {
   type VerificationReceipt,
   type VerificationRequest,
 } from "../rivet/accp"
-import { PraxisEngine } from "../rivet/praxis"
 import { GoalCompiler, type ObligationPredicate } from "../rivet/goal-compiler"
 import {
   Induction,
@@ -197,6 +196,7 @@ export class SessionSemantics {
           idempotencyKey: action.proposal.idempotencyKey ?? action.proposal.actionId,
           actionFingerprint: JSON.stringify(action.proposal.parameters),
           capability: action.proposal.capability,
+          target: action.proposal.target,
           success: true,
           exitCode: 0,
           scope: action.scope,
@@ -248,6 +248,7 @@ export class SessionSemantics {
       evidenceId: receipt.evidenceId,
       source,
       summary,
+      executionReceiptId: receipt.receiptId,
       timestamp: new Date().toISOString(),
     })
   }
@@ -255,8 +256,64 @@ export class SessionSemantics {
   recordVerification(events: EventV2.Interface, receipt: VerificationReceipt) {
     const self = this
     return Effect.gen(function* () {
+      if (
+        !self.hardState.obligations.has(receipt.obligationId) &&
+        (!self.hardState.closedObligations.has(receipt.obligationId) || receipt.passed)
+      ) {
+        return yield* Effect.fail(new Error("Verification receipt must target an active obligation"))
+      }
+      const predicate = self.hardState.obligationPredicates.get(receipt.obligationId)
+      if (!predicate) {
+        return yield* Effect.fail(
+          new Error("Verification receipt cannot be admitted without the obligation's declared predicate"),
+        )
+      }
       if (!self.hardState.evidence.has(receipt.evidenceId))
         return yield* Effect.fail(new Error("Verification receipt references unadmitted evidence"))
+      const obligationScope = self.hardState.obligationScopes.get(receipt.obligationId)
+      if (!obligationScope || obligationScope.repository !== receipt.verifiedScope.repository) {
+        return yield* Effect.fail(new Error("Verification receipt scope does not match the obligation scope"))
+      }
+      const predicateDescription = describePredicate(predicate)
+      if (receipt.predicate !== predicateDescription) {
+        return yield* Effect.fail(
+          new Error("Verification receipt predicate does not match the obligation's declared predicate"),
+        )
+      }
+      const execution = receipt.executionReceiptId
+        ? self.hardState.executionReceipts.find((candidate) => candidate.receiptId === receipt.executionReceiptId)
+        : undefined
+      if (receipt.executionReceiptId && !execution) {
+        return yield* Effect.fail(new Error("Verification receipt references an unknown execution receipt"))
+      }
+      if (execution && self.hardState.evidenceExecutionReceipts.get(receipt.evidenceId) !== execution.receiptId) {
+        return yield* Effect.fail(
+          new Error("Verification evidence is not linked to the execution receipt used by Praxis"),
+        )
+      }
+      if (predicate.type === "file_constraint") {
+        const actual = evaluateFileConstraintOnDisk(receipt.verifiedScope.repository, predicate)
+        if (receipt.passed !== actual.passed) {
+          return yield* Effect.fail(new Error("Verification result does not match the observed filesystem predicate"))
+        }
+      }
+      if (predicate.type === "claims_verified") {
+        const actual = self.evaluateClaimsVerified(receipt.obligationId, predicate)
+        if (receipt.passed !== actual.passed) {
+          return yield* Effect.fail(new Error("Verification result does not match admitted claim evidence"))
+        }
+      }
+      if (predicate.type === "command_pass") {
+        if (!execution || execution.target !== predicate.command) {
+          return yield* Effect.fail(
+            new Error("Verification execution does not match the obligation's command predicate"),
+          )
+        }
+        const observedExitCode = execution.exitCode ?? (execution.success ? 0 : 1)
+        if (receipt.passed !== (execution.success && observedExitCode === predicate.expectedExitCode)) {
+          return yield* Effect.fail(new Error("Verification result does not match the observed command execution"))
+        }
+      }
       yield* self.append(events, {
         type: "verification_recorded",
         receipt,
@@ -385,51 +442,34 @@ export class SessionSemantics {
         ),
       )
     }
-    // Verifier routing continues per predicate kind. A persisted predicate
-    // defines its own mechanically checkable closure proof; obligations
-    // minted before predicate persistence fall back to test-output parsing.
+    // Verifier routing is predicate-driven. A successful execution is not a
+    // generic proof object that can be applied to an unrelated obligation.
     const obligationPredicate = this.hardState.obligationPredicates.get(obligationId)
     if (obligationPredicate?.type === "file_constraint") {
       return this.verifyFileConstraint(events, request, obligationId, obligationPredicate)
     }
+    if (obligationPredicate?.type === "command_pass") {
+      return this.verifyCommandPass(events, request, obligationId, obligationPredicate)
+    }
     if (obligationPredicate?.type === "claims_verified") {
       const outcome = this.evaluateClaimsVerified(obligationId, obligationPredicate)
-      if (outcome.passed) return this.recordClaimsOutcome(events, request, obligationId, outcome)
-      // An unsatisfied claims_verified wrapper falls back to the legacy
-      // test-output closure path: a goal wrapper legitimately closes through
-      // the model's verified test run when no claim was admitted.
-      return Effect.flatMap(Effect.exit(this.verifyObservedExecution(events, request, obligationId)), (legacy) => {
-        if (Exit.isSuccess(legacy) && legacy.value.type === "praxis" && legacy.value.receipt.passed) {
-          return Effect.succeed(legacy.value)
-        }
-        const legacyReason = Exit.isFailure(legacy)
-          ? String(Cause.squash(legacy.cause))
-          : legacy.value.type === "praxis"
-            ? (legacy.value.receipt.diagnostics ?? "test-output verification failed")
-            : legacy.value.receipt.summary
-        return this.recordClaimsOutcome(events, request, obligationId, {
-          ...outcome,
-          diagnostics: `${outcome.diagnostics} Legacy test-output path: ${legacyReason}`,
-        })
-      })
+      return this.recordClaimsOutcome(events, request, obligationId, outcome)
     }
-    return this.verifyObservedExecution(events, request, obligationId)
+    return Effect.fail(new Error("Praxis requires a declared machine-checkable predicate"))
   }
 
-  private verifyObservedExecution(
+  private verifyCommandPass(
     events: EventV2.Interface,
     request: VerificationRequest,
     obligationId: ObligationId,
-  ): Effect.Effect<
-    | { readonly type: "inquiry"; readonly receipt: InquiryReceipt }
-    | { readonly type: "praxis"; readonly receipt: VerificationReceipt & { readonly evidenceId: EvidenceId } },
-    Error
-  > {
+    predicate: Extract<ObligationPredicate, { type: "command_pass" }>,
+  ) {
     const execution = this.hardState.executionReceipts.findLast(
-      (receipt) => receipt.scope.repository === request.targetScope.repository,
+      (receipt) =>
+        receipt.scope.repository === request.targetScope.repository &&
+        receipt.target === predicate.command,
     )
-    if (!execution?.observations) return Effect.fail(new Error("Praxis requires an observed execution result"))
-    if (!execution.success) return Effect.fail(new Error("Praxis cannot verify a failed execution"))
+    if (!execution?.observations) return Effect.fail(new Error("Praxis requires the declared command to be executed"))
     if (!this.hardState.evidence.has(execution.evidenceId))
       return Effect.fail(new Error("Praxis requires explicitly admitted execution evidence"))
     if (request.targetScope.revision.value < execution.scope.revision.value)
@@ -441,24 +481,22 @@ export class SessionSemantics {
     })
     if (!requestScopeAtExecutionRevision.containsScope(execution.scope))
       return Effect.fail(new Error("Praxis verification scope does not contain the observed execution scope"))
-    const observed = isRecord(execution.observations) && "value" in execution.observations
-      ? execution.observations.value
-      : isRecord(execution.observations) && typeof execution.observations.output === "string"
-        ? execution.observations.output
-        : execution.observations
-    const stdout = typeof observed === "string" ? observed : JSON.stringify(observed)
-    const predicate = request.predicate.toLowerCase()
-    const framework = predicate.includes("cargo")
-      ? "cargo"
-      : predicate.includes("pytest")
-        ? "pytest"
-        : predicate.includes("go test")
-          ? "go"
-          : "bun"
-    const report = PraxisEngine.parseTestOutput(framework, stdout)
-    const receipt = {
-      ...PraxisEngine.evaluateTestResult({ ...request, obligationId, targetScope: execution.scope }, report),
+
+    const observedExitCode = execution.exitCode ?? (execution.success ? 0 : 1)
+    const passed = execution.success && observedExitCode === predicate.expectedExitCode
+    const receipt: VerificationReceipt = {
+      receiptId: createReceiptId(),
+      obligationId,
+      passed,
       evidenceId: execution.evidenceId,
+      verifiedScope: execution.scope,
+      predicate: describePredicate(predicate),
+      executionReceiptId: execution.receiptId,
+      reasonCodes: passed ? ["COMMAND_PASSED"] : ["COMMAND_FAILED"],
+      diagnostics: passed
+        ? null
+        : `COMMAND_FAILED: '${predicate.command}' exited with ${observedExitCode}; expected ${predicate.expectedExitCode}`,
+      timestamp: new Date().toISOString(),
     }
     return this.recordVerification(events, receipt).pipe(Effect.map(() => ({ type: "praxis" as const, receipt })))
   }
@@ -483,6 +521,7 @@ export class SessionSemantics {
       passed: outcome.passed,
       evidenceId,
       verifiedScope: request.targetScope,
+      predicate: describePredicate(predicate),
       reasonCodes: outcome.reasonCodes,
       diagnostics: outcome.diagnostics,
       timestamp: new Date().toISOString(),
@@ -502,10 +541,9 @@ export class SessionSemantics {
   }
 
   /**
-   * Closes a claims_verified obligation either through admitted supported
-   * claims matching the predicate propositions, or — for goal-level wrapper
-   * obligations — by construction once every sibling obligation is closed
-   * with passing receipts. The derivation is mechanical and audited.
+   * Closes a claims_verified obligation through relevant admitted claims,
+   * relevant execution evidence for a goal wrapper, or — when appropriate —
+   * passing sibling obligations. The derivation is mechanical and audited.
    */
   private evaluateClaimsVerified(
     obligationId: ObligationId,
@@ -513,10 +551,20 @@ export class SessionSemantics {
   ): { passed: boolean; reasonCodes: string[]; diagnostics: string | null; evidenceSummary: string } {
     const supported = new Set(
       [...this.hardState.claims.values()]
-        .filter((claim) => claim.status === "supported")
+        .filter(
+          (claim) =>
+            claim.status === "supported" &&
+            claim.supportingEvidence.some((evidenceId) => claimEvidenceIsRelevant(this.hardState, claim.proposition, evidenceId)),
+        )
         .map((claim) => claim.proposition),
     )
     const missing = predicate.claimPropositions.filter((proposition) => !supported.has(proposition))
+    const claimEvidenceMissing = predicate.claimPropositions.filter((proposition) =>
+      [...this.hardState.claims.values()].some(
+        (claim) => claim.status === "supported" && claim.proposition === proposition &&
+          !claim.supportingEvidence.some((evidenceId) => claimEvidenceIsRelevant(this.hardState, claim.proposition, evidenceId)),
+      ),
+    )
     const siblingOpenObligations = this.hardState.openObligationIds().filter((id) => id !== obligationId)
     // Sibling closure only counts receipts minted at or after this obligation's
     // own goal revision, so receipts from an earlier goal can never satisfy a
@@ -531,18 +579,36 @@ export class SessionSemantics {
       return Boolean(inquiry && inquiry.satisfiedAtRevision.value >= goalRevision.value)
     })
     const fulfilledBySiblings = siblingOpenObligations.length === 0 && verifiedSiblings.length > 0 && goalRevision !== undefined
-    const passed = missing.length === 0 || fulfilledBySiblings
+    const relevantExecution = this.hardState.executionReceipts.findLast(
+      (execution) =>
+        execution.success &&
+        this.hardState.evidence.has(execution.evidenceId) &&
+        meaningfulTokenOverlap(predicate.claimPropositions.join(" "), [
+          this.hardState.evidence.get(execution.evidenceId),
+          execution.target,
+          execution.capability,
+          execution.actionFingerprint,
+        ].filter(Boolean).join(" ")),
+    )
+    const fulfilledByExecution = siblingOpenObligations.length === 0 && relevantExecution !== undefined
+    const passed = missing.length === 0 || fulfilledBySiblings || fulfilledByExecution
     const diagnostics = passed
       ? null
-      : `CLAIM_NOT_ADMITTED: no supported claim matches ${missing.map((p) => `"${p}"`).join(", ")}. Admit via propose_claim with admitted evidence, or close sibling obligations.`
+      : claimEvidenceMissing.length > 0
+        ? `CLAIM_EVIDENCE_NOT_RELEVANT: supported claim evidence is not semantically linked to ${claimEvidenceMissing.map((p) => `"${p}"`).join(", ")}`
+        : `CLAIM_NOT_ADMITTED: no supported claim matches ${missing.map((p) => `"${p}"`).join(", ")}. Admit via propose_claim with relevant admitted evidence, or close sibling obligations.`
     const evidenceSummary = passed
       ? fulfilledBySiblings
         ? `Goal wrapper closed by ${verifiedSiblings.length} verified sibling obligations at revision ${goalRevision?.toJSON()}`
+        : fulfilledByExecution
+          ? `Goal wrapper matched relevant execution ${relevantExecution.receiptId}`
         : "Supported claims match all predicate propositions"
       : `Missing supported claims: ${missing.join(" | ")}`
     return {
       passed,
-      reasonCodes: passed ? ["CLAIMS_VERIFIED"] : ["CLAIM_NOT_ADMITTED"],
+      reasonCodes: passed
+        ? ["CLAIMS_VERIFIED", ...(fulfilledByExecution ? ["RELEVANT_EXECUTION"] : [])]
+        : ["CLAIM_NOT_ADMITTED", ...(claimEvidenceMissing.length > 0 ? ["CLAIM_EVIDENCE_NOT_RELEVANT"] : [])],
       diagnostics,
       evidenceSummary,
     }
@@ -561,6 +627,7 @@ export class SessionSemantics {
       passed: outcome.passed,
       evidenceId,
       verifiedScope: request.targetScope,
+      predicate: describePredicate(this.hardState.obligationPredicates.get(obligationId)!),
       reasonCodes: outcome.reasonCodes,
       diagnostics: outcome.diagnostics,
       timestamp: new Date().toISOString(),
@@ -615,13 +682,15 @@ export class SessionSemantics {
         return yield* Effect.fail(error instanceof Error ? error : new Error(String(error)))
       }
 
-      if (proposal.supportingEvidence.length > 0 && !self.hardState.canPromoteToSupported(proposal.supportingEvidence))
-        return yield* Effect.fail(new Error("Claim evidence has not been admitted by the Harness"))
+      if (!self.hardState.canPromoteToSupported(proposal.supportingEvidence))
+        return yield* Effect.fail(new Error("Claim requires exact, relevant evidence admitted by the Harness"))
+
+      const effectiveProposal = proposal
 
       // Write-Time Barrier: Adjudicate against existing state
       const adjudication = ValidityEngine.adjudicateWriteTime(
         self.hardState,
-        proposal,
+        effectiveProposal,
         options?.validityPolicy ?? "EPISTEMIC",
       )
 
@@ -629,33 +698,33 @@ export class SessionSemantics {
         yield* self.append(events, {
           type: "claim_superseded",
           claimId: adjudication.supersededClaimId,
-          supersededBy: proposal.claimId,
-          reason: `Superseded by updated claim ${proposal.claimId}: '${proposal.proposition}'`,
-          timestamp: proposal.timestamp,
+          supersededBy: effectiveProposal.claimId,
+          reason: `Superseded by updated claim ${effectiveProposal.claimId}: '${effectiveProposal.proposition}'`,
+          timestamp: effectiveProposal.timestamp,
         })
       } else if (adjudication.action === "contradict" && adjudication.contradictionReason) {
         yield* self.append(events, {
           type: "claim_contradicted",
-          claimId: proposal.claimId,
-          contradictedBy: [...proposal.supportingEvidence],
+          claimId: effectiveProposal.claimId,
+          contradictedBy: [...effectiveProposal.supportingEvidence],
           reason: adjudication.contradictionReason,
-          scope: proposal.scope,
-          timestamp: proposal.timestamp,
+          scope: effectiveProposal.scope,
+          timestamp: effectiveProposal.timestamp,
         })
       }
 
       yield* self.append(events, {
         type: "claim_asserted",
-        claimId: proposal.claimId,
-        proposition: proposal.proposition,
-        status: proposal.proposedStatus,
-        evidence: proposal.supportingEvidence,
+        claimId: effectiveProposal.claimId,
+        proposition: effectiveProposal.proposition,
+        status: effectiveProposal.proposedStatus,
+        evidence: effectiveProposal.supportingEvidence,
         dependencies: options?.dependencies ? [...options.dependencies] : undefined,
-        scope: proposal.scope,
+        scope: effectiveProposal.scope,
         validFromRevision: options?.validFromRevision ?? self.hardState.revision,
         validityPolicy: options?.validityPolicy ?? "EPISTEMIC",
         provenance: options?.provenance,
-        timestamp: proposal.timestamp,
+        timestamp: effectiveProposal.timestamp,
       })
     })
   }
@@ -771,6 +840,7 @@ export class SessionSemantics {
       readonly claimsAddressed?: readonly ClaimId[]
       readonly taskId?: TaskId
       readonly baseRevision?: Revision
+      readonly responseDelivered?: boolean
     },
   ) {
     const proposal: CompletionProposal = {
@@ -780,7 +850,17 @@ export class SessionSemantics {
       baseRevision: input.baseRevision ?? this.hardState.revision,
       timestamp: new Date().toISOString(),
     }
-    const decision = this.completionDecision(proposal)
+    const decision = AccpSemanticGate.evaluateCompletion(
+      proposal,
+      this.hardState.revision,
+      this.hardState.openObligationIds(),
+      this.hardState.closureReceiptIds(),
+      {
+        getKind: (id) => this.hardState.obligationKind(id),
+        getDescription: (id) => this.hardState.obligations.get(id) ?? id,
+      },
+      input.responseDelivered ?? true,
+    )
     const readiness = AccpSemanticGate.checkCompletionReadiness({
       unclosedObligations: this.hardState.openObligationIds(),
       passingReceipts: this.hardState.closureReceiptIds(),
@@ -790,6 +870,13 @@ export class SessionSemantics {
       totalObligations: this.hardState.obligations.size + this.hardState.closedObligations.size,
       hasActiveGoal: Boolean(this.hardState.goalDescription),
     })
+    // Internal closure is deliberately not recorded as accepted until a
+    // user-facing response has been emitted. The runner uses this deferred
+    // decision to request a text-only response.
+    if (decision.internalClosureReady && !decision.responseDelivered) {
+      return Effect.succeed(decision)
+    }
+
     if (!decision.completed) {
       return this.append(events, {
         type: "completion_rejected",
@@ -1208,6 +1295,44 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
 }
 
+function claimEvidenceIsRelevant(state: HardState, proposition: string, evidenceId: EvidenceId): boolean {
+  const summary = state.evidence.get(evidenceId)
+  if (!summary) return false
+  const source = state.evidenceSources.get(evidenceId)
+  const executionReceiptId = state.evidenceExecutionReceipts.get(evidenceId)
+  const execution = executionReceiptId
+    ? state.executionReceipts.find((receipt) => receipt.receiptId === executionReceiptId)
+    : undefined
+  if (execution && !execution.success) return false
+  const evidenceText = [summary, execution?.target, execution?.capability, execution?.actionFingerprint]
+    .filter(Boolean)
+    .join(" ")
+  const paths = proposition
+    .split(/\s+/)
+    .map((token) => token.replace(/^[^\w~./-]+|[^\w~./-]+$/g, ""))
+    .filter((token) => token.length > 0 && isPathClaimToken(token))
+  if (paths.length > 0 && (!source?.startsWith("file.") || !paths.every((token) => evidenceText.includes(token)))) return false
+  return meaningfulTokenOverlap(proposition, evidenceText)
+}
+
+function isPathClaimToken(token: string): boolean {
+  return token.startsWith("~/") || token.includes("/") || /\.[A-Za-z0-9]{2,}$/.test(token)
+}
+
+function meaningfulTokenOverlap(left: string, right: string): boolean {
+  const ignored = new Set([
+    "a", "an", "and", "are", "at", "be", "by", "for", "from", "goal", "in", "is", "it", "of", "on",
+    "or", "the", "to", "was", "were", "with", "this", "that", "ve", "bir", "bu", "de", "da", "ile", "için",
+  ])
+  const tokens = (value: string) =>
+    value
+      .toLowerCase()
+      .split(/[^\p{L}\p{N}_~./-]+/u)
+      .filter((token) => token.length > 2 && !ignored.has(token))
+  const rightTokens = new Set(tokens(right))
+  return tokens(left).some((token) => rightTokens.has(token))
+}
+
 /**
  * Deterministic filesystem evaluation for file_constraint predicates.
  * Runs harness-side: the model cannot fabricate this observation.
@@ -1216,9 +1341,20 @@ function evaluateFileConstraintOnDisk(
   repositoryRoot: string,
   predicate: Extract<ObligationPredicate, { type: "file_constraint" }>,
 ): { passed: boolean; reasonCodes: string[]; diagnostics: string | null; observation: string } {
+  const homeDir = process.env.HOME || process.env.USERPROFILE || ""
+  const isHomePath = predicate.path.startsWith("~/") || predicate.path === "~"
+  const expandedPath = isHomePath
+    ? (homeDir ? path.join(homeDir, predicate.path.slice(predicate.path === "~" ? 1 : 2)) : predicate.path)
+    : predicate.path
+
   const root = path.resolve(repositoryRoot)
-  const target = path.resolve(root, predicate.path)
-  if (target !== root && !target.startsWith(root + path.sep)) {
+  const isAbsolute = path.isAbsolute(expandedPath)
+  const target = isAbsolute ? path.resolve(expandedPath) : path.resolve(root, expandedPath)
+
+  const inRepo = target === root || target.startsWith(root + path.sep)
+  const inHome = homeDir ? (target === homeDir || target.startsWith(homeDir + path.sep)) : false
+  const isConfigLookup = isHomePath || predicate.path.includes(".config") || predicate.path.includes(".rivet") || isAbsolute
+  if (!inRepo && !(inHome && isConfigLookup)) {
     return {
       passed: false,
       reasonCodes: ["PATH_ESCAPES_REPOSITORY"],
@@ -1226,7 +1362,9 @@ function evaluateFileConstraintOnDisk(
       observation: `filesystem scope check failed for "${predicate.path}"`,
     }
   }
+
   const exists = fs.existsSync(target)
+
   if (predicate.mustExist && !exists) {
     return {
       passed: false,
@@ -1252,7 +1390,7 @@ function evaluateFileConstraintOnDisk(
         observation: `filesystem observation: "${predicate.path}" missing`,
       }
     }
-    const content = fs.readFileSync(target, "utf8")
+    const content = fs.existsSync(target) ? fs.readFileSync(target, "utf8") : ""
     if (!content.includes(predicate.contentPattern)) {
       return {
         passed: false,

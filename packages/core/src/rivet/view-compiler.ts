@@ -22,6 +22,7 @@ import { AccpSemanticGate } from "./accp"
 import type { ObligationPredicate } from "./goal-compiler"
 import { ValidityEngine } from "./validity"
 import { RepositoryFrontierCompiler, type RepositoryFrontier } from "./repository/repository-frontier"
+import { FlightRecorder } from "./flight-recorder"
 
 export type RepresentationMode = "RAW_TEXT" | "TRIPLES" | "PATHS" | "HYBRID"
 
@@ -107,10 +108,17 @@ type ResolvedCompilationContext = Omit<CompilationContext, "goalDescription"> & 
 
 export class CognitiveViewCompiler {
   static compile(ctxInput: CompilationContext): CompiledViewPayload {
+    return FlightRecorder.withSpan("cognitive_view", "cognitive_view.compile", () =>
+      this.compileInternal(ctxInput),
+    )
+  }
+
+  private static compileInternal(ctxInput: CompilationContext): CompiledViewPayload {
     const softWorkspace = ctxInput.softWorkspace ?? new SoftWorkspace(createSessionId(), ctxInput.hardState.revision)
+    const goalDescription = ctxInput.goalDescription !== undefined ? ctxInput.goalDescription : (ctxInput.hardState.goalDescription ?? "")
     const ctx: ResolvedCompilationContext = {
       ...ctxInput,
-      goalDescription: ctxInput.goalDescription ?? ctxInput.hardState.goalDescription ?? "",
+      goalDescription,
       softWorkspace,
       relevantFiles: ctxInput.relevantFiles ?? [],
       repositorySignals: ctxInput.repositorySignals ?? [],
@@ -318,7 +326,7 @@ export class CognitiveViewCompiler {
       getKind: (id) => ctx.hardState.obligationKind(id),
       getDescription: (id) => ctx.hardState.obligations.get(id) ?? id,
       totalObligations: ctx.hardState.obligations.size + ctx.hardState.closedObligations.size,
-      hasActiveGoal: Boolean(ctx.hardState.goalDescription),
+      hasActiveGoal: Boolean(ctx.goalDescription && ctx.goalDescription.trim().length > 0),
     })
 
     const eligibleEvidence: [EvidenceId, string, string][] = []
@@ -686,7 +694,7 @@ export class CognitiveViewCompiler {
   }
 }
 
-function describePredicate(predicate: ObligationPredicate): string {
+export function describePredicate(predicate: ObligationPredicate): string {
   switch (predicate.type) {
     case "file_constraint":
       return `file_constraint: path "${predicate.path}" mustExist=${predicate.mustExist}${predicate.contentPattern ? ` content~"${predicate.contentPattern}"` : ""}`

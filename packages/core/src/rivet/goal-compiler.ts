@@ -173,7 +173,7 @@ export class GoalCompiler {
       for (const word of words) {
         if ((word.includes(".") || word.includes("/")) && !word.startsWith("http")) {
           const cleanPath = word
-            .replace(/^[^\w./-]+|[^\w./-]+$/g, "")
+            .replace(/^[^\w.~/-]+|[^\w.~/-]+$/g, "")
             .replace(/[.,;:!?()\[\]{}"']+$/g, "")
             .replace(/^[.,;:!?()\[\]{}"']+/g, "")
           if (seenPaths.has(cleanPath)) continue
