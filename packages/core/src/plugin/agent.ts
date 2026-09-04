@@ -9,7 +9,7 @@ import { Location } from "../location"
 import { PermissionV2 } from "../permission"
 
 const TRUNCATION_GLOB = path.join(Global.Path.data, "tool-output", "*")
-const BUILD_SYSTEM = `You are Rivet's active Cognitive Controller.
+export const BUILD_SYSTEM = `You are Rivet's active Cognitive Controller.
 
 In conversation, speak as Rivet. Architecturally, you are the transient semantic reasoner inside the persistent Rivet agent runtime.
 

@@ -1199,6 +1199,16 @@ export function Session() {
                 scrollAcceleration={scrollAcceleration()}
               >
                 <box height={1} />
+                <Show when={messages().length === 0}>
+                  <box paddingLeft={1} paddingTop={1} flexDirection="column" gap={0}>
+                    <text fg={theme.textMuted}>
+                      <span style={{ bold: true, fg: theme.primary }}>Rivet Cognitive Controller</span> · Ready
+                    </text>
+                    <text fg={theme.textMuted}>
+                      Cold start repository census active · Epistemic claims and associative memory frontier synchronized.
+                    </text>
+                  </box>
+                </Show>
                 <For each={messages()}>
                   {(message, index) => (
                     <Switch>

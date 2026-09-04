@@ -577,7 +577,7 @@ export class SessionSemantics {
         return
       }
 
-      const files = yield* Effect.promise(() => discoverWorkspaceFiles(directory))
+      const files = yield* Effect.sync(() => discoverWorkspaceFiles(directory))
       if (files.length === 0) return
 
       const census = RepositoryCensusProjector.projectFromFiles(files, self.hardState.revision)
@@ -659,17 +659,20 @@ export class SessionSemantics {
   }
 }
 
-async function discoverWorkspaceFiles(directory: string): Promise<string[]> {
+function discoverWorkspaceFiles(directory: string): string[] {
   try {
-    const proc = Bun.spawn(["git", "ls-files"], {
-      cwd: directory,
-      stdout: "pipe",
-      stderr: "pipe",
-    })
-    const out = await new Response(proc.stdout).text()
-    const exitCode = await proc.exited
-    if (exitCode === 0 && out.trim().length > 0) {
-      return out.trim().split("\n").filter(Boolean)
+    if (fs.existsSync(path.join(directory, ".git"))) {
+      const proc = Bun.spawnSync(["git", "ls-files"], {
+        cwd: directory,
+        stdout: "pipe",
+        stderr: "pipe",
+      })
+      if (proc.exitCode === 0) {
+        const out = proc.stdout.toString()
+        if (out.trim().length > 0) {
+          return out.trim().split("\n").filter(Boolean)
+        }
+      }
     }
   } catch {
     // Fall back to fast recursive directory scan

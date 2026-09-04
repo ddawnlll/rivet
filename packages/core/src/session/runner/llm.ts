@@ -11,6 +11,7 @@ import {
 } from "@opencode-ai/llm"
 import { Cause, DateTime, Effect, Exit, FiberSet, Layer, Option, Semaphore, Stream } from "effect"
 import { AgentV2 } from "../../agent"
+import { AgentPlugin } from "../../plugin/agent"
 import { Config } from "../../config"
 import { Database } from "../../database/database"
 import { EventV2 } from "../../event"
@@ -293,7 +294,29 @@ const layer = Layer.effect(
         invocation: invocationID,
       }
       const gateEvaluation = ModelInvocationGate.evaluate(invocation)
-      const rivetStateSystem = cognitiveView.formatPromptBlock()
+      const baseRivetSystem = cognitiveView.formatPromptBlock()
+      const rivetStateSystem =
+        agent.info?.system === undefined
+          ? `${AgentPlugin.BUILD_SYSTEM}\n\n${baseRivetSystem}`
+          : baseRivetSystem
+      const isMemoryPrompt = Boolean(
+        goal &&
+          /(memory\s*retrieve|retrieve.*memory|haf[ıi]za.*(durum|getir|kontrol|bak)|haf[ıi]zadan|bellek.*durum)/i.test(
+            goal,
+          ),
+      )
+      const isHardStatePrompt = Boolean(
+        goal &&
+          !isMemoryPrompt &&
+          /(hard[\s_]?state|epistemic|proje hakk[ıi]nda ne biliyors|ne biliyorsun.*hard|haf[ıi]za durum)/i.test(goal),
+      )
+      const toolChoice = isLastStep
+        ? "none"
+        : currentStep === 1 && isMemoryPrompt
+          ? "retrieve_memory"
+          : currentStep === 1 && isHardStatePrompt
+            ? "query_epistemic_state"
+            : undefined
       const request = LLM.request({
         model,
         http: {
@@ -319,7 +342,7 @@ const layer = Layer.effect(
         },
         messages: [...toLLMMessages(context, model), ...(isLastStep ? [Message.assistant(MAX_STEPS_PROMPT)] : [])],
         tools: availableActions,
-        toolChoice: isLastStep ? "none" : undefined,
+        toolChoice,
       })
       if (yield* compaction.compactIfNeeded({ sessionID: session.id, entries, model, request }))
         return yield* Effect.die(continueAfterCompaction(currentStep))

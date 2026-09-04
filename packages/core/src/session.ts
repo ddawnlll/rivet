@@ -37,6 +37,7 @@ import { SessionRevert } from "./session/revert"
 import { Revert } from "@opencode-ai/schema/revert"
 import { FSUtil } from "./fs-util"
 import { SessionDurable } from "@opencode-ai/schema/durable-event-manifest"
+import { SessionSemantics } from "./session/semantics"
 
 export const RevertState = Revert.State
 export type RevertState = Revert.State
@@ -258,7 +259,10 @@ const layer = Layer.effect(
           )
         if (projected.type === "existing") return projected.session
         // TODO: Restore recorded sessions onto replacement synchronized workspaces in a future API slice.
-        return yield* result.get(sessionID).pipe(Effect.orDie)
+        const createdSession = yield* result.get(sessionID).pipe(Effect.orDie)
+        const semantics = yield* SessionSemantics.load(db, sessionID)
+        yield* semantics.ensureColdStart(events, input.location.directory)
+        return createdSession
       }),
       get: Effect.fn("V2Session.get")(function* (sessionID) {
         const session = yield* store.get(sessionID)

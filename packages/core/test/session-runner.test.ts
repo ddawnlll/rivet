@@ -654,6 +654,7 @@ describe("SessionRunnerLLM", () => {
         "request_verification",
         "propose_claim",
         "query_epistemic_state",
+        "retrieve_memory",
       ])
       expect(requests[0]?.messages.map((message) => ({ role: message.role, content: message.content }))).toEqual([
         { role: "user", content: [{ type: "text", text: "First" }] },
@@ -1368,6 +1369,7 @@ describe("SessionRunnerLLM", () => {
         "request_verification",
         "propose_claim",
         "query_epistemic_state",
+        "retrieve_memory",
       ])
       expect(yield* session.context(sessionID)).toMatchObject([
         { type: "user", text: "Use tools" },
@@ -3493,6 +3495,59 @@ describe("SessionRunnerLLM", () => {
       const semantic = yield* SessionSemantics.load(db, sessionID)
       expect(semantic.hardState.completedTasks.size).toBe(0)
       expect(semantic.hardState.openObligationIds().length).toBeGreaterThan(0)
+    }),
+  )
+
+  it.effect("steers tool choice to query_epistemic_state on hard state inquiry prompt", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      requests.length = 0
+      yield* session.prompt({
+        sessionID,
+        prompt: Prompt.make({ text: "hocam selam hard state ne durumda" }),
+        resume: false,
+      })
+      responses = [[
+        LLMEvent.textStart({ id: "text-1" }),
+        LLMEvent.textDelta({ id: "text-1", text: "Hard state kontrol ediliyor." }),
+        LLMEvent.textEnd({ id: "text-1" }),
+        LLMEvent.stepFinish({ index: 0, reason: "stop" }),
+        LLMEvent.finish({ reason: "stop" }),
+      ]]
+
+      yield* session.resume(sessionID)
+
+      expect(requests).toHaveLength(1)
+      expect(requests[0]?.toolChoice).toMatchObject({ type: "tool", name: "query_epistemic_state" })
+      expect(requests[0]?.system.some((part) => part.text.includes("You are Rivet's active Cognitive Controller."))).toBe(true)
+      expect(requests[0]?.system.some((part) => part.text.includes("CRITICAL HARNESS DIRECTIVES:"))).toBe(true)
+    }),
+  )
+
+  it.effect("steers tool choice to retrieve_memory on memory retrieve prompt", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      requests.length = 0
+      yield* session.prompt({
+        sessionID,
+        prompt: Prompt.make({ text: "bi memory retrieve yapar misn" }),
+        resume: false,
+      })
+      responses = [[
+        LLMEvent.textStart({ id: "text-2" }),
+        LLMEvent.textDelta({ id: "text-2", text: "Hafıza taranıyor." }),
+        LLMEvent.textEnd({ id: "text-2" }),
+        LLMEvent.stepFinish({ index: 0, reason: "stop" }),
+        LLMEvent.finish({ reason: "stop" }),
+      ]]
+
+      yield* session.resume(sessionID)
+
+      expect(requests).toHaveLength(1)
+      expect(requests[0]?.toolChoice).toMatchObject({ type: "tool", name: "retrieve_memory" })
+      expect(requests[0]?.system.some((part) => part.text.includes("You are Rivet's active Cognitive Controller."))).toBe(true)
     }),
   )
 })

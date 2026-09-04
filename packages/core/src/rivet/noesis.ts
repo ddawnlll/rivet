@@ -713,6 +713,18 @@ export class CognitiveView {
 
   formatPromptBlock(): string {
     const lines: string[] = []
+    lines.push("================================================================================")
+    lines.push("RIVET COGNITIVE VIEW (Authoritative Epistemic State & Runtime Invariants)")
+    lines.push("================================================================================")
+    lines.push("CRITICAL HARNESS DIRECTIVES:")
+    lines.push("1. Epistemic state & project memory are internal Harness runtime structures, NOT disk files.")
+    lines.push("   - NEVER run bash ('git status', 'ls', 'find'), glob ('**/*state*'), or grep ('*memory*') to look for state or memory.")
+    lines.push("   - There are NO '.rivet/state' or 'hardstate' files on disk.")
+    lines.push("2. MANDATORY TOOL SELECTION:")
+    lines.push("   - To inspect project knowledge, hard state status, or verified claims: CALL `query_epistemic_state`.")
+    lines.push("   - To recall associative memories, past decisions, or conventions: CALL `retrieve_memory`.")
+    lines.push("   - DO NOT make a planning list (todowrite) or execute bash commands when asked about state or memory.")
+    lines.push("================================================================================\n")
     lines.push(`### CURRENT GOAL (Revision: ${this.hardRevision})`)
     lines.push(`Repository: ${this.repositoryId}`)
     lines.push(`${this.goalDescription}\n`)
