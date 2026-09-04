@@ -42,6 +42,7 @@ import { Snapshot } from "../../snapshot"
 import { makeLocationNode } from "../../effect/app-node"
 import { llmClient } from "../../effect/app-node-platform"
 import { createInvocationId } from "../../rivet/types"
+import { AutomaticRecallAdmissionHook } from "../../rivet/recall"
 import { type ModelInvocation, ModelInvocationGate, type ModelInvocationReceipt } from "../invocation"
 
 /**
@@ -261,6 +262,18 @@ const layer = Layer.effect(
                 additionalProperties: false,
               },
             }),
+            new ToolDefinition({
+              name: "retrieve_memory",
+              description: "Search and retrieve associative project memory, past session decisions, architectural conventions, and failure-avoidance patterns from Rivet's memory store.",
+              inputSchema: {
+                type: "object",
+                properties: {
+                  query: { type: "string", description: "Search query or topic to recall from memory" },
+                  symbols: { type: "array", items: { type: "string" }, description: "Specific code symbols to recall related memories for" },
+                },
+                additionalProperties: false,
+              },
+            }),
           ]
       const invocationID = createInvocationId(`${session.id}:${currentStep}`)
       yield* semantics.recordInvocation(events, invocationID, model.id)
@@ -277,20 +290,7 @@ const layer = Layer.effect(
         invocation: invocationID,
       }
       const gateEvaluation = ModelInvocationGate.evaluate(invocation)
-      const hasMeaningfulRivetState =
-        cognitiveView.activeClaims.length > 0 ||
-        cognitiveView.recentEvidence.length > 0 ||
-        cognitiveView.activeHypotheses.length > 0 ||
-        cognitiveView.premiseConflicts.length > 0 ||
-        cognitiveView.contradictions.length > 0 ||
-        (cognitiveView.memoryFrontier !== undefined &&
-          (cognitiveView.memoryFrontier.active.length > 0 ||
-            cognitiveView.memoryFrontier.episodic.length > 0 ||
-            cognitiveView.memoryFrontier.procedural.length > 0 ||
-            cognitiveView.memoryFrontier.rejected.length > 0)) ||
-        gateEvaluation.reason === "STATE_CONTRADICTION" ||
-        gateEvaluation.reason === "HYPOTHESIS_CONFLICT"
-      const rivetStateSystem = hasMeaningfulRivetState ? cognitiveView.formatPromptBlock() : undefined
+      const rivetStateSystem = cognitiveView.formatPromptBlock()
       const request = LLM.request({
         model,
         http: {
@@ -438,20 +438,34 @@ const layer = Layer.effect(
             }
             if (commitment.commitment.type === "epistemic_query") {
               const snapshot = semantics.getEpistemicState(semantics.scope(session.location.directory))
+              const memoryItems = [
+                ...(snapshot.memoryFrontier?.active ?? []),
+                ...(snapshot.memoryFrontier?.episodic ?? []),
+                ...(snapshot.memoryFrontier?.procedural ?? []),
+                ...(snapshot.memoryFrontier?.rejected ?? []),
+              ]
               const stateSummary = [
                 `=== RIVET AUTHORITATIVE EPISTEMIC STATE ===`,
                 `Revision: ${snapshot.revision}`,
                 `Goal: ${snapshot.goalDescription ?? "None"}`,
                 `Active Valid Claims (${snapshot.activeClaims.length}):`,
-                ...snapshot.activeClaims.map((c) => `  - [${c.id}] ${c.status}: ${c.proposition}`),
+                ...(snapshot.activeClaims.length > 0
+                  ? snapshot.activeClaims.map((c) => `  - [${c.id}] ${c.status}: ${c.proposition}`)
+                  : [`  (None active)`]),
                 `Open Obligations (${snapshot.openObligations.length}):`,
-                ...snapshot.openObligations.map(([id, desc]) => `  - [${id}] ${desc}`),
+                ...(snapshot.openObligations.length > 0
+                  ? snapshot.openObligations.map(([id, desc]) => `  - [${id}] ${desc}`)
+                  : [`  (None open)`]),
                 ...(snapshot.premiseConflicts.length > 0
                   ? [
                       `Premise Conflicts (${snapshot.premiseConflicts.length}):`,
                       ...snapshot.premiseConflicts.map((pc) => `  - [PREMISE CONFLICT] User: "${pc.userPremise}" vs Valid: "${pc.currentValidState}"`),
                     ]
                   : []),
+                `Memory Frontier (${memoryItems.length} items):`,
+                ...(memoryItems.length > 0
+                  ? memoryItems.map((m) => `  - [${m.type}] ${m.summary}`)
+                  : [`  (No relevant memory records recalled for this revision)`]),
                 `Recent Evidence (${snapshot.recentEvidence.length}):`,
                 ...snapshot.recentEvidence.map(([id, sum]) => `  - [${id}] ${sum}`),
               ].join("\n")
@@ -461,6 +475,63 @@ const layer = Layer.effect(
                   id: event.id,
                   name: event.name,
                   result: { type: "text", value: stateSummary },
+                  output: {
+                    structured: {
+                      revision: snapshot.revision.toJSON(),
+                      goal: snapshot.goalDescription,
+                      claims: snapshot.activeClaims,
+                      obligations: snapshot.openObligations,
+                      memories: memoryItems,
+                    },
+                    content: [{ type: "text", text: stateSummary }],
+                  },
+                }),
+              )
+              return
+            }
+            if (commitment.commitment.type === "memory_retrieval") {
+              const queryPrompt = commitment.commitment.query ?? goal ?? "Project context and conventions"
+              const memoryFrontier = yield* AutomaticRecallAdmissionHook.admitRecall({
+                hardState: semantics.hardState,
+                recallStore: semantics.recallStore,
+                userPrompt: queryPrompt,
+                goalDescription: semantics.hardState.goalDescription ?? goal ?? "Retrieve project memory",
+                repositoryId: session.location.directory,
+                focusSymbols: commitment.commitment.symbols,
+              }).pipe(Effect.orElseSucceed(() => undefined))
+
+              const items = [
+                ...(memoryFrontier?.active ?? []),
+                ...(memoryFrontier?.episodic ?? []),
+                ...(memoryFrontier?.procedural ?? []),
+                ...(memoryFrontier?.rejected ?? []),
+              ]
+
+              const symbolsStr = memoryFrontier?.relatedSymbols?.length ? ` (symbols: ${memoryFrontier.relatedSymbols.join(", ")})` : ""
+              const summary = [
+                `=== RIVET PROJECT MEMORY RETRIEVAL ===`,
+                `Query: "${queryPrompt}"`,
+                `Recalled Records (${items.length}):`,
+                ...(items.length > 0
+                  ? items.map((m) => `  - [${m.type}] ${m.summary}${m.tags?.length ? ` [tags: ${m.tags.join(", ")}]` : ""}`)
+                  : [`  (No associative memory records matched query in memory store)`]),
+                ...(symbolsStr ? [`Related Symbols: ${memoryFrontier?.relatedSymbols.join(", ")}`] : []),
+              ].join("\n")
+
+              yield* publish(
+                LLMEvent.toolResult({
+                  id: event.id,
+                  name: event.name,
+                  result: { type: "text", value: summary },
+                  output: {
+                    structured: {
+                      query: queryPrompt,
+                      count: items.length,
+                      items,
+                      relatedSymbols: memoryFrontier?.relatedSymbols ?? [],
+                    },
+                    content: [{ type: "text", text: summary }],
+                  },
                 }),
               )
               return

@@ -1,7 +1,9 @@
+import path from "path"
 import { DateTime, Effect } from "effect"
 import { SessionDurable } from "@opencode-ai/schema/durable-event-manifest"
 import { Database } from "../database/database"
 import { EventV2 } from "../event"
+import { Global } from "../global"
 import { SessionEvent } from "./event"
 import { SessionSchema } from "./schema"
 import { CognitiveView, HardState, SoftWorkspace, type ClaimRecord, type NoesisEvent, type Observation } from "../rivet/noesis"
@@ -55,10 +57,24 @@ export interface EpistemicStateSnapshot {
   readonly memoryFrontier: MemoryFrontier
 }
 
-import { InMemoryRecallStore, AutomaticRecallAdmissionHook, NoesisRecallProjector, type RecallStore } from "../rivet/recall"
+import { InMemoryRecallStore, AutomaticRecallAdmissionHook, NoesisRecallProjector, SqliteRecallStore, type RecallStore } from "../rivet/recall"
 
 export class SessionSemantics {
   static workspaceRecallStore: RecallStore | null = null
+  private static defaultStore: RecallStore | null = null
+
+  static getDefaultRecallStore(): RecallStore {
+    if (SessionSemantics.workspaceRecallStore) return SessionSemantics.workspaceRecallStore
+    if (!SessionSemantics.defaultStore) {
+      try {
+        const dbPath = path.join(Global.Path.data, "rivet-recall.db")
+        SessionSemantics.defaultStore = new SqliteRecallStore(dbPath)
+      } catch {
+        SessionSemantics.defaultStore = new InMemoryRecallStore()
+      }
+    }
+    return SessionSemantics.defaultStore
+  }
 
   readonly hardState: HardState
   readonly softWorkspace: SoftWorkspace
@@ -67,7 +83,7 @@ export class SessionSemantics {
   private constructor(readonly sessionID: SessionSchema.ID, hardState: HardState, recallStore?: RecallStore) {
     this.hardState = hardState
     this.softWorkspace = new SoftWorkspace(sessionID as unknown as SessionId, hardState.revision)
-    this.recallStore = recallStore ?? SessionSemantics.workspaceRecallStore ?? new InMemoryRecallStore()
+    this.recallStore = recallStore ?? SessionSemantics.getDefaultRecallStore()
   }
 
   static load = Effect.fn("SessionSemantics.load")(function* (
@@ -85,7 +101,7 @@ export class SessionSemantics {
       if (event.type !== SessionEvent.Semantic.type) continue
       state.apply(decodeNoesisEvent(event.data.event))
     }
-    const store = customRecallStore ?? SessionSemantics.workspaceRecallStore ?? new InMemoryRecallStore()
+    const store = customRecallStore ?? SessionSemantics.getDefaultRecallStore()
     const docs = NoesisRecallProjector.projectFromHardState(state, sessionID)
     yield* store.index(docs).pipe(Effect.ignore)
     return new SessionSemantics(sessionID, state, store)

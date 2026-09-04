@@ -736,6 +736,10 @@ export class CognitiveView {
         lines.push(`- [${c.status}] ${c.id}: ${c.proposition}${policyTag} (valid: ${c.validFromRevision}..${c.validToRevision ?? "now"})`)
       }
       lines.push("")
+    } else {
+      lines.push("### AUTHORITATIVE HARD CLAIMS:")
+      lines.push("- (None currently admitted in Hard State. Use `propose_claim` or `query_epistemic_state` to inspect/assert claims)")
+      lines.push("")
     }
 
     if (this.contradictions.length > 0) {
@@ -767,6 +771,10 @@ export class CognitiveView {
       for (const o of this.openObligations) {
         lines.push(`- [ ] ${o}`)
       }
+      lines.push("")
+    } else {
+      lines.push("### OPEN OBLIGATIONS TO VERIFY:")
+      lines.push("- (None open)")
       lines.push("")
     }
 
