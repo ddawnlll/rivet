@@ -137,9 +137,11 @@ describe("Noesis Cognitive Hardening: Epochs, Explicit TaskPhase & Mandatory Can
       limit: 5,
     }
 
-    // Heuristic inferTaskPhase without context would detect "timeout" or "why" and pick diagnosis
+    // Without ambiguous keyword heuristics, inferTaskPhase defaults safely or accepts explicit phase
     const inferred = inferTaskPhase(query)
-    expect(inferred).toBe("diagnosis")
+    expect(inferred).toBe("implementation")
+    const explicitInferred = inferTaskPhase({ ...query, taskPhase: "planning" })
+    expect(explicitInferred).toBe("planning")
 
     // But Harness explicitly knows the execution state is PLANNING
     const hardState = new HardState()

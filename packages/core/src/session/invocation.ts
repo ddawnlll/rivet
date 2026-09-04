@@ -85,10 +85,8 @@ export class ModelInvocationGate {
       reason = "STATE_CONTRADICTION"
     } else if (hasMultipleHypotheses) {
       reason = "HYPOTHESIS_CONFLICT"
-    } else if (hasUnresolvedObligations && view.openObligations.length === 1 && view.openObligations[0].toLowerCase().includes("goal")) {
+    } else if (hasUnresolvedObligations && !view.goalDescription) {
       reason = "GOAL_AMBIGUITY"
-    } else if (view.activeFocus.some((f) => f.includes("review") || f.includes("audit"))) {
-      reason = "REVIEW_SEMANTICS"
     }
 
     // A turn is mechanically decidable / suppressible ONLY if:

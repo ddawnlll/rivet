@@ -135,12 +135,18 @@ export class NoesisRepositoryIntegrator {
   ): { readonly isDrifted: boolean; readonly penaltyScore: number; readonly reason?: string } {
     const propLower = memoryProposition.toLowerCase()
 
-    // Check language mismatch
-    if (propLower.includes("python") && !census.primaryLanguages.includes("Python") && census.primaryLanguages.includes("Rust")) {
+    const knownLanguages = ["python", "rust", "typescript", "javascript", "go", "ruby", "java", "csharp", "kotlin", "swift", "c++", "c"]
+    const mentionedLang = knownLanguages.find((lang) => propLower.includes(lang))
+    if (
+      mentionedLang &&
+      !census.primaryLanguages.some((l) => l.toLowerCase() === mentionedLang) &&
+      census.primaryLanguages.length > 0
+    ) {
+      const capLang = mentionedLang.charAt(0).toUpperCase() + mentionedLang.slice(1)
       return {
         isDrifted: true,
         penaltyScore: 0.8,
-        reason: "Memory refers to Python architecture, but active repository migrated to Rust.",
+        reason: `Memory refers to ${capLang} architecture, but active repository migrated to ${census.primaryLanguages.join(", ")}.`,
       }
     }
 

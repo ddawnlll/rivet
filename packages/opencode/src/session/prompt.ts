@@ -17,6 +17,7 @@ import { SystemPrompt } from "./system"
 import { Instruction } from "./instruction"
 import { Plugin } from "../plugin"
 import { MAX_STEPS_PROMPT } from "@opencode-ai/core/session/runner/max-steps"
+import { BUILD_SYSTEM } from "@opencode-ai/core/plugin/agent"
 import { ToolRegistry } from "@/tool/registry"
 import { MCP } from "../mcp"
 import { LSP } from "@/lsp/lsp"
@@ -1137,10 +1138,12 @@ const layer = Layer.effect(
             .filter((part): part is SessionV1.TextPart => part.type === "text")
             .map((part) => part.text)
             .join("\n")
+          yield* semantics.ensureColdStart(events, session.directory)
           if (goal) yield* semantics.ensureGoal(events, goal, session.directory)
           const cognitiveView = yield* semantics.cognitiveView({
             repositoryId: session.directory,
             goalDescription: semantics.hardState.goalDescription ?? goal,
+            userPrompt: goal,
           })
 
           const lastAssistantMsg = msgs.findLast(
@@ -1327,13 +1330,38 @@ const layer = Layer.effect(
               MessageV2.toModelMessagesEffect(msgs, model),
             ])
             const system = [
+              BUILD_SYSTEM,
               ...env,
               ...instructions,
               ...(mcpInstructions ? [mcpInstructions] : []),
               ...(skills ? [skills] : []),
+              cognitiveView.formatPromptBlock(),
             ]
             const format = lastUser.format ?? { type: "text" as const }
             if (format.type === "json_schema") system.push(STRUCTURED_OUTPUT_SYSTEM_PROMPT)
+            const isHardStatePrompt = Boolean(
+              goal &&
+                /(hard[\s_]?state|epistemic|proje hakk[ıi]nda ne biliyors|ne biliyorsun.*hard|what do you know about (the |this )?project)/i.test(
+                  goal,
+                ),
+            )
+            const isMemoryPrompt = Boolean(
+              goal &&
+                !isHardStatePrompt &&
+                /(memory\s*retrieve|retrieve.*memory|recall.*memory|haf[ıi]za.*(durum|getir|kontrol|bak)|haf[ıi]zadan|bellek.*durum)/i.test(
+                  goal,
+                ),
+            )
+            const toolChoice =
+              format.type === "json_schema"
+                ? "required"
+                : isLastStep
+                  ? "none"
+                  : step === 1 && isHardStatePrompt
+                    ? ({ type: "tool" as const, toolName: "query_epistemic_state" } as const)
+                    : step === 1 && isMemoryPrompt
+                      ? ({ type: "tool" as const, toolName: "retrieve_memory" } as const)
+                      : undefined
             const result = yield* handle.process({
               user: lastUser,
               agent,
@@ -1373,7 +1401,7 @@ const layer = Layer.effect(
                   return [LLMEvent.toolResult({ id: call.id, name: call.name, result: { type: "text", value: output } })]
                 }),
               model,
-              toolChoice: format.type === "json_schema" ? "required" : undefined,
+              toolChoice,
             })
 
             if (structured !== undefined) {

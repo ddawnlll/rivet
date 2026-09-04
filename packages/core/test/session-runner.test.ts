@@ -3498,7 +3498,7 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
-  it.effect("steers tool choice to query_epistemic_state on hard state inquiry prompt", () =>
+  it.effect("provides epistemic tools and directives to LLM on hard state inquiry prompt without forced regex steering", () =>
     Effect.gen(function* () {
       yield* setup
       const session = yield* SessionV2.Service
@@ -3519,13 +3519,15 @@ describe("SessionRunnerLLM", () => {
       yield* session.resume(sessionID)
 
       expect(requests).toHaveLength(1)
-      expect(requests[0]?.toolChoice).toMatchObject({ type: "tool", name: "query_epistemic_state" })
+      expect(requests[0]?.toolChoice).toBeUndefined()
+      expect(requests[0]?.tools?.some((t) => t.name === "query_epistemic_state")).toBe(true)
+      expect(requests[0]?.tools?.some((t) => t.name === "retrieve_memory")).toBe(true)
       expect(requests[0]?.system.some((part) => part.text.includes("You are Rivet's active Cognitive Controller."))).toBe(true)
       expect(requests[0]?.system.some((part) => part.text.includes("CRITICAL HARNESS DIRECTIVES:"))).toBe(true)
     }),
   )
 
-  it.effect("steers tool choice to retrieve_memory on memory retrieve prompt", () =>
+  it.effect("provides memory tools and directives to LLM on memory prompt without forced regex steering", () =>
     Effect.gen(function* () {
       yield* setup
       const session = yield* SessionV2.Service
@@ -3546,7 +3548,8 @@ describe("SessionRunnerLLM", () => {
       yield* session.resume(sessionID)
 
       expect(requests).toHaveLength(1)
-      expect(requests[0]?.toolChoice).toMatchObject({ type: "tool", name: "retrieve_memory" })
+      expect(requests[0]?.toolChoice).toBeUndefined()
+      expect(requests[0]?.tools?.some((t) => t.name === "retrieve_memory")).toBe(true)
       expect(requests[0]?.system.some((part) => part.text.includes("You are Rivet's active Cognitive Controller."))).toBe(true)
     }),
   )

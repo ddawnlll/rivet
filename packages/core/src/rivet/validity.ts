@@ -464,34 +464,58 @@ export class ValidityEngine {
     userPrompt: string,
     currentEnvironmentLanguage?: string,
   ): PremiseConflict | null {
-    const lowerPrompt = userPrompt.toLowerCase()
+    const promptTokens = new Set(
+      userPrompt
+        .toLowerCase()
+        .split(/[^a-z0-9_]+/)
+        .filter((t) => t.length > 2),
+    )
+    if (promptTokens.size === 0) return null
 
-    // Example 1: User mentions "Python" when Python claim was superseded by Rust
-    const mentionsPython = /\b(python|pyproject|pip|pytest)\b/i.test(lowerPrompt)
-    const mentionsRust = /\b(rust|cargo|crates|rustc)\b/i.test(lowerPrompt)
+    for (const [id, claim] of hardState.claims) {
+      if (
+        claim.status !== "superseded" &&
+        claim.status !== "stale" &&
+        claim.status !== "rejected"
+      ) {
+        continue
+      }
 
-    if (mentionsPython && !mentionsRust) {
-      // Find if Python claim exists and was superseded
-      for (const [id, claim] of hardState.claims) {
-        const prop = claim.proposition.toLowerCase()
-        if (
-          prop.includes("python") &&
-          (claim.status === "superseded" || claim.status === "stale" || claim.status === "rejected")
-        ) {
-          const activeReplacement = Array.from(hardState.claims.values()).find(
-            (c) =>
-              (c.status === "supported" || c.status === "verified") &&
-              c.proposition.toLowerCase().includes("rust"),
-          )
+      const replacement =
+        (claim.supersededBy ? hardState.claims.get(claim.supersededBy) : undefined) ??
+        Array.from(hardState.claims.values()).find(
+          (c) => c.status === "supported" || c.status === "verified",
+        )
+      if (!replacement) continue
 
-          return {
-            userPremise: "User refers to Python codebase/environment",
-            currentValidState: activeReplacement?.proposition ??
-              (currentEnvironmentLanguage ? `Repository currently uses ${currentEnvironmentLanguage}` : "Repository migrated to Rust"),
-            conflictingClaimId: id,
-            supersededAtRevision: claim.validToRevision ?? hardState.revision,
-            evidenceRefs: [...claim.supportingEvidence],
-          }
+      const oldTokens = claim.proposition
+        .toLowerCase()
+        .split(/[^a-z0-9_]+/)
+        .filter((t) => t.length > 2)
+      const newTokens = new Set(
+        replacement.proposition
+          .toLowerCase()
+          .split(/[^a-z0-9_]+/)
+          .filter((t) => t.length > 2),
+      )
+
+      const distinguishingOld = oldTokens.filter((t) => !newTokens.has(t))
+      if (distinguishingOld.length === 0) continue
+
+      const distinguishingNew = Array.from(newTokens).filter((t) => !oldTokens.includes(t))
+
+      const mentionsOld = distinguishingOld.some((t) => promptTokens.has(t))
+      const mentionsNew = distinguishingNew.some((t) => promptTokens.has(t))
+
+      if (mentionsOld && !mentionsNew) {
+        const capitalPremise = distinguishingOld.map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ")
+        return {
+          userPremise: `User refers to ${capitalPremise} codebase/environment`,
+          currentValidState: replacement.proposition ??
+            (currentEnvironmentLanguage ? `Repository currently uses ${currentEnvironmentLanguage}` : "Active valid repository state"),
+          conflictingClaimId: id,
+          supersededAtRevision: claim.validToRevision ?? hardState.revision,
+          evidenceRefs: [...claim.supportingEvidence],
         }
       }
     }

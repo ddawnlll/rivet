@@ -34,6 +34,14 @@ import type { ModelInvocation } from "@opencode-ai/core/session/invocation"
 
 export const OUTPUT_TOKEN_MAX = ProviderTransform.OUTPUT_TOKEN_MAX
 
+export type ToolChoice =
+  | "auto"
+  | "required"
+  | "none"
+  | { type: "tool"; toolName: string }
+  | { type: "tool"; name: string }
+  | string
+
 export type StreamInput = {
   user: SessionV1.User
   sessionID: string
@@ -46,7 +54,7 @@ export type StreamInput = {
   small?: boolean
   tools: Record<string, Tool>
   retries?: number
-  toolChoice?: "auto" | "required" | "none"
+  toolChoice?: ToolChoice
   /** Harness-compiled semantic context; provider adapters may serialize it. */
   cognitiveView?: CognitiveView
   /** The complete Harness invocation contract carried alongside the view. */
@@ -331,7 +339,16 @@ const live: Layer.Layer<
           providerOptions: ProviderTransform.providerOptions(input.model, prepared.params.options),
           activeTools: Object.keys(prepared.tools).filter((x) => x !== "invalid"),
           tools: prepared.tools,
-          toolChoice: input.toolChoice,
+          toolChoice:
+            typeof input.toolChoice === "string"
+              ? (["auto", "none", "required"].includes(input.toolChoice)
+                  ? (input.toolChoice as "auto" | "none" | "required")
+                  : { type: "tool" as const, toolName: input.toolChoice })
+              : typeof input.toolChoice === "object" && input.toolChoice !== null
+                ? ("toolName" in input.toolChoice
+                    ? input.toolChoice
+                    : { type: "tool" as const, toolName: (input.toolChoice as { name: string }).name })
+                : input.toolChoice,
           maxOutputTokens: prepared.params.maxOutputTokens,
           abortSignal: input.abort,
           headers: prepared.headers,

@@ -34,7 +34,13 @@ type StreamInput = {
   readonly llmClient: LLMClientShape
   readonly messages: ModelMessage[]
   readonly tools: Record<string, Tool>
-  readonly toolChoice?: "auto" | "required" | "none"
+  readonly toolChoice?:
+    | "auto"
+    | "required"
+    | "none"
+    | { type: "tool"; toolName: string }
+    | { type: "tool"; name: string }
+    | string
   readonly cognitiveView?: CognitiveView
   readonly invocation?: ModelInvocation
   readonly executeTool?: (

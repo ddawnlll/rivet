@@ -23,6 +23,7 @@ import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
 import { EventV2 } from "@opencode-ai/core/event"
 import { SessionSemantics } from "@opencode-ai/core/session/semantics"
+import { AutomaticRecallAdmissionHook } from "@opencode-ai/core/rivet"
 import { isRecord } from "@/util/record"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 
@@ -283,6 +284,144 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
             supportingEvidence,
           })
           return { title: "Rivet claim", metadata: {}, output: "Claim admitted as supported evidence" }
+        }),
+      )
+    },
+  })
+
+  tools.query_epistemic_state = tool({
+    description:
+      "Query Rivet's authoritative epistemic state (Noesis HardState revision, active validated claims, open obligations, premise conflicts, and memory frontier). NOTE: Hard State is an internal runtime state, NOT files on disk. Do NOT use glob/grep to look for state files; call this tool instead.",
+    inputSchema: jsonSchema(
+      ProviderTransform.schema(input.model, {
+        type: "object",
+        properties: {
+          include_frontier: { type: "boolean", description: "Include associative memory frontier" },
+        },
+        additionalProperties: false,
+      }),
+    ),
+    execute(args) {
+      return run.promise(
+        Effect.sync(() => {
+          const values = isRecord(args) ? args : {}
+          const snapshot = input.semantics.getEpistemicState(input.semantics.scope(input.session.directory))
+          const memoryItems = [
+            ...(snapshot.memoryFrontier?.active ?? []),
+            ...(snapshot.memoryFrontier?.episodic ?? []),
+            ...(snapshot.memoryFrontier?.procedural ?? []),
+            ...(snapshot.memoryFrontier?.rejected ?? []),
+          ]
+          const stateSummary = [
+            `=== RIVET AUTHORITATIVE EPISTEMIC STATE ===`,
+            `Revision: ${snapshot.revision}`,
+            `Goal: ${snapshot.goalDescription ?? "None"}`,
+            `Active Valid Claims (${snapshot.activeClaims.length}):`,
+            ...(snapshot.activeClaims.length > 0
+              ? snapshot.activeClaims.map((c) => `  - [${c.status}] ${c.id}: ${c.proposition}`)
+              : [`  (None active)`]),
+            `Open Obligations (${snapshot.openObligations.length}):`,
+            ...(snapshot.openObligations.length > 0
+              ? snapshot.openObligations.map(([id, desc]) => `  - [${id}] ${desc}`)
+              : [`  (None open)`]),
+            ...(snapshot.premiseConflicts.length > 0
+              ? [
+                  `Premise Conflicts (${snapshot.premiseConflicts.length}):`,
+                  ...snapshot.premiseConflicts.map(
+                    (pc) => `  - [PREMISE CONFLICT] User: "${pc.userPremise}" vs Valid: "${pc.currentValidState}"`,
+                  ),
+                ]
+              : []),
+            `Memory Frontier (${memoryItems.length} items):`,
+            ...(memoryItems.length > 0
+              ? memoryItems.map((m) => `  - [${m.type}] ${m.summary}`)
+              : [`  (No relevant memory records recalled for this revision)`]),
+            `Recent Evidence (${snapshot.recentEvidence.length}):`,
+            ...snapshot.recentEvidence.map(([id, sum]) => `  - [${id}] ${sum}`),
+          ].join("\n")
+
+          return {
+            title: "Rivet epistemic state",
+            metadata: {
+              revision: snapshot.revision.toJSON(),
+              structured: {
+                revision: snapshot.revision.toJSON(),
+                claims: snapshot.activeClaims,
+                obligations: snapshot.openObligations,
+                memories: memoryItems,
+              },
+            },
+            output: stateSummary,
+          }
+        }),
+      )
+    },
+  })
+
+  tools.retrieve_memory = tool({
+    description:
+      "Search and retrieve associative project memory, past session decisions, architectural conventions, and failure-avoidance patterns from Rivet's memory store. NOTE: Memory records are stored internally in Rivet's recall store, NOT in workspace files. Do NOT use glob/grep to search for memory files; call this tool instead.",
+    inputSchema: jsonSchema(
+      ProviderTransform.schema(input.model, {
+        type: "object",
+        properties: {
+          query: { type: "string", description: "Search query or topic to recall from memory" },
+          symbols: { type: "array", items: { type: "string" }, description: "Specific code symbols to recall related memories for" },
+        },
+        required: ["query"],
+        additionalProperties: false,
+      }),
+    ),
+    execute(args) {
+      return run.promise(
+        Effect.gen(function* () {
+          const values = isRecord(args) ? args : {}
+          const query = typeof values.query === "string" ? values.query : ""
+          const symbols = Array.isArray(values.symbols)
+            ? values.symbols.filter((value): value is string => typeof value === "string")
+            : []
+          const state = input.semantics.getEpistemicState()
+          const scope = input.semantics.scope(input.session.directory)
+          const frontier = yield* AutomaticRecallAdmissionHook.admitRecall({
+            hardState: input.semantics.hardState,
+            recallStore: input.semantics.recallStore,
+            userPrompt: query,
+            goalDescription: state.goalDescription ?? query,
+            repositoryId: input.session.directory,
+            focusSymbols: symbols,
+            scope,
+          })
+          const items = [
+            ...(frontier?.active ?? []),
+            ...(frontier?.episodic ?? []),
+            ...(frontier?.procedural ?? []),
+            ...(frontier?.rejected ?? []),
+          ]
+          const symbolsStr = frontier?.relatedSymbols?.length ? ` (symbols: ${frontier.relatedSymbols.join(", ")})` : ""
+          const summary = [
+            `=== RIVET PROJECT MEMORY RETRIEVAL ===`,
+            `Query: "${query}"`,
+            `Recalled Records (${items.length}):`,
+            ...(items.length > 0
+              ? items.map((m) => `  - [${m.type}] ${m.summary}`)
+              : [`  (No memories matched query: "${query}")`]),
+            symbolsStr ? `Symbols: ${symbolsStr}` : undefined,
+          ]
+            .filter(Boolean)
+            .join("\n")
+
+          return {
+            title: "Rivet memory retrieval",
+            metadata: {
+              revision: state.revision.toJSON(),
+              structured: {
+                query,
+                count: items.length,
+                items,
+              },
+            },
+            output: summary,
+          }
         }),
       )
     },

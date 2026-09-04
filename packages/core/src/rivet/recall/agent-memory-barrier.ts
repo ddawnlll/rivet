@@ -10,34 +10,8 @@ export interface AgentRecallAdmissionContext {
   readonly taskPhase?: TaskPhase
 }
 
-export function inferTaskPhase(query: MemoryQuery): TaskPhase {
-  const text = `${query.prompt} ${query.goal}`.toLowerCase()
-  if (text.includes("orient") || text.includes("overview") || text.includes("onboard") || text.includes("explain repo") || text.includes("explain architecture")) {
-    return "orientation"
-  }
-  if (text.includes("plan") || text.includes("rfc") || text.includes("roadmap") || text.includes("design spec")) {
-    return "planning"
-  }
-  if (text.includes("brainstorm") || text.includes("hypothes") || text.includes("explore possible")) {
-    return "brainstorming"
-  }
-  if (text.includes("verify") || text.includes("compaction suite") || text.includes("skip test") || text.includes("check verification")) {
-    return "verification"
-  }
-  if (
-    text.includes("diagnos") ||
-    text.includes("investigat") ||
-    text.includes("timeout") ||
-    text.includes("504") ||
-    text.includes("leak") ||
-    text.includes("starvat") ||
-    text.includes("alert") ||
-    text.includes("error") ||
-    text.includes("why") ||
-    text.includes("bug")
-  ) {
-    return "diagnosis"
-  }
+export function inferTaskPhase(query: MemoryQuery & { readonly taskPhase?: TaskPhase }): TaskPhase {
+  if (query.taskPhase) return query.taskPhase
   return "implementation"
 }
 

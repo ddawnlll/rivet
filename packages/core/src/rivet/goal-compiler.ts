@@ -99,22 +99,9 @@ export class GoalCompiler {
     const rootOblgId = createObligationId()
     const rootScope = Scope.global(repoName, currentRevision)
 
-    let predicate: ObligationPredicate
-    if (
-      promptLower.includes("test") ||
-      promptLower.includes("verify") ||
-      promptLower.includes("fix")
-    ) {
-      predicate = {
-        type: "command_pass",
-        command: "bun test",
-        expectedExitCode: 0,
-      }
-    } else {
-      predicate = {
-        type: "claims_verified",
-        claimPropositions: [`Goal '${userPrompt}' fulfilled`],
-      }
+    const predicate: ObligationPredicate = {
+      type: "claims_verified",
+      claimPropositions: [`Goal '${userPrompt}' fulfilled`],
     }
 
     graph.addObligation({

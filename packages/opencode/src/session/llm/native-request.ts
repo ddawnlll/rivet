@@ -29,7 +29,13 @@ export type RequestInput = {
   readonly tools?: Record<string, ToolInput>
   readonly cognitiveView?: CognitiveView
   readonly invocation?: ModelInvocation
-  readonly toolChoice?: "auto" | "required" | "none"
+  readonly toolChoice?:
+    | "auto"
+    | "required"
+    | "none"
+    | { type: "tool"; toolName: string }
+    | { type: "tool"; name: string }
+    | string
   readonly temperature?: number
   readonly topP?: number
   readonly topK?: number
@@ -191,7 +197,10 @@ export const request = (input: RequestInput) => {
     system: [...(input.system ?? []).map(SystemPart.make), ...converted.system],
     messages: converted.messages,
     tools: tools(input.tools),
-    toolChoice: input.toolChoice,
+    toolChoice:
+      typeof input.toolChoice === "object" && input.toolChoice !== null && "toolName" in input.toolChoice
+        ? { type: "tool" as const, name: input.toolChoice.toolName }
+        : input.toolChoice,
     generation: generation(input),
     providerOptions: input.providerOptions,
     cognitiveView: input.cognitiveView,

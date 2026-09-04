@@ -115,12 +115,14 @@ export class DerivedStateProjector {
     }
 
     const lower = claim.proposition.toLowerCase()
-    // If claim asserts Python as primary language but Python is not in primary languages
-    if (lower.includes("primary implementation language is python") || lower.includes("project language is python")) {
-      if (!census.primaryLanguages.includes("Python") && (census.primaryLanguages.includes("Rust") || census.primaryLanguages.includes("TypeScript"))) {
+    const langMatch = lower.match(/(?:primary implementation language|project language)\s+is\s+([a-z0-9_#+]+)/i)
+    if (langMatch && langMatch[1]) {
+      const assertedLang = langMatch[1]
+      const matchesLive = census.primaryLanguages.some((l) => l.toLowerCase() === assertedLang.toLowerCase())
+      if (!matchesLive && census.primaryLanguages.length > 0) {
         return {
           isValid: false,
-          reason: `Derived state mismatch: Live census shows ${census.primaryLanguages.join(", ")} but claim asserts Python`,
+          reason: `Derived state mismatch: Live census shows ${census.primaryLanguages.join(", ")} but claim asserts ${assertedLang}`,
         }
       }
     }

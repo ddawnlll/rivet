@@ -299,24 +299,7 @@ const layer = Layer.effect(
         agent.info?.system === undefined
           ? `${AgentPlugin.BUILD_SYSTEM}\n\n${baseRivetSystem}`
           : baseRivetSystem
-      const isMemoryPrompt = Boolean(
-        goal &&
-          /(memory\s*retrieve|retrieve.*memory|haf[ıi]za.*(durum|getir|kontrol|bak)|haf[ıi]zadan|bellek.*durum)/i.test(
-            goal,
-          ),
-      )
-      const isHardStatePrompt = Boolean(
-        goal &&
-          !isMemoryPrompt &&
-          /(hard[\s_]?state|epistemic|proje hakk[ıi]nda ne biliyors|ne biliyorsun.*hard|haf[ıi]za durum)/i.test(goal),
-      )
-      const toolChoice = isLastStep
-        ? "none"
-        : currentStep === 1 && isMemoryPrompt
-          ? "retrieve_memory"
-          : currentStep === 1 && isHardStatePrompt
-            ? "query_epistemic_state"
-            : undefined
+      const toolChoice = isLastStep ? "none" : undefined
       const request = LLM.request({
         model,
         http: {

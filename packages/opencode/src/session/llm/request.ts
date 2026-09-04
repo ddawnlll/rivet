@@ -16,6 +16,7 @@ import type { Plugin } from "@/plugin"
 import { mergeDeep } from "remeda"
 import type { CognitiveView } from "@opencode-ai/core/rivet/noesis"
 import type { ModelInvocation } from "@opencode-ai/core/session/invocation"
+import { BUILD_SYSTEM } from "@opencode-ai/core/plugin/agent"
 
 const USER_AGENT = `opencode/${InstallationVersion}`
 
@@ -61,14 +62,19 @@ const mergeOptions = (target: Record<string, any>, source: Record<string, any> |
 
 export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: PrepareInput) {
   const isOpenaiOauth = input.provider.id === "openai" && input.auth?.type === "oauth"
+  const rivetBlock = input.cognitiveView?.formatPromptBlock()
+  const agentPrompt = input.agent.prompt ?? BUILD_SYSTEM
   const system = [
     [
-      ...(input.agent.prompt ? [input.agent.prompt] : SystemPrompt.provider(input.model)),
+      agentPrompt,
       ...input.system,
       ...(input.user.system ? [input.user.system] : []),
+      ...(rivetBlock && !input.system.some((s) => s.includes("=== AUTHORITATIVE EPISTEMIC STATE ==="))
+        ? [rivetBlock]
+        : []),
     ]
       .filter((x) => x)
-      .join("\n"),
+      .join("\n\n"),
   ]
 
   const header = system[0]

@@ -52,7 +52,7 @@ export class TaskSignatureCompiler {
     const possibleSymbols = Array.from(
       new Set(
         tokens.filter((t) =>
-          /^[A-Z][a-zA-Z0-9]+$/.test(t) || // PascalCase
+          /^[A-Z][a-z0-9]+[A-Z][a-zA-Z0-9]*$/.test(t) || // PascalCase (compound)
           /^[a-z]+[A-Z][a-zA-Z0-9]*$/.test(t) || // camelCase
           /^[a-zA-Z0-9]+_[a-zA-Z0-9_]+$/.test(t) || // snake_case
           t.includes(".")
@@ -125,24 +125,23 @@ export class SelectiveRetrievalGate {
   ): SelectiveRetrievalDecision {
     const prompt = signature.rawPrompt.toLowerCase()
 
-    // Rule 1: Explicit localized target file mentioned and known
     const knownFiles = context.knownFiles ?? []
     const explicitFileMentioned = knownFiles.find((f) => {
       const base = f.split("/").pop() ?? f
       return prompt.includes(base.toLowerCase())
     })
 
-    const isTrivialEdits =
-      prompt.includes("readme") ||
-      prompt.includes("typo") ||
-      prompt.includes("rename") ||
-      prompt.includes("comment") ||
-      prompt.includes("format")
+    const externalSymbols = signature.possibleSymbols.filter((s) => {
+      if (!explicitFileMentioned) return true
+      const sLower = s.toLowerCase()
+      const fLower = explicitFileMentioned.toLowerCase()
+      return sLower !== fLower && !fLower.endsWith(sLower)
+    })
 
-    if (explicitFileMentioned && isTrivialEdits) {
+    if (explicitFileMentioned && externalSymbols.length === 0) {
       return {
         shouldRetrieve: false,
-        reason: `Task is localized to explicit file '${explicitFileMentioned}' with trivial edit semantics; bypassing repository retrieval.`,
+        reason: `Task is localized to explicit file '${explicitFileMentioned}' with no external candidate symbols; bypassing repository retrieval.`,
         bypassScope: Scope.path("root", explicitFileMentioned, signature.currentScope.revision),
       }
     }
