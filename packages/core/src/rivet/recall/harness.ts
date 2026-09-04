@@ -181,6 +181,21 @@ export class AutomaticRecallAdmissionHook {
         }
       }
 
+      // If no memory candidates were matched but HardState has active claims, populate active frontier from canonical claims
+      if (active.length === 0 && episodic.length === 0 && procedural.length === 0 && ctx.hardState.claims.size > 0) {
+        for (const [claimId, claim] of ctx.hardState.claims) {
+          if (claim.status === "supported" || claim.status === "verified") {
+            active.push({
+              id: claimId,
+              type: "claim",
+              summary: claim.proposition,
+              status: claim.status,
+              revision: claim.validFromRevision,
+            })
+          }
+        }
+      }
+
       return {
         revision: ctx.hardState.revision,
         pinned,

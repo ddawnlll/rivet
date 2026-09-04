@@ -7,7 +7,7 @@ import {
   type MemoryRef,
   type PremiseConflict,
   type Revision,
-  type Scope,
+  Scope,
   type ValidityPolicy,
   globMatch,
   normalizeRelativePath,
@@ -404,8 +404,20 @@ export class ValidityEngine {
     const superseded: ClaimRecord[] = []
 
     for (const claim of hardState.claims.values()) {
-      if (scope && !scope.containsScope(claim.scope) && !claim.scope.containsScope(scope)) {
-        continue
+      if (scope) {
+        if (claim.scope.repository !== scope.repository) {
+          continue
+        }
+        if (scope.pathPattern && claim.scope.pathPattern) {
+          const scopeAtRev = new Scope({
+            repository: scope.repository,
+            pathPattern: scope.pathPattern,
+            revision: claim.scope.revision,
+          })
+          if (!scopeAtRev.containsScope(claim.scope) && !claim.scope.containsScope(scopeAtRev)) {
+            continue
+          }
+        }
       }
 
       switch (claim.status) {

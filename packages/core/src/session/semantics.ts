@@ -1,3 +1,4 @@
+import fs from "fs"
 import path from "path"
 import { DateTime, Effect } from "effect"
 import { SessionDurable } from "@opencode-ai/schema/durable-event-manifest"
@@ -28,6 +29,7 @@ import {
   createObligationId,
   createReceiptId,
   createTaskId,
+  type ActionId,
   type ClaimId,
   type DependencyRef,
   type EpistemicStatus,
@@ -41,6 +43,7 @@ import {
 } from "../rivet/types"
 import { parseProviderToolFrame, type ProviderToolFrame } from "./commitment"
 import { ValidityEngine, type EnvironmentChange } from "../rivet/validity"
+import { RepositoryCensusProjector } from "../rivet/repository/census"
 
 export interface EpistemicStateSnapshot {
   readonly revision: Revision
@@ -561,6 +564,148 @@ export class SessionSemantics {
       })
     })
   }
+
+  /**
+   * T0 Cold Start Repository Census Bootstrap:
+   * When session Hard State is empty (no claims, no observations), scans the repository workspace,
+   * projects deterministic architectural census, and asserts baseline claims & observations.
+   */
+  ensureColdStart(events: EventV2.Interface, directory: string): Effect.Effect<void> {
+    const self = this
+    return Effect.gen(function* () {
+      if (self.hardState.claims.size > 0 || self.hardState.observations.size > 0) {
+        return
+      }
+
+      const files = yield* Effect.promise(() => discoverWorkspaceFiles(directory))
+      if (files.length === 0) return
+
+      const census = RepositoryCensusProjector.projectFromFiles(files, self.hardState.revision)
+      const evidenceId = createEvidenceId("ev_census_bootstrap")
+
+      // 1. Evidence of Cold Start discovery
+      yield* self.append(events, {
+        type: "evidence_recorded",
+        evidenceId,
+        source: "repository_census",
+        summary: `T0 Cold Start census cataloged ${census.totalTrackedFiles} tracked files, primary languages: [${census.primaryLanguages.join(", ")}], package managers: [${census.packageManagers.join(", ")}], workspaces: ${census.workspaces.length} packages.`,
+        timestamp: new Date().toISOString(),
+      })
+
+      // 2. Baseline Observation
+      yield* self.append(events, {
+        type: "observation_recorded",
+        observation: {
+          observationId: "obs_census_bootstrap",
+          actionId: "action_census_bootstrap" as ActionId,
+          scope: self.scope(directory),
+          summary: `T0 Census Bootstrap completed: ${census.totalTrackedFiles} files and ${census.workspaces.length} packages discovered in repository.`,
+          timestamp: new Date().toISOString(),
+        },
+      })
+
+      // 3. Primary Languages Claim
+      if (census.primaryLanguages.length > 0) {
+        yield* self.append(events, {
+          type: "claim_asserted",
+          claimId: createClaimId("claim_census_languages"),
+          proposition: `Repository primary implementation language(s): ${census.primaryLanguages.join(", ")}`,
+          status: "supported",
+          evidence: [evidenceId],
+          scope: self.scope(directory),
+          validityPolicy: "DERIVED_STATE",
+          dependencies: census.manifestFiles.map((m) => ({ type: "manifest" as const, name: m })),
+          validFromRevision: self.hardState.revision,
+          timestamp: new Date().toISOString(),
+        })
+      }
+
+      // 4. Workspaces Structure Claim
+      if (census.workspaces.length > 0) {
+        const wsNames =
+          census.workspaces.slice(0, 8).map((w) => w.name).join(", ") +
+          (census.workspaces.length > 8 ? ` and ${census.workspaces.length - 8} more` : "")
+        yield* self.append(events, {
+          type: "claim_asserted",
+          claimId: createClaimId("claim_census_workspaces"),
+          proposition: `Repository monorepo workspace structure comprises ${census.workspaces.length} packages: ${wsNames}`,
+          status: "supported",
+          evidence: [evidenceId],
+          scope: self.scope(directory),
+          validityPolicy: "CURRENT_STATE",
+          dependencies: census.workspaces.slice(0, 20).map((w) => ({ type: "manifest" as const, name: w.manifestPath })),
+          validFromRevision: self.hardState.revision,
+          timestamp: new Date().toISOString(),
+        })
+      }
+
+      // 5. Build and Test Toolchains Claim
+      const toolchains = [...census.buildSystems, ...census.testFrameworks]
+      if (toolchains.length > 0) {
+        yield* self.append(events, {
+          type: "claim_asserted",
+          claimId: createClaimId("claim_census_toolchains"),
+          proposition: `Repository build and test toolchains: ${toolchains.join(", ")}`,
+          status: "supported",
+          evidence: [evidenceId],
+          scope: self.scope(directory),
+          validityPolicy: "DERIVED_STATE",
+          dependencies: census.manifestFiles.map((m) => ({ type: "manifest" as const, name: m })),
+          validFromRevision: self.hardState.revision,
+          timestamp: new Date().toISOString(),
+        })
+      }
+    })
+  }
+}
+
+async function discoverWorkspaceFiles(directory: string): Promise<string[]> {
+  try {
+    const proc = Bun.spawn(["git", "ls-files"], {
+      cwd: directory,
+      stdout: "pipe",
+      stderr: "pipe",
+    })
+    const out = await new Response(proc.stdout).text()
+    const exitCode = await proc.exited
+    if (exitCode === 0 && out.trim().length > 0) {
+      return out.trim().split("\n").filter(Boolean)
+    }
+  } catch {
+    // Fall back to fast recursive directory scan
+  }
+
+  const results: string[] = []
+  function scan(dir: string, prefix = "", depth = 0) {
+    if (depth > 6 || results.length > 10000) return
+    try {
+      const entries = fs.readdirSync(dir, { withFileTypes: true })
+      for (const e of entries) {
+        if (
+          e.name.startsWith(".") ||
+          e.name === "node_modules" ||
+          e.name === "dist" ||
+          e.name === "target" ||
+          e.name === "build" ||
+          e.name === ".next" ||
+          e.name === "artifacts" ||
+          e.name === "vendor"
+        ) {
+          continue
+        }
+        const rel = prefix ? `${prefix}/${e.name}` : e.name
+        if (e.isDirectory()) {
+          scan(path.join(dir, e.name), rel, depth + 1)
+        } else {
+          results.push(rel)
+        }
+      }
+    } catch {
+      // Ignore unreadable dirs
+    }
+  }
+  scan(directory)
+  return results
 }
 
 function encodeNoesisEvent(event: NoesisEvent): unknown {

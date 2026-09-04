@@ -119,16 +119,18 @@ export class AssociativeRetrievalEngine {
     let score = 0
 
     // 0-Hop: Direct symbol intersection
-    const docSymbolSet = new Set(doc.relatedSymbols.map((s) => s.toLowerCase()))
-    for (const qSym of query.activeSymbols) {
+    const activeSymbols = query.activeSymbols ?? []
+    const docSymbolSet = new Set((doc.relatedSymbols ?? []).map((s) => s.toLowerCase()))
+    for (const qSym of activeSymbols) {
       if (docSymbolSet.has(qSym.toLowerCase())) {
         score += 0.4
       }
     }
 
     // 0-Hop: Direct claim reference
-    const docSourceSet = new Set(doc.sourceRefs.map((s) => s.toLowerCase()))
-    for (const qClaim of query.activeClaims) {
+    const activeClaims = query.activeClaims ?? []
+    const docSourceSet = new Set((doc.sourceRefs ?? []).map((s) => s.toLowerCase()))
+    for (const qClaim of activeClaims) {
       if (docSourceSet.has(qClaim.toLowerCase())) {
         score += 0.5
       }
@@ -139,7 +141,7 @@ export class AssociativeRetrievalEngine {
     if (doc.relationships) {
       for (const rel of doc.relationships) {
         visitedHop1.add(rel.targetId)
-        if (query.activeClaims.includes(rel.targetId)) {
+        if (activeClaims.includes(rel.targetId)) {
           const edgeWeight = RELATIONSHIP_WEIGHTS[rel.kind] ?? 0.5
           score += edgeWeight * 0.7
         }
@@ -154,7 +156,7 @@ export class AssociativeRetrievalEngine {
 
         for (const neighborRel of neighbor.relationships) {
           if (visitedHop1.has(neighborRel.targetId)) continue
-          if (query.activeClaims.includes(neighborRel.targetId)) {
+          if (activeClaims.includes(neighborRel.targetId)) {
             const edge1Weight = RELATIONSHIP_WEIGHTS[rel.kind] ?? 0.5
             const edge2Weight = RELATIONSHIP_WEIGHTS[neighborRel.kind] ?? 0.5
             // 2-hop distance decay (0.4x factor)
@@ -168,21 +170,28 @@ export class AssociativeRetrievalEngine {
   }
 
   /**
-   * Computes temporal decay score.
+   * Evaluates temporal recency decay based on revision and observed time.
    */
   static computeTemporalScore(doc: RecallDocument, query: RecallQuery): number {
-    if (!doc.validFromRevision) return 0.5
-    const diff = Number(query.revision.value - doc.validFromRevision.value)
-    if (diff <= 0) return 1.0
-    // Exponential decay with half-life of 20 revisions
-    return Math.exp(-diff / 20)
+    const docRev = doc.validFromRevision?.value ?? 0n
+    const queryRev = query.revision?.value ?? 0n
+    const revDelta = Number(queryRev > docRev ? queryRev - docRev : 0n)
+
+    // Exponential decay by revision distance
+    const revScore = Math.exp(-revDelta / 20.0)
+
+    // Age decay by hours
+    const ageHours = Math.max(0, (Date.now() - doc.observedAt) / (1000 * 60 * 60))
+    const ageScore = Math.exp(-ageHours / 168.0) // 1-week half-ish life
+
+    return 0.7 * revScore + 0.3 * ageScore
   }
 
   /**
-   * Computes scope relevance score.
+   * Evaluates scope relevance (repository and path hierarchy).
    */
   static computeScopeScore(doc: RecallDocument, query: RecallQuery): number {
-    if (doc.scope.repository !== query.scope.repository) return 0.0
+    if (!query.scope || doc.scope.repository !== query.scope.repository) return 0.0
     if (!doc.scope.pathPattern || !query.scope.pathPattern) return 0.8
     const cleanDoc = doc.scope.pathPattern.replace(/[\*\/]+$/, "")
     const cleanQuery = query.scope.pathPattern.replace(/[\*\/]+$/, "")
@@ -204,7 +213,9 @@ export class AssociativeRetrievalEngine {
   ): readonly RecallCandidate[] {
     if (documents.length === 0) return []
 
-    const queryText = `${query.prompt} ${query.goal}`.trim()
+    const prompt = query.prompt ?? (query as any).query ?? ""
+    const goal = query.goal ?? ""
+    const queryText = `${prompt} ${goal}`.trim()
     const queryTokens = tokenize(queryText)
     const maxGraphHop = options.maxGraphHop ?? 2
 
@@ -216,7 +227,7 @@ export class AssociativeRetrievalEngine {
 
     for (const doc of documents) {
       docMap.set(doc.id, doc)
-      const tokens = tokenize(`${doc.text} ${doc.summary ?? ""} ${doc.relatedSymbols.join(" ")}`)
+      const tokens = tokenize(`${doc.text} ${doc.summary ?? ""} ${(doc.relatedSymbols ?? []).join(" ")}`)
       docTokensList.push(tokens)
       totalTokenCount += tokens.length
 
@@ -276,10 +287,34 @@ export class AssociativeRetrievalEngine {
       candidates.push({ document: doc, scores })
     }
 
+    // Fallback: If no candidate passed lexical/graph/semantic filters (e.g. cross-lingual or broad overview query),
+    // retain authoritative and recent memories ranked by temporal, scope, and status weights.
+    if (candidates.length === 0 && documents.length > 0) {
+      for (let i = 0; i < documents.length; i++) {
+        const doc = documents[i]!
+        const temporalScore = this.computeTemporalScore(doc, query)
+        const scopeScore = this.computeScopeScore(doc, query)
+        const statusBonus = doc.epistemicStatus === "verified" ? 0.3 : doc.epistemicStatus === "supported" ? 0.2 : 0.1
+        const compositeScore = weights.temporal * temporalScore + weights.scope * scopeScore + statusBonus
+        candidates.push({
+          document: doc,
+          scores: {
+            semanticScore: 0,
+            lexicalScore: 0,
+            graphScore: 0,
+            temporalScore,
+            scopeScore,
+            compositeScore,
+          },
+        })
+      }
+    }
+
     // Sort descending by composite score
     candidates.sort((a, b) => b.scores.compositeScore - a.scores.compositeScore)
 
-    return candidates.slice(0, query.limit)
+    const limit = query.limit ?? 10
+    return candidates.slice(0, limit)
   }
 }
 

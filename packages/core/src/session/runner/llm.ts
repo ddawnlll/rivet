@@ -185,6 +185,7 @@ const layer = Layer.effect(
       if (session.location.directory !== location.directory || session.location.workspaceID !== location.workspaceID)
         return yield* Effect.interrupt
       const semantics = yield* SessionSemantics.load(db, session.id)
+      yield* semantics.ensureColdStart(events, session.location.directory)
       const agent = yield* agents.select(session.agent)
       const initialized = yield* SessionContextEpoch.initialize(db, loadSystemContext(agent), session.id)
       const toolFibers = yield* FiberSet.make<void, ToolOutputStore.Error>()
@@ -253,7 +254,8 @@ const layer = Layer.effect(
             }),
             new ToolDefinition({
               name: "query_epistemic_state",
-              description: "Query Rivet's authoritative epistemic state (Noesis HardState, open obligations, active validated claims, memory frontier, and premise conflicts) without executing raw database queries.",
+              description:
+                "Query Rivet's authoritative epistemic state (Noesis HardState revision, active validated claims, open obligations, premise conflicts, and memory frontier). NOTE: Hard State is an internal runtime state, NOT files on disk. Do NOT use glob/grep to look for state files; call this tool instead.",
               inputSchema: {
                 type: "object",
                 properties: {
@@ -264,7 +266,8 @@ const layer = Layer.effect(
             }),
             new ToolDefinition({
               name: "retrieve_memory",
-              description: "Search and retrieve associative project memory, past session decisions, architectural conventions, and failure-avoidance patterns from Rivet's memory store.",
+              description:
+                "Search and retrieve associative project memory, past session decisions, architectural conventions, and failure-avoidance patterns from Rivet's memory store. NOTE: Memory records are stored internally in Rivet's recall store, NOT in workspace files. Do NOT use glob/grep to search for memory files; call this tool instead.",
               inputSchema: {
                 type: "object",
                 properties: {
