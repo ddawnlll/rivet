@@ -259,7 +259,7 @@ const layer = Layer.effect(
           return `Processing ${tool} result`
         }
         return (
-          ({
+          {
             "turn.admission": "Understanding request",
             "goal.compile": "Compiling goal",
             "hardstate.load": "Loading Hard State",
@@ -279,7 +279,7 @@ const layer = Layer.effect(
             "praxis.evaluate": "Verifying evidence",
             "completion.evaluate": "Checking completion",
             "provider.finalize": "Delivering response",
-          })[operation] ?? operation
+          }[operation] ?? operation
         )
       }
       const publishActivity = (span: ActiveSpanContext) =>
@@ -329,12 +329,10 @@ const layer = Layer.effect(
           if (Exit.isFailure(exit)) return yield* Effect.failCause(exit.cause)
           return exit.value
         })
-      const semantics = yield* withActivity(
-        "state",
-        "hardstate.load",
-        SessionSemantics.load(db, session.id),
-        { sessionId: session.id, turnId: step },
-      )
+      const semantics = yield* withActivity("state", "hardstate.load", SessionSemantics.load(db, session.id), {
+        sessionId: session.id,
+        turnId: step,
+      })
       toolLoopGuard.setHardStateRevision(semantics.hardState.revision.toJSON())
       yield* semantics.ensureColdStart(events, session.location.directory)
       // Fork the deep repository induction in the background: the first drain
@@ -548,6 +546,7 @@ const layer = Layer.effect(
         availableActions,
         budget: { outputTokens: agent.info?.steps },
         invocation: invocationID,
+        focusId: semantics.hardState.executionFocus?.id ?? null,
       }
       const gateEvaluation = ModelInvocationGate.evaluate(invocation)
       const baseRivetSystem = cognitiveView.formatPromptBlock()
@@ -740,14 +739,18 @@ const layer = Layer.effect(
               tool: event.name,
             })
             yield* publishActivity(accpSpan)
-            const commitment = semantics.admitProviderCommitment({ id: event.id, name: event.name, input: event.input }, rivetScope, {
-              repository: session.location.directory,
-              currentRevision: semantics.hardState.revision,
-              allowedScope: rivetScope,
-              allowedCapabilities: ["file.read", "file.write", "process.exec", "tool.*"],
-              allowMaterial: true,
-              humanApproved: false,
-            })
+            const commitment = semantics.admitProviderCommitment(
+              { id: event.id, name: event.name, input: event.input },
+              rivetScope,
+              {
+                repository: session.location.directory,
+                currentRevision: semantics.hardState.revision,
+                allowedScope: rivetScope,
+                allowedCapabilities: ["file.read", "file.write", "process.exec", "tool.*"],
+                allowMaterial: true,
+                humanApproved: false,
+              },
+            )
             publishCompletedActivity(FlightRecorder.endSpan(accpSpan, { status: "ok" }))
             if (commitment.commitment.type === "completion_proposal") {
               const proposal = commitment.commitment.proposal

@@ -1376,6 +1376,7 @@ const layer = Layer.effect(
             ),
             budget: { outputTokens: agent.steps },
             invocation: invocationID,
+            focusId: semantics.hardState.executionFocus?.id ?? null,
           }
 
           if (step === 1)

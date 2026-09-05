@@ -1,6 +1,6 @@
 import type { ToolDefinition } from "@opencode-ai/llm"
 import type { CognitiveView, InvocationReason } from "../rivet/noesis"
-import type { InvocationId } from "../rivet/types"
+import type { FocusId, InvocationId } from "../rivet/types"
 
 export type { InvocationReason }
 
@@ -23,6 +23,7 @@ export interface ModelInvocation {
   readonly availableActions: ReadonlyArray<ToolDefinition>
   readonly budget: ModelBudget
   readonly invocation: InvocationId
+  readonly focusId: FocusId | null
 }
 
 /** Audit receipt for every model invocation or suppression decision. */
@@ -108,11 +109,7 @@ export class ModelInvocationGate {
       id: invocation.invocation,
       reason,
       unresolvedEntities,
-      deterministicOptionsExhausted: [
-        "inspect_contract",
-        "verify_state_freshness",
-        "check_mechanical_closure",
-      ],
+      deterministicOptionsExhausted: ["inspect_contract", "verify_state_freshness", "check_mechanical_closure"],
       context: {
         taskStateTokens: view.goalDescription.length,
         codeSliceTokens: view.activeFocus.join(" ").length,

@@ -1,7 +1,15 @@
 import { describe, expect, test } from "bun:test"
 import { ModelInvocationGate, type ModelInvocation } from "../../src/session/invocation"
 import { CognitiveView, HardState, SoftWorkspace } from "../../src/rivet/noesis"
-import { Revision, Scope, createClaimId, createEvidenceId, createInvocationId, createObligationId, createSessionId } from "../../src/rivet/types"
+import {
+  Revision,
+  Scope,
+  createClaimId,
+  createEvidenceId,
+  createInvocationId,
+  createObligationId,
+  createSessionId,
+} from "../../src/rivet/types"
 
 describe("Model Invocation Economy Gate (Issue #1 & #8)", () => {
   test("Suppresses turn when transition is mechanically closed", () => {
@@ -39,6 +47,7 @@ describe("Model Invocation Economy Gate (Issue #1 & #8)", () => {
       availableActions: [],
       budget: { outputTokens: 100 },
       invocation: createInvocationId("inv-1"),
+      focusId: null,
     }
 
     const evaluation = ModelInvocationGate.evaluate(invocation)
@@ -82,6 +91,7 @@ describe("Model Invocation Economy Gate (Issue #1 & #8)", () => {
       availableActions: [],
       budget: { outputTokens: 100 },
       invocation: createInvocationId("inv-2"),
+      focusId: null,
     }
 
     const evaluation = ModelInvocationGate.evaluate(invocation)
@@ -98,10 +108,7 @@ describe("Model Invocation Economy Gate (Issue #1 & #8)", () => {
       activeClaims: [],
       contradictions: [],
       openObligations: ["oblg_1: Isolate bottleneck"],
-      activeHypotheses: [
-        "Hypothesis A: SQLite lock contention",
-        "Hypothesis B: Insufficient memory",
-      ],
+      activeHypotheses: ["Hypothesis A: SQLite lock contention", "Hypothesis B: Insufficient memory"],
     })
 
     const invocation: ModelInvocation = {
@@ -110,11 +117,12 @@ describe("Model Invocation Economy Gate (Issue #1 & #8)", () => {
       availableActions: [],
       budget: { outputTokens: 100 },
       invocation: createInvocationId("inv-3"),
+      focusId: null,
     }
 
     const evaluation = ModelInvocationGate.evaluate(invocation)
     expect(evaluation.shouldInvoke).toBe(true)
     expect(evaluation.reason).toBe("HYPOTHESIS_CONFLICT")
-    expect(evaluation.receipt.unresolvedEntities.some(e => e.includes("SQLite"))).toBe(true)
+    expect(evaluation.receipt.unresolvedEntities.some((e) => e.includes("SQLite"))).toBe(true)
   })
 })

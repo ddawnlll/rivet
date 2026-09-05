@@ -11,10 +11,12 @@ import {
   createSessionId,
   type EpistemicStatus,
   type EvidenceId,
+  type ExecutionFocus,
   type MemoryFrontier,
   type ObligationId,
   type ObligationViewRecord,
   type PremiseConflict,
+  type RecoveryFrame,
   type Revision,
   Scope,
 } from "./types"
@@ -76,6 +78,8 @@ export interface CompiledViewPayload {
   readonly repositoryId: string
   readonly goalDescription: string
   readonly activeFocus: readonly string[]
+  readonly executionFocus: ExecutionFocus | null
+  readonly recoveryFrames: readonly RecoveryFrame[]
   readonly hypotheses: readonly string[]
   readonly unknowns: readonly string[]
   readonly candidateActions: readonly string[]
@@ -108,14 +112,13 @@ type ResolvedCompilationContext = Omit<CompilationContext, "goalDescription"> & 
 
 export class CognitiveViewCompiler {
   static compile(ctxInput: CompilationContext): CompiledViewPayload {
-    return FlightRecorder.withSpan("cognitive_view", "cognitive_view.compile", () =>
-      this.compileInternal(ctxInput),
-    )
+    return FlightRecorder.withSpan("cognitive_view", "cognitive_view.compile", () => this.compileInternal(ctxInput))
   }
 
   private static compileInternal(ctxInput: CompilationContext): CompiledViewPayload {
     const softWorkspace = ctxInput.softWorkspace ?? new SoftWorkspace(createSessionId(), ctxInput.hardState.revision)
-    const goalDescription = ctxInput.goalDescription !== undefined ? ctxInput.goalDescription : (ctxInput.hardState.goalDescription ?? "")
+    const goalDescription =
+      ctxInput.goalDescription !== undefined ? ctxInput.goalDescription : (ctxInput.hardState.goalDescription ?? "")
     const ctx: ResolvedCompilationContext = {
       ...ctxInput,
       goalDescription,
@@ -144,24 +147,19 @@ export class CognitiveViewCompiler {
     )
 
     // Stage 3 & 4: Relevance Ranking & Semantic Compression
-    const { compressedClaims, compressedEvidence, compressedSignals, omitted } =
-      this.stageRelevanceAndCompression(
-        ctx,
-        eligibleClaims,
-        eligibleEvidence,
-        ctx.repositorySignals,
-      )
+    const { compressedClaims, compressedEvidence, compressedSignals, omitted } = this.stageRelevanceAndCompression(
+      ctx,
+      eligibleClaims,
+      eligibleEvidence,
+      ctx.repositorySignals,
+    )
 
     // Stage 5: Contradiction and Rejected Beliefs Inclusion
     const { contradictions, rejectedClaims } = this.stageContradictionInclusion(ctx)
 
     // Stage 6: Premise Conflict Detection & Proactive Memory Frontier Compilation
     const premiseConflict = ctx.userPrompt
-      ? ValidityEngine.detectPremiseConflict(
-          ctx.hardState,
-          ctx.userPrompt,
-          ctx.currentEnvironmentLanguage,
-        )
+      ? ValidityEngine.detectPremiseConflict(ctx.hardState, ctx.userPrompt, ctx.currentEnvironmentLanguage)
       : null
 
     const premiseConflicts: PremiseConflict[] = [
@@ -170,11 +168,7 @@ export class CognitiveViewCompiler {
     ]
 
     const memoryFrontier =
-      ctx.memoryFrontier ??
-      ValidityEngine.compileMemoryFrontier(
-        ctx.hardState,
-        ctx.focusSymbols ?? [],
-      )
+      ctx.memoryFrontier ?? ValidityEngine.compileMemoryFrontier(ctx.hardState, ctx.focusSymbols ?? [])
 
     // Stage 7: Assemble compiled payload (Zero-copy pass-through)
     return {
@@ -182,7 +176,13 @@ export class CognitiveViewCompiler {
       workspaceRevision: ctx.softWorkspace.baseHardRevision,
       repositoryId: ctx.repositoryId,
       goalDescription: ctx.goalDescription,
-      activeFocus: ctx.softWorkspace.activeFocus,
+      activeFocus: ctx.hardState.executionFocus
+        ? [ctx.hardState.executionFocus.objective]
+        : ctx.softWorkspace.activeFocus,
+      executionFocus: ctx.hardState.executionFocus,
+      recoveryFrames: ctx.hardState.recoveryStack
+        .map((id) => ctx.hardState.recoveryFrames.get(id))
+        .filter((frame): frame is RecoveryFrame => frame !== undefined),
       hypotheses: ctx.softWorkspace.hypotheses,
       unknowns: ctx.softWorkspace.unknowns,
       candidateActions: ctx.softWorkspace.candidateActions,
@@ -221,6 +221,8 @@ export class CognitiveViewCompiler {
       unknowns: [...compiled.unknowns],
       activeHypotheses: [...compiled.hypotheses],
       activeFocus: [...compiled.activeFocus],
+      executionFocus: compiled.executionFocus,
+      recoveryFrames: compiled.recoveryFrames,
       relevantFiles: [...compiled.relevantFiles],
       premiseConflicts: [...compiled.premiseConflicts],
       memoryFrontier: compiled.memoryFrontier,
@@ -238,9 +240,8 @@ export class CognitiveViewCompiler {
     const obligationRecords: ObligationViewRecord[] = []
 
     for (const [id, desc] of ctx.hardState.obligations) {
-      const scope =
-        ctx.hardState.obligationScopes.get(id) ??
-        Scope.global(ctx.repositoryId, ctx.hardState.revision)
+      if (ctx.hardState.activeTaskId && ctx.hardState.obligationTaskIds.get(id) !== ctx.hardState.activeTaskId) continue
+      const scope = ctx.hardState.obligationScopes.get(id) ?? Scope.global(ctx.repositoryId, ctx.hardState.revision)
       eligibleObligations.push([id, desc, scope])
 
       const kind = ctx.hardState.obligationKind(id)
@@ -250,7 +251,9 @@ export class CognitiveViewCompiler {
       if (kind === "epistemic_inquiry") {
         blockers.push("Obligation requires authoritative Noesis projection. Call query_epistemic_state.")
       } else if (kind === "execution") {
-        blockers.push("Obligation requires observed execution and Praxis verification receipt. Call request_verification.")
+        blockers.push(
+          "Obligation requires observed execution and Praxis verification receipt. Call request_verification.",
+        )
       } else if (kind === "verification") {
         blockers.push("Obligation requires Praxis verification receipt. Call request_verification.")
       } else {
@@ -276,6 +279,7 @@ export class CognitiveViewCompiler {
     }
 
     for (const [id, reason] of ctx.hardState.invalidatedObligations) {
+      if (ctx.hardState.activeTaskId && ctx.hardState.obligationTaskIds.get(id) !== ctx.hardState.activeTaskId) continue
       const kind = ctx.hardState.obligationKind(id)
       const closure = AccpSemanticGate.getClosureRequirement(kind)
       obligationRecords.push({
@@ -297,6 +301,7 @@ export class CognitiveViewCompiler {
 
     // Include closed/satisfied obligations
     for (const [id, receiptId] of ctx.hardState.closedObligations) {
+      if (ctx.hardState.activeTaskId && ctx.hardState.obligationTaskIds.get(id) !== ctx.hardState.activeTaskId) continue
       const kind = ctx.hardState.obligationKind(id)
       const closure = AccpSemanticGate.getClosureRequirement(kind)
       const scope = ctx.hardState.obligationScopes.get(id) ?? Scope.global(ctx.repositoryId, ctx.hardState.revision)
@@ -325,7 +330,11 @@ export class CognitiveViewCompiler {
       hasContradictions: ctx.hardState.contradictions.size > 0,
       getKind: (id) => ctx.hardState.obligationKind(id),
       getDescription: (id) => ctx.hardState.obligations.get(id) ?? id,
-      totalObligations: ctx.hardState.obligations.size + ctx.hardState.closedObligations.size,
+      totalObligations:
+        ctx.hardState.openObligationIds().length +
+        [...ctx.hardState.closedObligations.keys()].filter(
+          (id) => !ctx.hardState.activeTaskId || ctx.hardState.obligationTaskIds.get(id) === ctx.hardState.activeTaskId,
+        ).length,
       hasActiveGoal: Boolean(ctx.goalDescription && ctx.goalDescription.trim().length > 0),
     })
 
@@ -398,7 +407,7 @@ export class CognitiveViewCompiler {
         object: claim.proposition,
       })
 
-      for (const evidId of (claim.supportingEvidence ?? [])) {
+      for (const evidId of claim.supportingEvidence ?? []) {
         triples.push({
           subject: `Claim#${claim.id}`,
           predicate: "supported_by",
@@ -536,9 +545,7 @@ export class CognitiveViewCompiler {
 
     lines.push("\n--- Active Valid Claims ---")
     for (const c of p.activeClaims) {
-      lines.push(
-        `- [${c.id}] ${c.status}: ${c.proposition} (support: ${JSON.stringify(c.supportingEvidence)})`,
-      )
+      lines.push(`- [${c.id}] ${c.status}: ${c.proposition} (support: ${JSON.stringify(c.supportingEvidence)})`)
     }
 
     if (p.contradictions.length > 0) {
@@ -553,9 +560,7 @@ export class CognitiveViewCompiler {
     if (p.rejectedClaims.length > 0) {
       lines.push("\n--- Rejected Beliefs ---")
       for (const r of p.rejectedClaims) {
-        lines.push(
-          `- Rejected [${r.claimId}]: ${r.reason} (evidence: ${JSON.stringify(r.evidence)})`,
-        )
+        lines.push(`- Rejected [${r.claimId}]: ${r.reason} (evidence: ${JSON.stringify(r.evidence)})`)
       }
     }
 
@@ -624,7 +629,13 @@ export class CognitiveViewCompiler {
 
     if (p.repositoryFrontier) {
       lines.push(`\n# --- Repository Frontier ---`)
-      lines.push(formatTriple({ subject: "Frontier#Repo", predicate: "description", object: p.repositoryFrontier.repositorySummary.description }))
+      lines.push(
+        formatTriple({
+          subject: "Frontier#Repo",
+          predicate: "description",
+          object: p.repositoryFrontier.repositorySummary.description,
+        }),
+      )
       for (const rel of p.repositoryFrontier.structure) {
         lines.push(formatTriple({ subject: `Symbol#${rel.from}`, predicate: rel.relation, object: `Symbol#${rel.to}` }))
       }
@@ -690,7 +701,9 @@ export class CognitiveViewCompiler {
       `    deferred_trees: ${p.omittedSummary.deferredTrees}`,
       `    token_budget: ${p.omittedSummary.tokenBudget}`,
       "```",
-    ].filter(Boolean).join("\n")
+    ]
+      .filter(Boolean)
+      .join("\n")
   }
 }
 

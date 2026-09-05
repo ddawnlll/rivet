@@ -10,6 +10,8 @@ export type WorkspaceId = string & { readonly __brand: "WorkspaceId" }
 export type ActionId = string & { readonly __brand: "ActionId" }
 export type ReceiptId = string & { readonly __brand: "ReceiptId" }
 export type InvocationId = string & { readonly __brand: "InvocationId" }
+export type FocusId = string & { readonly __brand: "FocusId" }
+export type RecoveryId = string & { readonly __brand: "RecoveryId" }
 
 /**
  * User-authorized subject of the active task. Autonomous self-repair is never
@@ -62,6 +64,14 @@ export function createInvocationId(val?: string): InvocationId {
   return (val ?? `inv_${randomSuffix()}`) as InvocationId
 }
 
+export function createFocusId(val?: string): FocusId {
+  return (val ?? `focus_${randomSuffix()}`) as FocusId
+}
+
+export function createRecoveryId(val?: string): RecoveryId {
+  return (val ?? `recovery_${randomSuffix()}`) as RecoveryId
+}
+
 export class Revision {
   static readonly ZERO = new Revision(0n)
 
@@ -98,12 +108,7 @@ export type EpistemicStatus =
   | "rejected"
   | "invalidated"
 
-export type ValidityPolicy =
-  | "HISTORICAL"
-  | "CURRENT_STATE"
-  | "DERIVED_STATE"
-  | "PROCEDURAL"
-  | "EPISTEMIC"
+export type ValidityPolicy = "HISTORICAL" | "CURRENT_STATE" | "DERIVED_STATE" | "PROCEDURAL" | "EPISTEMIC"
 
 /**
  * Obligations are typed because each kind requires a different closure proof
@@ -121,6 +126,69 @@ export type ObligationKind =
   | "state_mutation"
 
 export type ObligationVerifier = "NOESIS" | "PRAXIS" | "HARNESS"
+
+export type FocusKind = "obligation" | "recovery"
+
+export type FailureClass =
+  | "transient_tool"
+  | "execution_error"
+  | "verification_gap"
+  | "environment_blocker"
+  | "procedure_gap"
+  | "authorization_blocker"
+  | "stagnation"
+  | "user_input_required"
+
+export interface VerificationPolicy {
+  readonly minimumEvidence: number
+  readonly sufficientWhen: string
+  readonly escalationConditions: readonly string[]
+}
+
+export interface FocusContract {
+  readonly objective: string
+  readonly acceptanceCriteria: readonly string[]
+  readonly allowedScope: readonly string[]
+  readonly requiredEvidence: readonly string[]
+  readonly relevantEvidence?: readonly string[]
+  readonly effortBudget?: number
+  readonly verificationPolicy: VerificationPolicy
+}
+
+export interface ExecutionFocus {
+  readonly id: FocusId
+  readonly taskId: TaskId
+  readonly kind: FocusKind
+  readonly targetObligationId?: ObligationId
+  readonly parentFocusId?: FocusId
+  readonly objective: string
+  readonly reason: string
+  readonly acceptanceCriteria: readonly string[]
+  readonly boundary: readonly string[]
+  readonly requiredEvidence?: readonly string[]
+  readonly relevantEvidence?: readonly string[]
+  readonly effortBudget?: number
+  readonly resumeTarget?: FocusId
+  readonly contract: FocusContract
+  readonly createdAt: string
+}
+
+export interface RecoveryFrame {
+  readonly id: RecoveryId
+  readonly taskId: TaskId
+  readonly failureClass: FailureClass
+  readonly parentFocusId: FocusId
+  readonly targetObligationId: ObligationId
+  readonly objective: string
+  readonly acceptanceCriteria: readonly string[]
+  readonly resumeTarget: FocusId
+  readonly admittedInterventions?: readonly string[]
+  readonly budget?: number
+  readonly status: "open" | "verified" | "closed"
+  readonly createdAt: string
+  readonly verificationReceiptId?: ReceiptId
+  readonly closedAt?: string
+}
 
 export interface ObligationClosureSpec {
   readonly requiredProofKind: string
@@ -452,7 +520,7 @@ export class RivetError extends Error {
       | "Timeout"
       | "InvalidPath",
     message: string,
-    readonly extra?: Record<string, unknown>
+    readonly extra?: Record<string, unknown>,
   ) {
     super(`[${kind}] ${message}`)
     this.name = "RivetError"
