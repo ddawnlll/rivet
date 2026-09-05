@@ -18,12 +18,14 @@ import {
   type ReceiptId,
   type RecoveryFrame,
   type RecoveryId,
+  type RecoveryVerificationReceipt,
   Revision,
   RivetError,
   type Scope,
   type SessionId,
   type TaskId,
   type TaskAuthority,
+  type TrajectoryFold,
   type ValidityPolicy,
   type WorkspaceId,
   createWorkspaceId,
@@ -275,9 +277,25 @@ export type NoesisEvent =
       readonly timestamp: string
     }
   | {
+      readonly type: "recovery_verification_recorded"
+      readonly receipt: RecoveryVerificationReceipt
+      readonly timestamp: string
+    }
+  | {
       readonly type: "recovery_closed"
       readonly recoveryId: RecoveryId
       readonly resumeFocus: ExecutionFocus
+      readonly timestamp: string
+    }
+  | {
+      readonly type: "focus_folded"
+      readonly fold: TrajectoryFold
+      readonly timestamp: string
+    }
+  | {
+      readonly type: "strategy_redirected"
+      readonly focusId: FocusId
+      readonly reason: string
       readonly timestamp: string
     }
   | {
@@ -366,8 +384,13 @@ export class HardState {
   readonly focuses: Map<FocusId, ExecutionFocus> = new Map()
   readonly archivedFocuses: Map<FocusId, string> = new Map()
   readonly recoveryFrames: Map<RecoveryId, RecoveryFrame> = new Map()
+  readonly recoveryVerificationReceipts: Map<RecoveryId, RecoveryVerificationReceipt> = new Map()
   readonly recoveryStack: RecoveryId[] = []
+  readonly trajectoryFolds: TrajectoryFold[] = []
+  readonly strategyRedirects: { readonly focusId: FocusId; readonly reason: string; readonly timestamp: string }[] = []
+  readonly focusEffort: Map<FocusId, number> = new Map()
   executionFocus: ExecutionFocus | null = null
+  controlProgressVersion = 0
   readonly inquiryReceipts: Map<ObligationId, InquiryReceipt> = new Map()
   readonly evidence: Map<EvidenceId, string> = new Map()
   readonly evidenceSources: Map<EvidenceId, string> = new Map()
@@ -383,6 +406,7 @@ export class HardState {
   > = new Map()
   readonly observations: Map<string, Observation> = new Map()
   readonly verificationReceipts: Map<ObligationId, VerificationReceipt> = new Map()
+  readonly verificationHistory: VerificationReceipt[] = []
   readonly modelInvocations: ModelInvocationRecord[] = []
   readonly processErrorAttributions: ProcessErrorAttributionRecord[] = []
   readonly completedTasks: Map<TaskId, ReceiptId> = new Map()
@@ -624,6 +648,9 @@ export class HardState {
       }
       case "execution_recorded": {
         this.executionReceipts.push(event.receipt)
+        if (this.executionFocus) {
+          this.focusEffort.set(this.executionFocus.id, (this.focusEffort.get(this.executionFocus.id) ?? 0) + 1)
+        }
         break
       }
       case "execution_claimed": {
@@ -654,6 +681,7 @@ export class HardState {
       case "obligation_closed": {
         this.obligations.delete(event.obligationId)
         this.closedObligations.set(event.obligationId, event.receiptId)
+        this.controlProgressVersion++
         break
       }
       case "inquiry_satisfied": {
@@ -666,10 +694,13 @@ export class HardState {
           summary: event.summary,
           timestamp: event.timestamp,
         })
+        this.controlProgressVersion++
         break
       }
       case "verification_recorded": {
+        this.verificationHistory.push(event.receipt)
         this.verificationReceipts.set(event.receipt.obligationId, event.receipt)
+        if (event.receipt.passed) this.controlProgressVersion++
         if (!event.receipt.passed) {
           this.completedTasks.clear()
           const prev = this.closedObligations.get(event.receipt.obligationId)
@@ -687,11 +718,13 @@ export class HardState {
         this.closedObligations.delete(event.obligationId)
         this.obligations.set(event.obligationId, event.reason)
         this.completedTasks.clear()
+        this.controlProgressVersion++
         break
       }
       case "obligation_invalidated": {
         this.obligations.delete(event.obligationId)
         this.invalidatedObligations.set(event.obligationId, event.reason)
+        this.controlProgressVersion++
         break
       }
       case "task_archived": {
@@ -718,16 +751,19 @@ export class HardState {
           ...this.recoveryStack.filter((id) => this.recoveryFrames.get(id)?.taskId !== event.taskId),
         )
         if (this.executionFocus?.taskId === event.taskId) this.executionFocus = null
+        this.controlProgressVersion++
         break
       }
       case "focus_set": {
         this.focuses.set(event.focus.id, event.focus)
         this.executionFocus = event.focus
+        this.controlProgressVersion++
         break
       }
       case "focus_archived": {
         this.archivedFocuses.set(event.focusId, event.reason)
         if (this.executionFocus?.id === event.focusId) this.executionFocus = null
+        this.controlProgressVersion++
         break
       }
       case "recovery_opened": {
@@ -735,6 +771,7 @@ export class HardState {
         this.recoveryStack.push(event.frame.id)
         this.focuses.set(event.focus.id, event.focus)
         this.executionFocus = event.focus
+        this.controlProgressVersion++
         break
       }
       case "recovery_verified": {
@@ -746,6 +783,11 @@ export class HardState {
             verificationReceiptId: event.receiptId,
           })
         }
+        this.controlProgressVersion++
+        break
+      }
+      case "recovery_verification_recorded": {
+        this.recoveryVerificationReceipts.set(event.receipt.recoveryId, event.receipt)
         break
       }
       case "recovery_closed": {
@@ -757,6 +799,19 @@ export class HardState {
         if (stackIndex >= 0) this.recoveryStack.splice(stackIndex, 1)
         this.focuses.set(event.resumeFocus.id, event.resumeFocus)
         this.executionFocus = event.resumeFocus
+        this.controlProgressVersion++
+        break
+      }
+      case "focus_folded": {
+        this.trajectoryFolds.push(event.fold)
+        break
+      }
+      case "strategy_redirected": {
+        this.strategyRedirects.push({
+          focusId: event.focusId,
+          reason: event.reason,
+          timestamp: event.timestamp,
+        })
         break
       }
       case "process_error_attributed": {
@@ -769,7 +824,14 @@ export class HardState {
       }
       case "completion_accepted": {
         this.completedTasks.set(event.taskId, event.finalReceipt)
-        if (this.activeTaskId === event.taskId) this.activeTaskAuthority = null
+        if (this.activeTaskId === event.taskId) {
+          this.activeTaskAuthority = null
+          if (this.executionFocus?.taskId === event.taskId) {
+            this.archivedFocuses.set(this.executionFocus.id, `Task completed by ${event.finalReceipt}`)
+            this.executionFocus = null
+          }
+        }
+        this.controlProgressVersion++
         this.completionAttempts++
         if (this.firstAttemptAccepted === null) {
           this.firstAttemptAccepted = true
@@ -985,6 +1047,7 @@ export interface CognitiveViewInit {
   activeFocus?: readonly string[]
   executionFocus?: ExecutionFocus | null
   recoveryFrames?: readonly RecoveryFrame[]
+  trajectoryFolds?: readonly TrajectoryFold[]
   relevantFiles?: readonly string[]
   premiseConflicts?: readonly PremiseConflict[]
   memoryFrontier?: MemoryFrontier
@@ -1010,6 +1073,7 @@ export class CognitiveView {
   readonly activeFocus: readonly string[]
   readonly executionFocus: ExecutionFocus | null
   readonly recoveryFrames: readonly RecoveryFrame[]
+  readonly trajectoryFolds: readonly TrajectoryFold[]
   readonly relevantFiles: readonly string[]
   readonly premiseConflicts: readonly PremiseConflict[]
   readonly memoryFrontier?: MemoryFrontier
@@ -1038,6 +1102,7 @@ export class CognitiveView {
     this.activeFocus = init.activeFocus ?? []
     this.executionFocus = init.executionFocus ?? null
     this.recoveryFrames = init.recoveryFrames ?? []
+    this.trajectoryFolds = init.trajectoryFolds ?? []
     this.relevantFiles = init.relevantFiles ?? []
     this.premiseConflicts = init.premiseConflicts ?? []
     this.memoryFrontier = init.memoryFrontier
@@ -1115,6 +1180,15 @@ export class CognitiveView {
       lines.push("### RECOVERY STACK")
       for (const frame of this.recoveryFrames) {
         lines.push(`- [${frame.id}] ${frame.failureClass}: ${frame.objective} -> resume ${frame.resumeTarget}`)
+      }
+      lines.push("")
+    }
+
+    if (this.trajectoryFolds.length > 0) {
+      lines.push("### RESOLVED FOCUS / RECOVERY FOLDS")
+      for (const fold of this.trajectoryFolds.slice(-5)) {
+        lines.push(`- ${fold.summary}`)
+        lines.push(`  Evidence: ${fold.evidenceRefs.join(", ") || "none"}`)
       }
       lines.push("")
     }

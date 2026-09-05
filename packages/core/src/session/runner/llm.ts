@@ -55,6 +55,7 @@ import { FlightRecorder, ExecutionEconomics, type ActiveSpanContext } from "../.
 import { SessionTable } from "../sql"
 import { eq } from "drizzle-orm"
 import { SessionStatusEvent } from "@opencode-ai/schema/session-status-event"
+import { diagnoseFailure } from "../../rivet/task-control"
 
 const PROVIDER_INACTIVITY_TIMEOUT = Duration.seconds(30)
 const PROVIDER_TURN_TIMEOUT = Duration.minutes(15)
@@ -370,6 +371,15 @@ const layer = Layer.effect(
       })
       const entries = yield* SessionHistory.entriesForRunner(db, session.id, system.baselineSeq)
       const context = entries.map((entry) => entry.message)
+      const foldedRanges = semantics.hardState.trajectoryFolds.map((fold) => ({
+        start: Date.parse(fold.startedAt),
+        end: Date.parse(fold.completedAt),
+      }))
+      const modelContext = context.filter((message) => {
+        if (message.type === "user" || message.type === "system" || message.type === "compaction") return true
+        const created = DateTime.toEpochMillis(message.time.created)
+        return !foldedRanges.some((range) => created >= range.start && created <= range.end)
+      })
       const initialUserGoal = context.find((message) => message.type === "user")?.text
       const latestUserMessage = context.findLast((message) => message.type === "user")?.text
       const latestAdmission = latestUserMessage
@@ -580,7 +590,10 @@ const layer = Layer.effect(
                 receipt: gateEvaluation.receipt,
               },
             },
-            messages: [...toLLMMessages(context, model), ...(isLastStep ? [Message.assistant(MAX_STEPS_PROMPT)] : [])],
+            messages: [
+              ...toLLMMessages(modelContext, model),
+              ...(isLastStep ? [Message.assistant(MAX_STEPS_PROMPT)] : []),
+            ],
             tools: availableActions,
             toolChoice,
           }),
@@ -890,6 +903,23 @@ const layer = Layer.effect(
                   },
                 }),
               )
+              if (isPassed) {
+                yield* semantics.settleFocusAfterVerification(events, receipt).pipe(Effect.orDie)
+              } else {
+                const repeatedFailures = semantics.hardState.verificationHistory.filter(
+                  (candidate) => candidate.obligationId === receipt.obligationId && !candidate.passed,
+                ).length
+                if (repeatedFailures >= 2 && semantics.hardState.recoveryStack.length === 0 && retryAllowed) {
+                  const failureClass = diagnoseFailure(receipt.reasonCodes ?? [], receipt.diagnostics)
+                  yield* semantics
+                    .pushRecovery(events, {
+                      failureClass,
+                      objective: `Restore verification for obligation ${receipt.obligationId}: ${receipt.diagnostics ?? "unspecified verifier failure"}`,
+                      acceptanceCriteria: [`Praxis passes ${receipt.predicate ?? "the declared predicate"}`],
+                    })
+                    .pipe(Effect.orDie)
+                }
+              }
               return
             }
             if (commitment.commitment.type === "obligation_invalidation") {
@@ -1421,6 +1451,28 @@ const layer = Layer.effect(
             needsContinuation = true
           }
 
+          const focus = semantics.hardState.executionFocus
+          const focusEffort = focus ? (semantics.hardState.focusEffort.get(focus.id) ?? 0) : 0
+          if (
+            focus?.targetObligationId &&
+            semantics.hardState.obligations.has(focus.targetObligationId) &&
+            focus.contract.effortBudget !== undefined &&
+            focusEffort >= focus.contract.effortBudget &&
+            !semantics.hardState.strategyRedirects.some((redirect) => redirect.focusId === focus.id)
+          ) {
+            const reason = `Focus effort budget reached after ${focusEffort} tool calls without verifier-backed acceptance`
+            yield* semantics.strategyRedirect(events, reason).pipe(Effect.orDie)
+            yield* withPublication(
+              events.publish(SessionEvent.Synthetic, {
+                sessionID: session.id,
+                messageID: SessionMessage.ID.create(),
+                timestamp: yield* DateTime.now,
+                text: `[RIVET STRATEGY REDIRECT] ${reason}. Keep root goal and focus unchanged. Choose a materially different admitted intervention; do not repeat archaeology without a new concrete verification reason.`,
+              }),
+            )
+            needsContinuation = true
+          }
+
           return {
             needsContinuation:
               !completionAccepted &&
@@ -1575,6 +1627,7 @@ const layer = Layer.effect(
           const maxStagnantDrives = 2
           let lastStallSignature: string | undefined
           let stagnantDrives = 0
+          let strategyRedirected = false
           let lastToolFingerprint: string | undefined
           let lastToolSummary: string | undefined
           let repeatedToolCalls = 0
@@ -1672,18 +1725,32 @@ const layer = Layer.effect(
                   lastStallSignature = result.stallSignature
                 }
                 if (stagnantDrives >= maxStagnantDrives) {
-                  yield* Effect.logWarning("stagnant autonomous drive halted; obligations remain open", {
-                    "session.id": input.sessionID,
-                    step: result.step,
-                    stallSignature: result.stallSignature,
-                  })
-                  needsContinuation = false
-                  outcome = {
-                    type: "idle",
-                    outcome: "stalled",
-                    source: "stagnation_guard",
-                    reason: "Repeated autonomous drive made no observable progress",
-                    phase: "continuation",
+                  if (!strategyRedirected) {
+                    const semantics = yield* SessionSemantics.load(db, input.sessionID)
+                    const reason = "Repeated autonomous drive made no verifier-backed Hard State progress"
+                    yield* semantics.strategyRedirect(events, reason).pipe(Effect.ignore)
+                    yield* events.publish(SessionEvent.Synthetic, {
+                      sessionID: input.sessionID,
+                      messageID: SessionMessage.ID.create(),
+                      timestamp: yield* DateTime.now,
+                      text: `[RIVET STRATEGY REDIRECT] ${reason}. Keep the root goal and current focus unchanged. Use a materially different admitted intervention.`,
+                    })
+                    strategyRedirected = true
+                    needsContinuation = true
+                  } else {
+                    yield* Effect.logWarning("stagnant autonomous drive halted after strategy redirect", {
+                      "session.id": input.sessionID,
+                      step: result.step,
+                      stallSignature: result.stallSignature,
+                    })
+                    needsContinuation = false
+                    outcome = {
+                      type: "idle",
+                      outcome: "stalled",
+                      source: "stagnation_guard",
+                      reason: "Strategy redirect did not produce verifier-backed progress",
+                      phase: "continuation",
+                    }
                   }
                   stagnantDrives = 0
                   lastStallSignature = undefined

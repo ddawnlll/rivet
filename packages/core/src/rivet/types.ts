@@ -189,6 +189,25 @@ export interface RecoveryFrame {
   readonly closedAt?: string
 }
 
+export interface RecoveryVerificationReceipt {
+  readonly receiptId: ReceiptId
+  readonly recoveryId: RecoveryId
+  readonly passed: boolean
+  readonly evidenceRefs: readonly EvidenceId[]
+  readonly verifier: "PRAXIS"
+  readonly timestamp: string
+}
+
+export interface TrajectoryFold {
+  readonly focusId: FocusId
+  readonly taskId: TaskId
+  readonly kind: FocusKind
+  readonly summary: string
+  readonly evidenceRefs: readonly string[]
+  readonly startedAt: string
+  readonly completedAt: string
+}
+
 export interface ObligationClosureSpec {
   readonly requiredProofKind: string
   readonly verifier: ObligationVerifier

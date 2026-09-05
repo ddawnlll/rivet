@@ -6,6 +6,16 @@ import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { EventV2 } from "@opencode-ai/core/event"
 import { SessionV2 } from "@opencode-ai/core/session"
 import { SessionSemantics } from "@opencode-ai/core/session/semantics"
+import { HardState, type NoesisEvent } from "@opencode-ai/core/rivet/noesis"
+import { admittedInterventions, diagnoseFailure, evidenceIsSufficient } from "@opencode-ai/core/rivet/task-control"
+import {
+  Revision,
+  Scope,
+  createEvidenceId,
+  createObligationId,
+  createReceiptId,
+  createTaskId,
+} from "@opencode-ai/core/rivet/types"
 import { testEffect } from "../lib/effect"
 
 const it = testEffect(AppNodeBuilder.build(LayerNode.group([Database.node, EventV2.node]), []))
@@ -60,6 +70,116 @@ describe("Rivet task control plane P0", () => {
       yield* semantics.recordInvocation(events, "inv_task_control" as never, "test-model")
 
       expect(semantics.hardState.modelInvocations.at(-1)?.focusId).toBe(semantics.hardState.executionFocus?.id)
+    }),
+  )
+})
+
+describe("Rivet task control plane P1", () => {
+  it.effect("dependency-aware ready frontier admits only obligations whose dependencies are verified", () =>
+    Effect.sync(() => {
+      const taskId = createTaskId()
+      const first = createObligationId()
+      const second = createObligationId()
+      const events: NoesisEvent[] = [
+        {
+          type: "goal_set",
+          goal: "dependency test",
+          goalId: taskId,
+          timestamp: new Date().toISOString(),
+        },
+        {
+          type: "obligation_created",
+          obligationId: first,
+          taskId,
+          description: "first",
+          scope: Scope.global("repo", Revision.ZERO),
+          dependencies: [],
+          timestamp: new Date().toISOString(),
+        },
+        {
+          type: "obligation_created",
+          obligationId: second,
+          taskId,
+          description: "second",
+          scope: Scope.global("repo", Revision.ZERO),
+          dependencies: [first],
+          timestamp: new Date().toISOString(),
+        },
+      ]
+      const state = HardState.replay(events)
+      expect(state.readyObligationIds()).toEqual([first])
+
+      state.apply({
+        type: "obligation_closed",
+        obligationId: first,
+        receiptId: createReceiptId(),
+        timestamp: new Date().toISOString(),
+      })
+      expect(state.readyObligationIds()).toEqual([second])
+    }),
+  )
+
+  it.effect("failure diagnosis selects bounded interventions instead of generic recovery", () =>
+    Effect.sync(() => {
+      expect(diagnoseFailure(["FILE_NOT_FOUND"], "cwd mismatch")).toBe("environment_blocker")
+      expect(diagnoseFailure(["CLAIM_NOT_ADMITTED"], "missing evidence")).toBe("verification_gap")
+      expect(admittedInterventions("verification_gap")).toEqual(["collect_required_evidence", "run_declared_verifier"])
+    }),
+  )
+
+  it.effect("Praxis-backed recovery closes mechanically and restores the unresolved parent focus", () =>
+    Effect.gen(function* () {
+      const events = yield* EventV2.Service
+      const { db } = yield* Database.Service
+      const semantics = yield* SessionSemantics.load(db, SessionV2.ID.make("ses_task_control_recovery"))
+      yield* semantics.ensureGoal(events, "/goal repair verification", "/tmp/rivet-control", "execution")
+      const parent = semantics.hardState.executionFocus!
+      const frame = yield* semantics.pushRecovery(events, {
+        failureClass: "verification_gap",
+        objective: "Restore the declared verification path",
+        acceptanceCriteria: ["Praxis can observe the required evidence"],
+      })
+      const evidenceId = createEvidenceId()
+      yield* semantics.append(events, {
+        type: "evidence_recorded",
+        evidenceId,
+        source: "praxis.recovery",
+        summary: "Verification path restored",
+        timestamp: new Date().toISOString(),
+      })
+      const receipt = {
+        receiptId: createReceiptId(),
+        recoveryId: frame.id,
+        passed: true,
+        evidenceRefs: [evidenceId],
+        verifier: "PRAXIS" as const,
+        timestamp: new Date().toISOString(),
+      }
+      yield* semantics.recordRecoveryVerification(events, receipt)
+      yield* semantics.popRecovery(events, frame.id, receipt)
+
+      expect(semantics.hardState.recoveryFrames.get(frame.id)?.status).toBe("closed")
+      expect(semantics.hardState.executionFocus?.id).toBe(parent.id)
+      expect(semantics.hardState.obligations.has(parent.targetObligationId!)).toBe(true)
+      expect(semantics.hardState.trajectoryFolds.at(-1)?.summary).toContain("RESOLVED RECOVERY")
+    }),
+  )
+
+  it.effect("effort and stagnation supervision preserve root and focus identity", () =>
+    Effect.gen(function* () {
+      const events = yield* EventV2.Service
+      const { db } = yield* Database.Service
+      const semantics = yield* SessionSemantics.load(db, SessionV2.ID.make("ses_task_control_redirect"))
+      yield* semantics.ensureGoal(events, "/goal maintain focus", "/tmp/rivet-control", "execution")
+      const taskId = semantics.hardState.activeTaskId
+      const focus = semantics.hardState.executionFocus!
+
+      expect(evidenceIsSufficient(focus, [])).toEqual({ sufficient: false, observed: 0, required: 1 })
+      yield* semantics.strategyRedirect(events, "No verifier-backed delta")
+
+      expect(semantics.hardState.activeTaskId).toBe(taskId)
+      expect(semantics.hardState.executionFocus?.id).toBe(focus.id)
+      expect(semantics.hardState.strategyRedirects.at(-1)?.reason).toBe("No verifier-backed delta")
     }),
   )
 })

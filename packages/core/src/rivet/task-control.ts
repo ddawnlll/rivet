@@ -1,5 +1,4 @@
 import type { VerificationReceipt } from "./accp"
-import { describePredicate } from "./view-compiler"
 import type { ObligationPredicate } from "./goal-compiler"
 import {
   createFocusId,
@@ -11,6 +10,7 @@ import {
   type FocusId,
   type ObligationId,
   type RecoveryFrame,
+  type RecoveryVerificationReceipt,
   type TaskId,
 } from "./types"
 
@@ -31,7 +31,7 @@ export class TaskControlController {
     return {
       objective: input.objective,
       acceptanceCriteria: input.predicate
-        ? [describePredicate(input.predicate)]
+        ? [describeContractPredicate(input.predicate)]
         : ["The stated objective is mechanically verified"],
       allowedScope: [...input.allowedScope],
       requiredEvidence,
@@ -40,7 +40,7 @@ export class TaskControlController {
       verificationPolicy: {
         minimumEvidence: Math.max(1, requiredEvidence.length),
         sufficientWhen: input.predicate
-          ? `Praxis passes ${describePredicate(input.predicate)}`
+          ? `Praxis passes ${describeContractPredicate(input.predicate)}`
           : "The declared verifier passes the focus acceptance criteria",
         escalationConditions: [
           "Evidence conflicts with the active Hard State revision",
@@ -137,6 +137,13 @@ export class TaskControlController {
     }
     return receipt
   }
+
+  static requirePassingRecoveryVerification(receipt: RecoveryVerificationReceipt, recoveryId: RecoveryFrame["id"]) {
+    if (!receipt.passed || receipt.recoveryId !== recoveryId || receipt.verifier !== "PRAXIS") {
+      throw new Error(`Recovery transition requires a passing Praxis decision for ${recoveryId}`)
+    }
+    return receipt
+  }
 }
 
 export function admittedInterventions(failureClass: FailureClass): readonly string[] {
@@ -150,4 +157,40 @@ export function admittedInterventions(failureClass: FailureClass): readonly stri
     stagnation: ["strategy_redirect", "choose_different_admitted_intervention"],
     user_input_required: ["request_specific_user_decision"],
   }[failureClass]
+}
+
+export function diagnoseFailure(reasonCodes: readonly string[], diagnostics?: string | null): FailureClass {
+  const text = `${reasonCodes.join(" ")} ${diagnostics ?? ""}`.toUpperCase()
+  if (text.includes("AUTH") || text.includes("PERMISSION")) return "authorization_blocker"
+  if (text.includes("PATH_ESCAPES") || text.includes("CWD") || text.includes("DEPENDENCY")) {
+    return "environment_blocker"
+  }
+  if (text.includes("TIMEOUT") || text.includes("RATE_LIMIT") || text.includes("TEMPORAR")) return "transient_tool"
+  if (text.includes("CLAIM_NOT_ADMITTED") || text.includes("EVIDENCE")) return "verification_gap"
+  if (text.includes("FIXTURE") || text.includes("PROCEDURE")) return "procedure_gap"
+  if (text.includes("USER_INPUT") || text.includes("DECISION REQUIRED")) return "user_input_required"
+  if (text.includes("STAGN")) return "stagnation"
+  return "execution_error"
+}
+
+export function evidenceIsSufficient(focus: ExecutionFocus, evidenceRefs: readonly string[]) {
+  const uniqueEvidence = new Set(evidenceRefs)
+  return {
+    sufficient: uniqueEvidence.size >= focus.contract.verificationPolicy.minimumEvidence,
+    observed: uniqueEvidence.size,
+    required: focus.contract.verificationPolicy.minimumEvidence,
+  }
+}
+
+function describeContractPredicate(predicate: ObligationPredicate) {
+  switch (predicate.type) {
+    case "command_pass":
+      return `command_pass: ${predicate.command} exits ${predicate.expectedExitCode}`
+    case "file_constraint":
+      return `file_constraint: ${predicate.path} mustExist=${predicate.mustExist}`
+    case "claims_verified":
+      return `claims_verified: ${predicate.claimPropositions.join("; ")}`
+    case "human_approval":
+      return "human_approval: explicit user approval required"
+  }
 }
