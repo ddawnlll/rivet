@@ -56,6 +56,7 @@ import { SessionTable } from "../sql"
 import { eq } from "drizzle-orm"
 import { SessionStatusEvent } from "@opencode-ai/schema/session-status-event"
 import { diagnoseFailure } from "../../rivet/task-control"
+import { foldTrajectoryEntries } from "./fold-trajectory"
 
 const PROVIDER_INACTIVITY_TIMEOUT = Duration.seconds(30)
 const PROVIDER_TURN_TIMEOUT = Duration.minutes(15)
@@ -374,15 +375,9 @@ const layer = Layer.effect(
       })
       const entries = yield* SessionHistory.entriesForRunner(db, session.id, system.baselineSeq)
       const context = entries.map((entry) => entry.message)
-      const foldedRanges = semantics.hardState.trajectoryFolds.map((fold) => ({
-        start: Date.parse(fold.startedAt),
-        end: Date.parse(fold.completedAt),
-      }))
-      const modelContext = context.filter((message) => {
-        if (message.type === "user" || message.type === "system" || message.type === "compaction") return true
-        const created = DateTime.toEpochMillis(message.time.created)
-        return !foldedRanges.some((range) => created >= range.start && created <= range.end)
-      })
+      const modelContext = foldTrajectoryEntries(entries, semantics.hardState.trajectoryFolds).map(
+        (entry) => entry.message,
+      )
       const initialUserGoal = context.find((message) => message.type === "user")?.text
       const latestUserMessage = context.findLast((message) => message.type === "user")?.text
       const latestAdmission = latestUserMessage
@@ -806,6 +801,45 @@ const layer = Layer.effect(
               return
             }
             if (commitment.commitment.type === "verification_request") {
+              if (semantics.hardState.executionFocus?.kind === "recovery") {
+                const verification = yield* FlightRecorder.withSpanEffect(
+                  "governance",
+                  "praxis.evaluate",
+                  semantics.verifyRecovery(events, commitment.commitment.request),
+                  { sessionId: session.id, turnId: currentStep },
+                ).pipe(Effect.exit)
+                if (Exit.isFailure(verification)) {
+                  needsContinuation = false
+                  requireResponse = true
+                  yield* publish(
+                    LLMEvent.toolResult({
+                      id: event.id,
+                      name: event.name,
+                      result: {
+                        type: "error",
+                        value: `Recovery verification rejected: ${String(Cause.squash(verification.cause))}`,
+                      },
+                    }),
+                  )
+                  return
+                }
+                const receipt = verification.value
+                needsContinuation = receipt.passed
+                requireResponse = !receipt.passed
+                yield* publish(
+                  LLMEvent.toolResult({
+                    id: event.id,
+                    name: event.name,
+                    result: {
+                      type: receipt.passed ? "text" : "error",
+                      value: receipt.passed
+                        ? `Praxis recovery verification passed for [${receipt.recoveryId}]. Parent focus restored mechanically.`
+                        : `Praxis recovery verification failed for [${receipt.recoveryId}]. Recovery remains open.${receipt.diagnostics ? `\nDiagnostics: ${receipt.diagnostics}` : ""}`,
+                    },
+                  }),
+                )
+                return
+              }
               const verification = yield* FlightRecorder.withSpanEffect(
                 "governance",
                 "praxis.evaluate",
@@ -919,6 +953,7 @@ const layer = Layer.effect(
                       failureClass,
                       objective: `Restore verification for obligation ${receipt.obligationId}: ${receipt.diagnostics ?? "unspecified verifier failure"}`,
                       acceptanceCriteria: [`Praxis passes ${receipt.predicate ?? "the declared predicate"}`],
+                      trajectoryStartMessageId: assistantMessageID,
                     })
                     .pipe(Effect.orDie)
                 }

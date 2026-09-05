@@ -87,18 +87,21 @@ export class TaskControlController {
   static recoveryFocus(input: {
     readonly taskId: TaskId
     readonly parentFocusId: FocusId
-    readonly resumeTarget: ObligationId
+    readonly targetObligationId: ObligationId
+    readonly resumeTarget: FocusId
     readonly failureClass: FailureClass
     readonly objective: string
     readonly acceptanceCriteria: readonly string[]
     readonly allowedScope: readonly string[]
     readonly budget?: number
+    readonly trajectoryStartMessageId?: string
   }): { readonly frame: RecoveryFrame; readonly focus: ExecutionFocus } {
     const frame: RecoveryFrame = {
       id: createRecoveryId(),
       taskId: input.taskId,
       failureClass: input.failureClass,
       parentFocusId: input.parentFocusId,
+      targetObligationId: input.targetObligationId,
       objective: input.objective,
       acceptanceCriteria: [...input.acceptanceCriteria],
       resumeTarget: input.resumeTarget,
@@ -106,6 +109,7 @@ export class TaskControlController {
       budget: input.budget ?? DEFAULT_EFFORT_BUDGET,
       status: "open",
       createdAt: new Date().toISOString(),
+      trajectoryStartMessageId: input.trajectoryStartMessageId,
     }
     const contract = this.compileContract({
       objective: input.objective,
@@ -118,6 +122,7 @@ export class TaskControlController {
         id: createFocusId(),
         taskId: input.taskId,
         kind: "recovery",
+        targetObligationId: input.targetObligationId,
         parentFocusId: input.parentFocusId,
         objective: input.objective,
         reason: `Selective recovery for ${input.failureClass}`,
