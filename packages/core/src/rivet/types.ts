@@ -168,7 +168,7 @@ export interface ExecutionFocus {
   readonly requiredEvidence?: readonly string[]
   readonly relevantEvidence?: readonly string[]
   readonly effortBudget?: number
-  readonly resumeTarget?: ObligationId
+  readonly resumeTarget?: FocusId
   readonly contract: FocusContract
   readonly createdAt: string
 }
@@ -178,9 +178,10 @@ export interface RecoveryFrame {
   readonly taskId: TaskId
   readonly failureClass: FailureClass
   readonly parentFocusId: FocusId
+  readonly targetObligationId: ObligationId
   readonly objective: string
   readonly acceptanceCriteria: readonly string[]
-  readonly resumeTarget: ObligationId
+  readonly resumeTarget: FocusId
   readonly admittedInterventions?: readonly string[]
   readonly budget?: number
   readonly status: "open" | "verified" | "closed"

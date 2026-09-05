@@ -1099,7 +1099,8 @@ export class SessionSemantics {
     const recovery = TaskControlController.recoveryFocus({
       taskId: this.hardState.activeTaskId,
       parentFocusId: parent.id,
-      resumeTarget: parent.targetObligationId,
+      targetObligationId: parent.targetObligationId,
+      resumeTarget: parent.id,
       failureClass: input.failureClass,
       objective: input.objective,
       acceptanceCriteria: input.acceptanceCriteria,

@@ -15,6 +15,7 @@ import {
   createObligationId,
   createReceiptId,
   createTaskId,
+  type RecoveryVerificationReceipt,
 } from "@opencode-ai/core/rivet/types"
 import { testEffect } from "../lib/effect"
 
@@ -70,6 +71,68 @@ describe("Rivet task control plane P0", () => {
       yield* semantics.recordInvocation(events, "inv_task_control" as never, "test-model")
 
       expect(semantics.hardState.modelInvocations.at(-1)?.focusId).toBe(semantics.hardState.executionFocus?.id)
+    }),
+  )
+
+  it.effect("nested recovery unwinds durably in strict LIFO order", () =>
+    Effect.gen(function* () {
+      const events = yield* EventV2.Service
+      const { db } = yield* Database.Service
+      const sessionID = SessionV2.ID.make("ses_task_control_nested_recovery")
+      const semantics = yield* SessionSemantics.load(db, sessionID)
+      yield* semantics.ensureGoal(events, "/goal preserve nested recovery", "/tmp/rivet-control", "execution")
+      const obligationFocus = semantics.hardState.executionFocus!
+      const first = yield* semantics.pushRecovery(events, {
+        failureClass: "verification_gap",
+        objective: "Restore parent verification",
+        acceptanceCriteria: ["Parent verifier path works"],
+      })
+      const firstFocus = semantics.hardState.executionFocus!
+      expect(firstFocus.parentFocusId).toBe(obligationFocus.id)
+
+      const second = yield* semantics.pushRecovery(events, {
+        failureClass: "environment_blocker",
+        objective: "Restore recovery environment",
+        acceptanceCriteria: ["Recovery environment works"],
+      })
+      const secondFocus = semantics.hardState.executionFocus!
+      expect(semantics.hardState.recoveryStack).toEqual([first.id, second.id])
+      expect(secondFocus.parentFocusId).toBe(firstFocus.id)
+
+      const replayed = yield* SessionSemantics.load(db, sessionID)
+      expect(replayed.hardState.recoveryStack).toEqual([first.id, second.id])
+      expect(replayed.hardState.executionFocus?.id).toBe(secondFocus.id)
+
+      const evidenceId = createEvidenceId()
+      yield* replayed.append(events, {
+        type: "evidence_recorded",
+        evidenceId,
+        source: "praxis.recovery",
+        summary: "Nested recovery acceptance evidence",
+        timestamp: new Date().toISOString(),
+      })
+      const secondReceipt: RecoveryVerificationReceipt = {
+        receiptId: createReceiptId(),
+        recoveryId: second.id,
+        passed: true,
+        evidenceRefs: [evidenceId],
+        verifier: "PRAXIS",
+        timestamp: new Date().toISOString(),
+      }
+      yield* replayed.recordRecoveryVerification(events, secondReceipt)
+      yield* replayed.popRecovery(events, second.id, secondReceipt)
+      expect(replayed.hardState.executionFocus?.id).toBe(firstFocus.id)
+      expect(replayed.hardState.recoveryStack).toEqual([first.id])
+
+      const firstReceipt: RecoveryVerificationReceipt = {
+        ...secondReceipt,
+        receiptId: createReceiptId(),
+        recoveryId: first.id,
+      }
+      yield* replayed.recordRecoveryVerification(events, firstReceipt)
+      yield* replayed.popRecovery(events, first.id, firstReceipt)
+      expect(replayed.hardState.executionFocus?.id).toBe(obligationFocus.id)
+      expect(replayed.hardState.recoveryStack).toEqual([])
     }),
   )
 })
