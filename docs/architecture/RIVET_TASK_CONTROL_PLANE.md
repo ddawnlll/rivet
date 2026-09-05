@@ -91,3 +91,28 @@ focus_folded "RESOLVED RECOVERY recovery_R ... Evidence: evidence_X"
 - Ready frontier excludes obligations with unresolved dependencies.
 - Strategy redirect preserves root and focus identity.
 - Fold summaries remain in Cognitive View while raw closed-range assistant trajectory is filtered from provider context.
+
+## P2 trajectory TUI
+
+The runner writes a read-only task-control projection into session metadata at
+turn settlement. The TUI's Control view renders five explicit rails:
+
+- `ROOT`: active task identity, immutable objective, and goal revision.
+- `CURRENT FOCUS`: focus kind, objective, acceptance, required evidence, and tool-call effort budget.
+- `PROGRESS`: verifier-backed closures versus active-task requirements.
+- `RECOVERY`: the ordered open recovery stack with failure class and status.
+- `RESUME`: the obligation to restore after the current recovery closes.
+
+The persistent bottom status rail consumes the live runner span projection. It
+shows the current operation and elapsed milliseconds beside the most recently
+completed span. Tool spans include their authorized target, allowing labels
+such as `Reading packages/core/src/config.ts · 14ms`; provider and governance
+spans use `Waiting for model`, `Praxis verification`, and `Compiling cognitive
+context` labels from the same Flight Recorder source.
+
+### P2 verification scenarios
+
+- Empty sessions render a safe Control view with no invented task state.
+- Active metadata projects all five trajectory rails without transcript inference.
+- Recovery stack order and resume target are preserved.
+- Live and completed status labels use measured span start/duration values.

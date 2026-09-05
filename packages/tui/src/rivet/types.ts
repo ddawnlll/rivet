@@ -163,9 +163,39 @@ export interface UiRivetStatus {
   readonly processStartTime: string
 }
 
+export interface UiTaskControl {
+  readonly root?: { readonly taskId: string; readonly objective: string; readonly revision?: string }
+  readonly focus?: {
+    readonly id: string
+    readonly kind: "obligation" | "recovery"
+    readonly objective: string
+    readonly acceptanceCriteria: readonly string[]
+    readonly requiredEvidence: readonly string[]
+    readonly effort: { readonly used: number; readonly budget?: number }
+  }
+  readonly progress: { readonly verified: number; readonly required: number; readonly revision: number }
+  readonly recovery: readonly {
+    readonly id: string
+    readonly failureClass: string
+    readonly objective: string
+    readonly status: string
+    readonly resumeTarget: string
+  }[]
+  readonly resumeTarget?: string
+}
+
 export interface UiSemanticEvent {
   readonly id: string
-  readonly type: "inspected" | "changed" | "test_passed" | "test_failed" | "claim" | "verification" | "memory_ignored" | "memory_recalled" | "stale_warning"
+  readonly type:
+    | "inspected"
+    | "changed"
+    | "test_passed"
+    | "test_failed"
+    | "claim"
+    | "verification"
+    | "memory_ignored"
+    | "memory_recalled"
+    | "stale_warning"
   readonly icon: string
   readonly title: string
   readonly detail?: string

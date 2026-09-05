@@ -1,9 +1,32 @@
-import { createMemo, createContext, useContext, type JSX } from "solid-js"
+import { createMemo, createContext, onCleanup, onMount, createSignal, useContext, type JSX } from "solid-js"
 import { useSync } from "../context/sync"
 import { useRoute } from "../context/route"
 import { projectRivetState, type RivetProjection } from "./projection"
 
 const RivetContext = createContext<() => RivetProjection>()
+
+/**
+ * Drives projection refreshes while a provider is silent. Session sync events
+ * are not a reliable render clock: a request can remain busy for seconds
+ * without producing a chunk, so the status rail would otherwise freeze.
+ */
+export function createRivetRenderClock(intervalMs = 250) {
+  const [now, setNow] = createSignal(Date.now())
+  let timer: ReturnType<typeof setInterval> | undefined
+
+  const start = () => {
+    if (timer !== undefined) return
+    timer = setInterval(() => setNow(Date.now()), intervalMs)
+  }
+
+  const stop = () => {
+    if (timer === undefined) return
+    clearInterval(timer)
+    timer = undefined
+  }
+
+  return { now, start, stop }
+}
 
 export function RivetProvider(props: { children: JSX.Element; sessionID?: () => string | undefined }) {
   const sync = useSync()
@@ -33,7 +56,14 @@ export function RivetProvider(props: { children: JSX.Element; sessionID?: () => 
     return id ? sync.data.session_status[id] : undefined
   })
 
+  const renderClock = createRivetRenderClock()
+  onMount(renderClock.start)
+  onCleanup(renderClock.stop)
+
   const projection = createMemo<RivetProjection>(() => {
+    // Subscribe to the local clock so elapsed active spans advance even when
+    // the provider emits no events.
+    renderClock.now()
     const s = session()
     return projectRivetState({
       sessionID: s?.id,

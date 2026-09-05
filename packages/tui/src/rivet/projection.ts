@@ -20,6 +20,7 @@ import type {
   UiWorkspace,
   UiFlightTimeline,
   UiTimelinePhase,
+  UiTaskControl,
   UiActiveSpan,
   UiCompletedSpan,
 } from "./types"
@@ -83,6 +84,7 @@ export interface RivetProjection {
   readonly history: readonly UiHistoryEntry[]
   readonly statusRail: UiRivetStatus
   readonly semanticEvents: readonly UiSemanticEvent[]
+  readonly taskControl: UiTaskControl
 }
 
 const SEMANTIC_TOOLS = new Set([
@@ -139,6 +141,54 @@ export function projectRivetState(input: RivetSessionInput): RivetProjection {
   const metaRivet = asRecord(input.metadata?.rivet)
   const metaGoal = asString(metaRivet?.goal)
   const goal = metaGoal ?? input.title
+  const control = asRecord(metaRivet?.taskControl)
+  const root = asRecord(control?.root)
+  const focus = asRecord(control?.focus)
+  const effort = asRecord(focus?.effort)
+  const progress = asRecord(control?.progress)
+  const recovery = Array.isArray(control?.recovery)
+    ? control.recovery
+        .map(asRecord)
+        .filter((item): item is Record<string, unknown> => item !== undefined)
+        .map((item) => ({
+          id: asString(item.id) ?? "unknown-recovery",
+          failureClass: asString(item.failureClass) ?? "unknown",
+          objective: asString(item.objective) ?? "Recovery",
+          status: asString(item.status) ?? "open",
+          resumeTarget: asString(item.resumeTarget) ?? "unknown",
+        }))
+    : []
+  const taskControl: UiTaskControl = {
+    root:
+      root && asString(root.taskId) && asString(root.objective)
+        ? {
+            taskId: asString(root.taskId)!,
+            objective: asString(root.objective)!,
+            revision: asString(root.revision),
+          }
+        : undefined,
+    focus:
+      focus && asString(focus.id) && asString(focus.objective)
+        ? {
+            id: asString(focus.id)!,
+            kind: asString(focus.kind) === "recovery" ? "recovery" : "obligation",
+            objective: asString(focus.objective)!,
+            acceptanceCriteria: Array.isArray(focus.acceptanceCriteria) ? focus.acceptanceCriteria.map(String) : [],
+            requiredEvidence: Array.isArray(focus.requiredEvidence) ? focus.requiredEvidence.map(String) : [],
+            effort: {
+              used: typeof effort?.used === "number" ? effort.used : 0,
+              budget: typeof effort?.budget === "number" ? effort.budget : undefined,
+            },
+          }
+        : undefined,
+    progress: {
+      verified: typeof progress?.verified === "number" ? progress.verified : 0,
+      required: typeof progress?.required === "number" ? progress.required : 0,
+      revision: typeof progress?.revision === "number" ? progress.revision : 0,
+    },
+    recovery,
+    resumeTarget: asString(control?.resumeTarget),
+  }
 
   // 2. Extract tools and file events in chronological sequence
   const claimsMap = new Map<string, UiHardClaim>()
@@ -220,7 +270,8 @@ export function projectRivetState(input: RivetSessionInput): RivetProjection {
       const obId = asString(toolInput.obligation_id) ?? asString(toolInput.target) ?? `ob_${obligationsMap.size + 1}`
       const predicate = asString(toolInput.predicate) ?? obId
       const passed = toolMeta.passed === true || (output.length > 0 && !output.toLowerCase().includes("fail"))
-      const receiptId = asString(toolMeta.receiptId) ?? asString(toolMeta.receipt_id) ?? `rcpt_${Date.now().toString(36)}`
+      const receiptId =
+        asString(toolMeta.receiptId) ?? asString(toolMeta.receipt_id) ?? `rcpt_${Date.now().toString(36)}`
       const report = parseTestReport(output)
 
       testResultsList.push({
@@ -239,7 +290,7 @@ export function projectRivetState(input: RivetSessionInput): RivetProjection {
         status: passed ? "passed" : "failed",
         required: true,
         receiptId,
-        diagnostics: passed ? undefined : asString(toolMeta.diagnostics) ?? "Verification test failed",
+        diagnostics: passed ? undefined : (asString(toolMeta.diagnostics) ?? "Verification test failed"),
       })
 
       historyList.push({
@@ -260,8 +311,9 @@ export function projectRivetState(input: RivetSessionInput): RivetProjection {
       const rawObligations = toolMeta.obligations ?? toolInput.obligations
       if (Array.isArray(rawObligations)) {
         for (const item of rawObligations) {
-          const desc = typeof item === "string" ? item : asString(asRecord(item)?.description) ?? JSON.stringify(item)
-          const id = typeof item === "object" && item && "id" in item ? String(item.id) : `ob_${obligationsMap.size + 1}`
+          const desc = typeof item === "string" ? item : (asString(asRecord(item)?.description) ?? JSON.stringify(item))
+          const id =
+            typeof item === "object" && item && "id" in item ? String(item.id) : `ob_${obligationsMap.size + 1}`
           if (!obligationsMap.has(id)) {
             obligationsMap.set(id, {
               id,
@@ -516,9 +568,7 @@ export function projectRivetState(input: RivetSessionInput): RivetProjection {
     hypotheses,
     unknowns,
     plan,
-    candidateActions: Array.isArray(metaWorkspace?.candidateActions)
-      ? metaWorkspace.candidateActions.map(String)
-      : [],
+    candidateActions: Array.isArray(metaWorkspace?.candidateActions) ? metaWorkspace.candidateActions.map(String) : [],
     activeFocus,
   }
 
@@ -636,9 +686,15 @@ export function projectRivetState(input: RivetSessionInput): RivetProjection {
   // Infer phase
   let phase: UiTaskPhase = "idle"
   if (input.sessionStatus === "busy") {
-    if (toolParts.some((p) => p.state.status === "running" && (p.tool === "request_verification" || p.tool === "bash"))) {
+    if (
+      toolParts.some((p) => p.state.status === "running" && (p.tool === "request_verification" || p.tool === "bash"))
+    ) {
       phase = "verifying"
-    } else if (toolParts.some((p) => p.state.status === "running" && (p.tool === "edit" || p.tool === "write" || p.tool === "apply_patch"))) {
+    } else if (
+      toolParts.some(
+        (p) => p.state.status === "running" && (p.tool === "edit" || p.tool === "write" || p.tool === "apply_patch"),
+      )
+    ) {
       phase = "implementing"
     } else {
       phase = "implementing"
@@ -701,7 +757,8 @@ export function projectRivetState(input: RivetSessionInput): RivetProjection {
   }
 
   // Active span and completed span extraction
-  const statusObj = typeof input.sessionStatus === "object" && input.sessionStatus !== null ? input.sessionStatus : undefined
+  const statusObj =
+    typeof input.sessionStatus === "object" && input.sessionStatus !== null ? input.sessionStatus : undefined
   const statusType = typeof input.sessionStatus === "string" ? input.sessionStatus : statusObj?.type
 
   let activeSpan: UiActiveSpan | undefined
@@ -731,18 +788,17 @@ export function projectRivetState(input: RivetSessionInput): RivetProjection {
       activeSpan = {
         operation: statusObj.activity.operation,
         label: statusObj.activity.label,
-        category:
-          statusObj.activity.operation.startsWith("tool.")
-            ? "tool"
-            : statusObj.activity.operation.startsWith("provider.")
-              ? "provider"
-              : statusObj.activity.operation.startsWith("hardstate.") || statusObj.activity.operation.startsWith("state.")
-                ? "state"
-                : statusObj.activity.operation.startsWith("recall.")
-                  ? "recall"
-                  : statusObj.activity.operation.startsWith("cognitive_view.")
-                    ? "cognitive_view"
-                    : "runtime",
+        category: statusObj.activity.operation.startsWith("tool.")
+          ? "tool"
+          : statusObj.activity.operation.startsWith("provider.")
+            ? "provider"
+            : statusObj.activity.operation.startsWith("hardstate.") || statusObj.activity.operation.startsWith("state.")
+              ? "state"
+              : statusObj.activity.operation.startsWith("recall.")
+                ? "recall"
+                : statusObj.activity.operation.startsWith("cognitive_view.")
+                  ? "cognitive_view"
+                  : "runtime",
         elapsedMs: Math.max(0, Date.now() - statusObj.activity.startedAt),
         startTimestamp: statusObj.activity.startedAt,
       }
@@ -832,5 +888,6 @@ export function projectRivetState(input: RivetSessionInput): RivetProjection {
     history: historyList.reverse(),
     statusRail,
     semanticEvents,
+    taskControl,
   }
 }

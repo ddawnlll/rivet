@@ -8,9 +8,7 @@ describe("Rivet UI Projection", () => {
       sessionID: "ses_1",
       title: "Fix refresh race in coordinator",
       sessionStatus: "busy",
-      changedFiles: [
-        { file: "packages/security/src/refresh.ts", additions: 18, deletions: 2, status: "modified" },
-      ],
+      changedFiles: [{ file: "packages/security/src/refresh.ts", additions: 18, deletions: 2, status: "modified" }],
       parts: [
         {
           id: "p1",
@@ -64,21 +62,14 @@ describe("Rivet UI Projection", () => {
               kind: "provisional",
               summary: "Maybe TCP keepalive causes starvation",
               used: false,
-              whyIgnored: [
-                "old hypothesis",
-                "current task is debugging",
-                "never verified",
-              ],
+              whyIgnored: ["old hypothesis", "current task is debugging", "never verified"],
             },
             {
               id: "mem_3",
               kind: "historical",
               summary: "AuthManager mutex implementation",
               used: false,
-              whyIgnored: [
-                "implementation no longer exists",
-                "repository architecture changed",
-              ],
+              whyIgnored: ["implementation no longer exists", "repository architecture changed"],
             },
           ],
         },
@@ -274,15 +265,9 @@ describe("Rivet UI Projection", () => {
             output: {
               structured: {
                 revision: "r12",
-                claims: [
-                  { id: "claim_1", proposition: "PostgreSQL port is 5432", status: "verified" },
-                ],
-                obligations: [
-                  ["ob_db_conn", "Verify DB connection timeout handling"],
-                ],
-                memories: [
-                  { id: "mem_1", type: "decision", summary: "Use connection pooling with max 20 clients" },
-                ],
+                claims: [{ id: "claim_1", proposition: "PostgreSQL port is 5432", status: "verified" }],
+                obligations: [["ob_db_conn", "Verify DB connection timeout handling"]],
+                memories: [{ id: "mem_1", type: "decision", summary: "Use connection pooling with max 20 clients" }],
               },
             },
           },
@@ -297,7 +282,9 @@ describe("Rivet UI Projection", () => {
     expect(projection.obligations[0].status).toBe("pending")
     expect(projection.memory.length).toBe(1)
     expect(projection.memory[0].summary).toBe("Use connection pooling with max 20 clients")
-    expect(projection.semanticEvents.some((e) => e.type === "claim" && e.title.includes("Epistemic state queried"))).toBe(true)
+    expect(
+      projection.semanticEvents.some((e) => e.type === "claim" && e.title.includes("Epistemic state queried")),
+    ).toBe(true)
   })
 
   test("Memory retrieval: projects recalled memories and publishes semantic event", () => {
@@ -329,7 +316,9 @@ describe("Rivet UI Projection", () => {
     expect(projection.memory.length).toBe(2)
     expect(projection.memory[0].summary).toBe("Close transactions in defer blocks")
     expect(projection.memory[0].used).toBe(true)
-    expect(projection.semanticEvents.some((e) => e.type === "memory_recalled" && e.title.includes("database connection"))).toBe(true)
+    expect(
+      projection.semanticEvents.some((e) => e.type === "memory_recalled" && e.title.includes("database connection")),
+    ).toBe(true)
   })
 
   test("Empty state: gracefully handles empty inputs without errors", () => {
@@ -344,5 +333,42 @@ describe("Rivet UI Projection", () => {
     expect(projection.statusRail.changedFileCount).toBe(0)
     expect(projection.statusRail.taskCount).toBe(0)
   })
-})
 
+  test("Task control plane projects ROOT, FOCUS, PROGRESS, RECOVERY, and RESUME", () => {
+    const projection = projectRivetState({
+      title: "Repair verification",
+      metadata: {
+        rivet: {
+          taskControl: {
+            root: { taskId: "task_1", objective: "Repair verification", revision: "12" },
+            focus: {
+              id: "focus_1",
+              kind: "recovery",
+              objective: "Restore test command",
+              acceptanceCriteria: ["Praxis passes command_pass"],
+              requiredEvidence: ["evidence:command_pass"],
+              effort: { used: 2, budget: 5 },
+            },
+            progress: { verified: 1, required: 3, revision: 7 },
+            recovery: [
+              {
+                id: "recovery_1",
+                failureClass: "environment_blocker",
+                objective: "Restore test command",
+                status: "open",
+                resumeTarget: "oblg_parent",
+              },
+            ],
+            resumeTarget: "oblg_parent",
+          },
+        },
+      },
+    })
+
+    expect(projection.taskControl.root?.taskId).toBe("task_1")
+    expect(projection.taskControl.focus?.id).toBe("focus_1")
+    expect(projection.taskControl.progress).toEqual({ verified: 1, required: 3, revision: 7 })
+    expect(projection.taskControl.recovery[0]?.failureClass).toBe("environment_blocker")
+    expect(projection.taskControl.resumeTarget).toBe("oblg_parent")
+  })
+})
