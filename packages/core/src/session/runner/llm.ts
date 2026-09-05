@@ -249,42 +249,62 @@ const layer = Layer.effect(
       if (session.location.directory !== location.directory || session.location.workspaceID !== location.workspaceID)
         return yield* Effect.interrupt
       let lastCompletedActivity: SessionStatusEvent.CompletedActivity | undefined
-      const activityLabel = (operation: string) =>
-        ({
-          "turn.admission": "Understanding request",
-          "goal.compile": "Compiling goal",
-          "hardstate.load": "Loading Hard State",
-          "recall.query": "Searching memory",
-          "recall.index_delta": "Indexing memory",
-          "cognitive_view.compile": "Compiling context",
-          "prompt.assemble": "Preparing model request",
-          "provider.request": "Preparing model request",
-          "provider.wait_first_token": "Waiting for model",
-          "provider.stream": "Generating",
-          "tool.dispatch": "Checking authorization",
-          "tool.execute": "Executing tool",
-          "tool.result_process": "Processing tool result",
-          "praxis.evaluate": "Verifying evidence",
-          "completion.evaluate": "Checking completion",
-          "provider.finalize": "Delivering response",
-        })[operation] ?? operation
+      const recentCompletedActivities: SessionStatusEvent.CompletedActivity[] = []
+      const activityLabel = (operation: string, metadata?: Record<string, unknown>) => {
+        const tool = metadata?.tool as string | undefined
+        if (operation === "tool.execute" && tool) {
+          return `Executing ${tool}`
+        }
+        if (operation === "tool.result_process" && tool) {
+          return `Processing ${tool} result`
+        }
+        return (
+          ({
+            "turn.admission": "Understanding request",
+            "goal.compile": "Compiling goal",
+            "hardstate.load": "Loading Hard State",
+            "recall.query": "Searching memory",
+            "recall.index_delta": "Indexing memory",
+            "cognitive_view.compile": "Compiling cognitive context",
+            "prompt.assemble": "Building model request",
+            "provider.request": "Connecting to provider",
+            "provider.wait_first_token": "Waiting for model",
+            "provider.reasoning": "Model reasoning",
+            "provider.stream": "Generating response",
+            "governance.accp": "ACCP authorization",
+            "accp.evaluate": "ACCP authorization",
+            "tool.dispatch": "Checking authorization",
+            "tool.execute": "Executing tool",
+            "tool.result_process": "Processing tool result",
+            "praxis.evaluate": "Verifying evidence",
+            "completion.evaluate": "Checking completion",
+            "provider.finalize": "Delivering response",
+          })[operation] ?? operation
+        )
+      }
       const publishActivity = (span: ActiveSpanContext) =>
         publishStatus(session, {
           type: "busy",
           activity: {
             operation: span.operation,
-            label: activityLabel(span.operation),
+            label: activityLabel(span.operation, span.metadata),
             spanId: span.spanId,
             startedAt: Date.parse(span.wallStart),
           },
           ...(lastCompletedActivity ? { lastCompleted: lastCompletedActivity } : {}),
+          ...(recentCompletedActivities.length > 0 ? { recentCompleted: recentCompletedActivities } : {}),
         })
       const publishCompletedActivity = (span: ReturnType<typeof FlightRecorder.endSpan>) => {
-        lastCompletedActivity = {
+        const completed: SessionStatusEvent.CompletedActivity = {
           operation: span.operation,
-          label: activityLabel(span.operation),
+          label: activityLabel(span.operation, span.metadata),
           spanId: span.spanId,
           durationMs: Math.max(0, Math.round(span.duration)),
+        }
+        lastCompletedActivity = completed
+        recentCompletedActivities.push(completed)
+        if (recentCompletedActivities.length > 10) {
+          recentCompletedActivities.shift()
         }
       }
       const withActivity = <A, E, R>(
@@ -304,11 +324,17 @@ const layer = Layer.effect(
           yield* publishStatus(session, {
             type: "busy",
             ...(lastCompletedActivity ? { lastCompleted: lastCompletedActivity } : {}),
+            ...(recentCompletedActivities.length > 0 ? { recentCompleted: recentCompletedActivities } : {}),
           })
           if (Exit.isFailure(exit)) return yield* Effect.failCause(exit.cause)
           return exit.value
         })
-      const semantics = yield* SessionSemantics.load(db, session.id)
+      const semantics = yield* withActivity(
+        "state",
+        "hardstate.load",
+        SessionSemantics.load(db, session.id),
+        { sessionId: session.id, turnId: step },
+      )
       toolLoopGuard.setHardStateRevision(semantics.hardState.revision.toJSON())
       yield* semantics.ensureColdStart(events, session.location.directory)
       // Fork the deep repository induction in the background: the first drain
@@ -638,6 +664,38 @@ const layer = Layer.effect(
                 publishCompletedActivity(completed)
                 ttftSpan = undefined
               }
+            }
+
+            const isReasoning = event.type === "reasoning-start" || event.type === "reasoning-delta"
+            const isText = event.type === "text-start" || event.type === "text-delta"
+
+            if (isReasoning && streamSpan?.operation !== "provider.reasoning") {
+              if (streamSpan) {
+                const completed = FlightRecorder.endSpan(streamSpan, { status: "ok" })
+                publishCompletedActivity(completed)
+              }
+              streamSpan = FlightRecorder.startSpan("provider", "provider.reasoning", {
+                sessionId: session.id,
+                turnId: currentStep,
+                parentSpanId: providerReqSpan.spanId,
+                provider: model.provider,
+                model: model.id,
+              })
+              yield* publishActivity(streamSpan)
+            } else if (isText && streamSpan?.operation !== "provider.stream") {
+              if (streamSpan) {
+                const completed = FlightRecorder.endSpan(streamSpan, { status: "ok" })
+                publishCompletedActivity(completed)
+              }
+              streamSpan = FlightRecorder.startSpan("provider", "provider.stream", {
+                sessionId: session.id,
+                turnId: currentStep,
+                parentSpanId: providerReqSpan.spanId,
+                provider: model.provider,
+                model: model.id,
+              })
+              yield* publishActivity(streamSpan)
+            } else if (!streamSpan && (firstTokenSeen || event.type === "tool-call")) {
               streamSpan = FlightRecorder.startSpan("provider", "provider.stream", {
                 sessionId: session.id,
                 turnId: currentStep,
@@ -647,6 +705,7 @@ const layer = Layer.effect(
               })
               yield* publishActivity(streamSpan)
             }
+
             if (overflowFailure || publisher.hasProviderError()) return
             if (LLMEvent.is.providerError(event)) {
               if (isContextOverflowFailure(event) && !publisher.hasAssistantStarted()) {
@@ -656,6 +715,11 @@ const layer = Layer.effect(
             }
             yield* publish(event)
             if (event.type !== "tool-call") return
+            if (streamSpan) {
+              const completed = FlightRecorder.endSpan(streamSpan, { status: "ok" })
+              publishCompletedActivity(completed)
+              streamSpan = undefined
+            }
             toolCallsInTurn += 1
             if (semantics.hardState.gateRejectionCount > 0) {
               semantics.hardState.toolCallsAfterRejection++
@@ -670,20 +734,21 @@ const layer = Layer.effect(
             needsContinuation = true
             const assistantMessageID = yield* publisher.assistantMessageID(event.id)
             const rivetScope = semantics.scope(session.location.directory)
-            const commitment = FlightRecorder.withSpan(
-              "governance",
-              "accp.evaluate",
-              () =>
-                semantics.admitProviderCommitment({ id: event.id, name: event.name, input: event.input }, rivetScope, {
-                  repository: session.location.directory,
-                  currentRevision: semantics.hardState.revision,
-                  allowedScope: rivetScope,
-                  allowedCapabilities: ["file.read", "file.write", "process.exec", "tool.*"],
-                  allowMaterial: true,
-                  humanApproved: false,
-                }),
-              { sessionId: session.id, turnId: currentStep, tool: event.name },
-            )
+            const accpSpan = FlightRecorder.startSpan("governance", "accp.evaluate", {
+              sessionId: session.id,
+              turnId: currentStep,
+              tool: event.name,
+            })
+            yield* publishActivity(accpSpan)
+            const commitment = semantics.admitProviderCommitment({ id: event.id, name: event.name, input: event.input }, rivetScope, {
+              repository: session.location.directory,
+              currentRevision: semantics.hardState.revision,
+              allowedScope: rivetScope,
+              allowedCapabilities: ["file.read", "file.write", "process.exec", "tool.*"],
+              allowMaterial: true,
+              humanApproved: false,
+            })
+            publishCompletedActivity(FlightRecorder.endSpan(accpSpan, { status: "ok" }))
             if (commitment.commitment.type === "completion_proposal") {
               const proposal = commitment.commitment.proposal
               const decision = yield* semantics.proposeCompletion(events, {

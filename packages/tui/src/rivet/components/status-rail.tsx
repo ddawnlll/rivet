@@ -1,4 +1,4 @@
-import { createMemo, Show } from "solid-js"
+import { createMemo, createSignal, createEffect, onCleanup, Show } from "solid-js"
 import { useTerminalDimensions } from "@opentui/solid"
 import { TextAttributes } from "@opentui/core"
 import { useTheme } from "../../context/theme"
@@ -15,6 +15,20 @@ export function StatusRail(props: StatusRailProps) {
 
   const status = () => rivet.statusRail
   const width = () => dimensions().width
+
+  const [now, setNow] = createSignal(Date.now())
+  createEffect(() => {
+    if (!status().activeSpan) return
+    const timer = setInterval(() => setNow(Date.now()), 200)
+    onCleanup(() => clearInterval(timer))
+  })
+
+  const elapsedText = createMemo(() => {
+    const span = status().activeSpan
+    if (!span) return ""
+    const diff = Math.max(0, now() - span.startTimestamp)
+    return `${(diff / 1000).toFixed(1)}s`
+  })
 
   const phaseShort = createMemo(() => {
     switch (status().phase) {
@@ -67,13 +81,25 @@ export function StatusRail(props: StatusRailProps) {
             <text fg={theme.primary}>◆</text>
             <text fg={theme.textMuted}>{status().revision}</text>
             <text fg={theme.textMuted}>·</text>
-            <text fg={theme.text}>{phaseShort()}</text>
-            <text fg={theme.textMuted}>·</text>
-            <text fg={theme.text}>T{status().taskCount}</text>
-            <text fg={theme.textMuted}>·</text>
-            <text fg={theme.text}>Δ{status().changedFileCount}</text>
-            <text fg={theme.textMuted}>·</text>
-            <text fg={verifyLabel().fg}>{verifyLabel().short}</text>
+            <Show
+              when={status().activeSpan !== undefined}
+              fallback={
+                <>
+                  <text fg={theme.text}>{phaseShort()}</text>
+                  <text fg={theme.textMuted}>·</text>
+                  <text fg={theme.text}>T{status().taskCount}</text>
+                  <text fg={theme.textMuted}>·</text>
+                  <text fg={theme.text}>Δ{status().changedFileCount}</text>
+                  <text fg={theme.textMuted}>·</text>
+                  <text fg={verifyLabel().fg}>{verifyLabel().short}</text>
+                </>
+              }
+            >
+              <text fg={theme.info} attributes={TextAttributes.BOLD}>
+                ◈ {status().activeSpan!.label}
+              </text>
+              <text fg={theme.textMuted}>{elapsedText()}</text>
+            </Show>
           </box>
         }
       >
@@ -95,7 +121,16 @@ export function StatusRail(props: StatusRailProps) {
           <Show when={status().activeSpan !== undefined}>
             <text fg={theme.textMuted}>·</text>
             <text fg={theme.info} attributes={TextAttributes.BOLD}>
-              ● {status().activeSpan!.label}
+              ◈ {status().activeSpan!.label}
+            </text>
+            <text fg={theme.textMuted}>
+              · {elapsedText()}
+            </text>
+          </Show>
+          <Show when={status().activeSpan === undefined && status().lastCompletedSpan !== undefined}>
+            <text fg={theme.textMuted}>·</text>
+            <text fg={theme.textMuted}>
+              ✓ {status().lastCompletedSpan!.label} · {(status().lastCompletedSpan!.durationMs / 1000).toFixed(2)}s
             </text>
           </Show>
           <Show when={status().cacheHitRatio !== undefined}>

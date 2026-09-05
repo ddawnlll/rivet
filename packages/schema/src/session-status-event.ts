@@ -28,6 +28,7 @@ export type TerminalOutcome = Schema.Schema.Type<typeof TerminalOutcome>
 const liveFields = {
   activity: optional(Activity),
   lastCompleted: optional(CompletedActivity),
+  recentCompleted: optional(Schema.Array(CompletedActivity)),
 }
 
 export const Info = Schema.Union([

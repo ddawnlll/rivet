@@ -819,6 +819,78 @@ export type SessionsHistoryOutput = {
     | {
         readonly id: string
         readonly metadata?: { readonly [x: string]: JsonValue }
+        readonly type: "session.next.run.status"
+        readonly durable?: { readonly aggregateID: string; readonly seq: number; readonly version: number }
+        readonly location?: { readonly directory: string; readonly workspaceID?: string }
+        readonly data: {
+          readonly timestamp: number
+          readonly sessionID: string
+          readonly status:
+            | {
+                readonly type: "idle"
+                readonly outcome?: "completed" | "quiescent" | "stalled" | "interrupted" | "failed"
+                readonly source?: string
+                readonly reason?: string
+                readonly phase?: string
+              }
+            | {
+                readonly type: "retry"
+                readonly attempt: number
+                readonly message: string
+                readonly action?: {
+                  readonly reason: string
+                  readonly provider: string
+                  readonly title: string
+                  readonly message: string
+                  readonly label: string
+                  readonly link?: string
+                }
+                readonly next: number
+                readonly activity?: {
+                  readonly operation: string
+                  readonly label: string
+                  readonly spanId: string
+                  readonly startedAt: number
+                }
+                readonly lastCompleted?: {
+                  readonly operation: string
+                  readonly label: string
+                  readonly spanId: string
+                  readonly durationMs: number
+                }
+                readonly recentCompleted?: ReadonlyArray<{
+                  readonly operation: string
+                  readonly label: string
+                  readonly spanId: string
+                  readonly durationMs: number
+                }>
+              }
+            | {
+                readonly type: "busy"
+                readonly activity?: {
+                  readonly operation: string
+                  readonly label: string
+                  readonly spanId: string
+                  readonly startedAt: number
+                }
+                readonly lastCompleted?: {
+                  readonly operation: string
+                  readonly label: string
+                  readonly spanId: string
+                  readonly durationMs: number
+                }
+                readonly recentCompleted?: ReadonlyArray<{
+                  readonly operation: string
+                  readonly label: string
+                  readonly spanId: string
+                  readonly durationMs: number
+                }>
+              }
+        }
+      }
+    | {
+        readonly id: string
+        readonly metadata?: { readonly [x: string]: JsonValue }
         readonly type: "session.next.shell.started"
         readonly durable?: { readonly aggregateID: string; readonly seq: number; readonly version: number }
         readonly location?: { readonly directory: string; readonly workspaceID?: string }
@@ -1285,6 +1357,78 @@ export type SessionsEventsOutput =
         readonly sessionID: string
         readonly messageID: string
         readonly text: string
+      }
+    }
+  | {
+      readonly id: string
+      readonly metadata?: { readonly [x: string]: unknown }
+      readonly type: "session.next.run.status"
+      readonly durable?: { readonly aggregateID: string; readonly seq: number; readonly version: number }
+      readonly location?: { readonly directory: string; readonly workspaceID?: string }
+      readonly data: {
+        readonly timestamp: number
+        readonly sessionID: string
+        readonly status:
+          | {
+              readonly type: "idle"
+              readonly outcome?: "completed" | "quiescent" | "stalled" | "interrupted" | "failed"
+              readonly source?: string
+              readonly reason?: string
+              readonly phase?: string
+            }
+          | {
+              readonly type: "retry"
+              readonly attempt: number
+              readonly message: string
+              readonly action?: {
+                readonly reason: string
+                readonly provider: string
+                readonly title: string
+                readonly message: string
+                readonly label: string
+                readonly link?: string
+              }
+              readonly next: number
+              readonly activity?: {
+                readonly operation: string
+                readonly label: string
+                readonly spanId: string
+                readonly startedAt: number
+              }
+              readonly lastCompleted?: {
+                readonly operation: string
+                readonly label: string
+                readonly spanId: string
+                readonly durationMs: number
+              }
+              readonly recentCompleted?: ReadonlyArray<{
+                readonly operation: string
+                readonly label: string
+                readonly spanId: string
+                readonly durationMs: number
+              }>
+            }
+          | {
+              readonly type: "busy"
+              readonly activity?: {
+                readonly operation: string
+                readonly label: string
+                readonly spanId: string
+                readonly startedAt: number
+              }
+              readonly lastCompleted?: {
+                readonly operation: string
+                readonly label: string
+                readonly spanId: string
+                readonly durationMs: number
+              }
+              readonly recentCompleted?: ReadonlyArray<{
+                readonly operation: string
+                readonly label: string
+                readonly spanId: string
+                readonly durationMs: number
+              }>
+            }
       }
     }
   | {

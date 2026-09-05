@@ -127,6 +127,12 @@ export interface UiFlightTimeline {
   readonly phases: readonly UiTimelinePhase[]
 }
 
+export interface UiCompletedSpan {
+  readonly operation: string
+  readonly label: string
+  readonly durationMs: number
+}
+
 export interface UiActiveSpan {
   readonly operation: string
   readonly label: string
@@ -147,6 +153,8 @@ export interface UiRivetStatus {
   readonly recallLatencyMs?: number
   readonly flightTimeline?: UiFlightTimeline
   readonly activeSpan?: UiActiveSpan
+  readonly lastCompletedSpan?: UiCompletedSpan
+  readonly recentSpans?: readonly UiCompletedSpan[]
   // Runtime provenance — set once at process startup, never changes
   readonly gitBranch: string
   readonly gitSha: string

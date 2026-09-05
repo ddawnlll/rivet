@@ -30,7 +30,7 @@ export function RivetProvider(props: { children: JSX.Element; sessionID?: () => 
   })
   const sessionStatus = createMemo(() => {
     const id = sessionID()
-    return id ? sync.data.session_status[id]?.type : undefined
+    return id ? sync.data.session_status[id] : undefined
   })
 
   const projection = createMemo<RivetProjection>(() => {

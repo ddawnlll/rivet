@@ -553,8 +553,23 @@ export function StateView(props: StateViewProps) {
                     <box flexDirection="row" gap={1} marginTop={1}>
                       <text fg={theme.textMuted}>NOW:</text>
                       <text fg={theme.info} attributes={TextAttributes.BOLD}>
-                        ● {rivet.statusRail.activeSpan?.label}
+                        ◈ {rivet.statusRail.activeSpan?.label}
                       </text>
+                    </box>
+                  </Show>
+                  <Show when={rivet.statusRail.recentSpans && rivet.statusRail.recentSpans.length > 0}>
+                    <box flexDirection="column" marginTop={1} gap={0}>
+                      <text fg={theme.textMuted} attributes={TextAttributes.BOLD}>
+                        RECENT LIFECYCLE SPANS
+                      </text>
+                      <For each={rivet.statusRail.recentSpans}>
+                        {(span) => (
+                          <box flexDirection="row" justifyContent="space-between">
+                            <text fg={theme.text}>◈ {span.label}</text>
+                            <text fg={theme.textMuted}>{(span.durationMs / 1000).toFixed(2)}s</text>
+                          </box>
+                        )}
+                      </For>
                     </box>
                   </Show>
                   <box flexDirection="column" marginTop={1} gap={0}>

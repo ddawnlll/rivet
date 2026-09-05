@@ -21,6 +21,7 @@ import type {
   UiFlightTimeline,
   UiTimelinePhase,
   UiActiveSpan,
+  UiCompletedSpan,
 } from "./types"
 
 export interface RivetSessionInput {
@@ -40,7 +41,31 @@ export interface RivetSessionInput {
     readonly deletions: number
     readonly status?: "added" | "deleted" | "modified"
   }[]
-  readonly sessionStatus?: "idle" | "busy" | "retry"
+  readonly sessionStatus?:
+    | "idle"
+    | "busy"
+    | "retry"
+    | {
+        readonly type: "idle" | "busy" | "retry"
+        readonly activity?: {
+          readonly operation: string
+          readonly label: string
+          readonly spanId: string
+          readonly startedAt: number
+        }
+        readonly lastCompleted?: {
+          readonly operation: string
+          readonly label: string
+          readonly spanId: string
+          readonly durationMs: number
+        }
+        readonly recentCompleted?: ReadonlyArray<{
+          readonly operation: string
+          readonly label: string
+          readonly spanId: string
+          readonly durationMs: number
+        }>
+      }
 }
 
 export interface RivetProjection {
@@ -675,25 +700,70 @@ export function projectRivetState(input: RivetSessionInput): RivetProjection {
     }
   }
 
-  // Active span calculation if turn is busy
+  // Active span and completed span extraction
+  const statusObj = typeof input.sessionStatus === "object" && input.sessionStatus !== null ? input.sessionStatus : undefined
+  const statusType = typeof input.sessionStatus === "string" ? input.sessionStatus : statusObj?.type
+
   let activeSpan: UiActiveSpan | undefined
-  if (input.sessionStatus === "busy") {
-    const runningTool = toolParts.find((p) => p.state.status === "running")
-    if (runningTool) {
+  let lastCompletedSpan: UiCompletedSpan | undefined
+  const recentSpans: UiCompletedSpan[] = []
+
+  if (statusObj?.lastCompleted) {
+    lastCompletedSpan = {
+      operation: statusObj.lastCompleted.operation,
+      label: statusObj.lastCompleted.label,
+      durationMs: statusObj.lastCompleted.durationMs,
+    }
+  }
+
+  if (statusObj?.recentCompleted) {
+    for (const rc of statusObj.recentCompleted) {
+      recentSpans.push({
+        operation: rc.operation,
+        label: rc.label,
+        durationMs: rc.durationMs,
+      })
+    }
+  }
+
+  if (statusType === "busy") {
+    if (statusObj?.activity) {
       activeSpan = {
-        operation: "tool.execute",
-        label: `Tool: ${runningTool.tool}`,
-        category: "tool",
-        elapsedMs: 0,
-        startTimestamp: Date.now(),
+        operation: statusObj.activity.operation,
+        label: statusObj.activity.label,
+        category:
+          statusObj.activity.operation.startsWith("tool.")
+            ? "tool"
+            : statusObj.activity.operation.startsWith("provider.")
+              ? "provider"
+              : statusObj.activity.operation.startsWith("hardstate.") || statusObj.activity.operation.startsWith("state.")
+                ? "state"
+                : statusObj.activity.operation.startsWith("recall.")
+                  ? "recall"
+                  : statusObj.activity.operation.startsWith("cognitive_view.")
+                    ? "cognitive_view"
+                    : "runtime",
+        elapsedMs: Math.max(0, Date.now() - statusObj.activity.startedAt),
+        startTimestamp: statusObj.activity.startedAt,
       }
     } else {
-      activeSpan = {
-        operation: "provider.stream",
-        label: "Provider generation",
-        category: "provider",
-        elapsedMs: 0,
-        startTimestamp: Date.now(),
+      const runningTool = toolParts.find((p) => p.state.status === "running")
+      if (runningTool) {
+        activeSpan = {
+          operation: "tool.execute",
+          label: `Tool: ${runningTool.tool}`,
+          category: "tool",
+          elapsedMs: 0,
+          startTimestamp: Date.now(),
+        }
+      } else {
+        activeSpan = {
+          operation: "provider.stream",
+          label: "Waiting for model",
+          category: "provider",
+          elapsedMs: 0,
+          startTimestamp: Date.now(),
+        }
       }
     }
   }
@@ -712,6 +782,8 @@ export function projectRivetState(input: RivetSessionInput): RivetProjection {
     recallLatencyMs,
     flightTimeline,
     activeSpan,
+    lastCompletedSpan,
+    recentSpans,
     gitBranch: prov.gitBranch,
     gitSha: prov.gitSha,
     isDirty: prov.isDirty,
