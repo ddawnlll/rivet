@@ -5,6 +5,8 @@ import {
   type DependencyRef,
   type EpistemicStatus,
   type EvidenceId,
+  type ExecutionFocus,
+  type FocusId,
   type InvocationId,
   type MemoryFrontier,
   type MemoryRef,
@@ -14,6 +16,8 @@ import {
   type PremiseConflict,
   type Provenance,
   type ReceiptId,
+  type RecoveryFrame,
+  type RecoveryId,
   Revision,
   RivetError,
   type Scope,
@@ -84,6 +88,7 @@ export type InvocationReason =
 
 export interface ModelInvocationRecord {
   readonly invocationId: InvocationId
+  readonly focusId: FocusId | null
   readonly modelId: string
   readonly reason: InvocationReason
   readonly inputTokens: number
@@ -201,10 +206,12 @@ export type NoesisEvent =
   | {
       readonly type: "obligation_created"
       readonly obligationId: ObligationId
+      readonly taskId?: TaskId
       readonly description: string
       readonly scope: Scope
       readonly kind?: ObligationKind
       readonly predicate?: ObligationPredicate
+      readonly dependencies?: readonly ObligationId[]
       readonly timestamp: string
     }
   | {
@@ -236,6 +243,41 @@ export type NoesisEvent =
       readonly type: "obligation_invalidated"
       readonly obligationId: ObligationId
       readonly reason: string
+      readonly timestamp: string
+    }
+  | {
+      readonly type: "task_archived"
+      readonly taskId: TaskId
+      readonly reason: string
+      readonly timestamp: string
+    }
+  | {
+      readonly type: "focus_set"
+      readonly focus: ExecutionFocus
+      readonly timestamp: string
+    }
+  | {
+      readonly type: "focus_archived"
+      readonly focusId: FocusId
+      readonly reason: string
+      readonly timestamp: string
+    }
+  | {
+      readonly type: "recovery_opened"
+      readonly frame: RecoveryFrame
+      readonly focus: ExecutionFocus
+      readonly timestamp: string
+    }
+  | {
+      readonly type: "recovery_verified"
+      readonly recoveryId: RecoveryId
+      readonly receiptId: ReceiptId
+      readonly timestamp: string
+    }
+  | {
+      readonly type: "recovery_closed"
+      readonly recoveryId: RecoveryId
+      readonly resumeFocus: ExecutionFocus
       readonly timestamp: string
     }
   | {
@@ -311,11 +353,21 @@ export class HardState {
   readonly contradictions: Map<ClaimId, ContradictionRecord> = new Map()
   readonly rejectedClaims: Map<ClaimId, RejectionRecord> = new Map()
   readonly obligations: Map<ObligationId, string> = new Map()
+  readonly obligationDescriptions: Map<ObligationId, string> = new Map()
+  readonly obligationTaskIds: Map<ObligationId, TaskId> = new Map()
+  readonly obligationDependencies: Map<ObligationId, readonly ObligationId[]> = new Map()
   readonly obligationScopes: Map<ObligationId, Scope> = new Map()
   readonly obligationKinds: Map<ObligationId, ObligationKind> = new Map()
   readonly obligationPredicates: Map<ObligationId, ObligationPredicate> = new Map()
   readonly closedObligations: Map<ObligationId, ReceiptId> = new Map()
   readonly invalidatedObligations: Map<ObligationId, string> = new Map()
+  readonly suspendedObligations: Map<ObligationId, string> = new Map()
+  readonly archivedTasks: Map<TaskId, string> = new Map()
+  readonly focuses: Map<FocusId, ExecutionFocus> = new Map()
+  readonly archivedFocuses: Map<FocusId, string> = new Map()
+  readonly recoveryFrames: Map<RecoveryId, RecoveryFrame> = new Map()
+  readonly recoveryStack: RecoveryId[] = []
+  executionFocus: ExecutionFocus | null = null
   readonly inquiryReceipts: Map<ObligationId, InquiryReceipt> = new Map()
   readonly evidence: Map<EvidenceId, string> = new Map()
   readonly evidenceSources: Map<EvidenceId, string> = new Map()
@@ -588,6 +640,10 @@ export class HardState {
       }
       case "obligation_created": {
         this.obligations.set(event.obligationId, event.description)
+        this.obligationDescriptions.set(event.obligationId, event.description)
+        if (event.taskId ?? this.activeTaskId)
+          this.obligationTaskIds.set(event.obligationId, (event.taskId ?? this.activeTaskId)!)
+        this.obligationDependencies.set(event.obligationId, [...(event.dependencies ?? [])])
         this.obligationScopes.set(event.obligationId, event.scope)
         // Legacy events carry no kind; they were closed via Praxis execution
         // verification, which stays the default closure semantics.
@@ -636,6 +692,71 @@ export class HardState {
       case "obligation_invalidated": {
         this.obligations.delete(event.obligationId)
         this.invalidatedObligations.set(event.obligationId, event.reason)
+        break
+      }
+      case "task_archived": {
+        this.archivedTasks.set(event.taskId, event.reason)
+        for (const [obligationId, taskId] of this.obligationTaskIds) {
+          if (taskId !== event.taskId) continue
+          const description = this.obligations.get(obligationId)
+          if (description) {
+            this.obligations.delete(obligationId)
+            this.suspendedObligations.set(obligationId, description)
+          }
+        }
+        for (const [focusId, focus] of this.focuses) {
+          if (focus.taskId === event.taskId) this.archivedFocuses.set(focusId, event.reason)
+        }
+        for (const [recoveryId, frame] of this.recoveryFrames) {
+          if (frame.taskId === event.taskId && frame.status !== "closed") {
+            this.recoveryFrames.set(recoveryId, { ...frame, status: "closed", closedAt: event.timestamp })
+          }
+        }
+        this.recoveryStack.splice(
+          0,
+          this.recoveryStack.length,
+          ...this.recoveryStack.filter((id) => this.recoveryFrames.get(id)?.taskId !== event.taskId),
+        )
+        if (this.executionFocus?.taskId === event.taskId) this.executionFocus = null
+        break
+      }
+      case "focus_set": {
+        this.focuses.set(event.focus.id, event.focus)
+        this.executionFocus = event.focus
+        break
+      }
+      case "focus_archived": {
+        this.archivedFocuses.set(event.focusId, event.reason)
+        if (this.executionFocus?.id === event.focusId) this.executionFocus = null
+        break
+      }
+      case "recovery_opened": {
+        this.recoveryFrames.set(event.frame.id, event.frame)
+        this.recoveryStack.push(event.frame.id)
+        this.focuses.set(event.focus.id, event.focus)
+        this.executionFocus = event.focus
+        break
+      }
+      case "recovery_verified": {
+        const frame = this.recoveryFrames.get(event.recoveryId)
+        if (frame) {
+          this.recoveryFrames.set(event.recoveryId, {
+            ...frame,
+            status: "verified",
+            verificationReceiptId: event.receiptId,
+          })
+        }
+        break
+      }
+      case "recovery_closed": {
+        const frame = this.recoveryFrames.get(event.recoveryId)
+        if (frame) {
+          this.recoveryFrames.set(event.recoveryId, { ...frame, status: "closed", closedAt: event.timestamp })
+        }
+        const stackIndex = this.recoveryStack.lastIndexOf(event.recoveryId)
+        if (stackIndex >= 0) this.recoveryStack.splice(stackIndex, 1)
+        this.focuses.set(event.resumeFocus.id, event.resumeFocus)
+        this.executionFocus = event.resumeFocus
         break
       }
       case "process_error_attributed": {
@@ -708,8 +829,16 @@ export class HardState {
     return this.obligationKinds.get(obligationId) ?? "execution"
   }
 
-  openObligationIds(): ObligationId[] {
-    return Array.from(this.obligations.keys()).sort()
+  openObligationIds(taskId: TaskId | null = this.activeTaskId): ObligationId[] {
+    return Array.from(this.obligations.keys())
+      .filter((id) => taskId === null || this.obligationTaskIds.get(id) === taskId)
+      .sort()
+  }
+
+  readyObligationIds(taskId: TaskId | null = this.activeTaskId): ObligationId[] {
+    return this.openObligationIds(taskId).filter((id) =>
+      (this.obligationDependencies.get(id) ?? []).every((dependency) => this.closedObligations.has(dependency)),
+    )
   }
 
   passingVerificationReceipts(): ReceiptId[] {
@@ -733,6 +862,7 @@ export class HardState {
     for (const receipt of this.verificationReceipts.values()) {
       if (
         receipt.passed &&
+        (this.activeTaskId === null || this.obligationTaskIds.get(receipt.obligationId) === this.activeTaskId) &&
         this.isCurrentGoalReceipt(receipt.verifiedScope.revision) &&
         this.verificationReceiptMatchesPredicate(receipt)
       ) {
@@ -740,7 +870,11 @@ export class HardState {
       }
     }
     for (const receipt of this.inquiryReceipts.values()) {
-      if (this.isCurrentGoalReceipt(receipt.satisfiedAtRevision)) receipts.push(receipt.receiptId)
+      if (
+        (this.activeTaskId === null || this.obligationTaskIds.get(receipt.obligationId) === this.activeTaskId) &&
+        this.isCurrentGoalReceipt(receipt.satisfiedAtRevision)
+      )
+        receipts.push(receipt.receiptId)
     }
     return receipts.sort()
   }
@@ -849,6 +983,8 @@ export interface CognitiveViewInit {
   unknowns?: readonly string[]
   activeHypotheses?: readonly string[]
   activeFocus?: readonly string[]
+  executionFocus?: ExecutionFocus | null
+  recoveryFrames?: readonly RecoveryFrame[]
   relevantFiles?: readonly string[]
   premiseConflicts?: readonly PremiseConflict[]
   memoryFrontier?: MemoryFrontier
@@ -872,6 +1008,8 @@ export class CognitiveView {
   readonly unknowns: readonly string[]
   readonly activeHypotheses: readonly string[]
   readonly activeFocus: readonly string[]
+  readonly executionFocus: ExecutionFocus | null
+  readonly recoveryFrames: readonly RecoveryFrame[]
   readonly relevantFiles: readonly string[]
   readonly premiseConflicts: readonly PremiseConflict[]
   readonly memoryFrontier?: MemoryFrontier
@@ -898,6 +1036,8 @@ export class CognitiveView {
     this.unknowns = init.unknowns ?? []
     this.activeHypotheses = init.activeHypotheses ?? []
     this.activeFocus = init.activeFocus ?? []
+    this.executionFocus = init.executionFocus ?? null
+    this.recoveryFrames = init.recoveryFrames ?? []
     this.relevantFiles = init.relevantFiles ?? []
     this.premiseConflicts = init.premiseConflicts ?? []
     this.memoryFrontier = init.memoryFrontier
@@ -955,6 +1095,28 @@ export class CognitiveView {
       lines.push("### CURRENT GOAL")
       lines.push(`Repository: ${this.repositoryId}`)
       lines.push(`${this.goalDescription}\n`)
+    }
+
+    if (this.executionFocus) {
+      lines.push("### CURRENT FOCUS (AUTHORITATIVE)")
+      lines.push(`Focus ID: ${this.executionFocus.id}`)
+      lines.push(`Task ID: ${this.executionFocus.taskId}`)
+      lines.push(`Kind: ${this.executionFocus.kind.toUpperCase()}`)
+      lines.push(`Objective: ${this.executionFocus.objective}`)
+      lines.push(`Acceptance: ${this.executionFocus.contract.acceptanceCriteria.join("; ")}`)
+      lines.push(`Allowed scope: ${this.executionFocus.contract.allowedScope.join("; ")}`)
+      lines.push(`Required evidence: ${this.executionFocus.contract.requiredEvidence.join(", ") || "verifier-defined"}`)
+      lines.push(`Effort budget: ${this.executionFocus.contract.effortBudget ?? "default"}`)
+      if (this.executionFocus.resumeTarget) lines.push(`Resume target: ${this.executionFocus.resumeTarget}`)
+      lines.push("")
+    }
+
+    if (this.recoveryFrames.length > 0) {
+      lines.push("### RECOVERY STACK")
+      for (const frame of this.recoveryFrames) {
+        lines.push(`- [${frame.id}] ${frame.failureClass}: ${frame.objective} -> resume ${frame.resumeTarget}`)
+      }
+      lines.push("")
     }
 
     if (this.completionReadiness.status === "NOT_REQUIRED" || !this.goalDescription) {

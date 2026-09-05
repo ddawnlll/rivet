@@ -12,7 +12,6 @@ import { TurnAdmissionGate } from "./turn-admission"
 
 export type ObligationStatus = "open" | "satisfied" | "violated" | "waived"
 
-
 export type ObligationPredicate =
   | {
       readonly type: "command_pass"
@@ -36,6 +35,7 @@ export type ObligationPredicate =
 
 export interface ObligationNode {
   readonly id: ObligationId
+  readonly taskId: TaskId
   readonly title: string
   readonly description: string
   readonly targetScope: Scope
@@ -83,10 +83,38 @@ export class ObligationGraph {
 }
 
 const COMMON_FILE_EXTENSIONS = new Set([
-  "ts", "tsx", "js", "jsx", "mjs", "cjs",
-  "rs", "py", "json", "md", "toml", "yaml", "yml",
-  "css", "scss", "html", "sh", "bash", "zsh", "sql", "go", "c", "cpp", "h", "hpp",
-  "txt", "lock", "proto", "graphql", "wasm", "dockerfile", "env",
+  "ts",
+  "tsx",
+  "js",
+  "jsx",
+  "mjs",
+  "cjs",
+  "rs",
+  "py",
+  "json",
+  "md",
+  "toml",
+  "yaml",
+  "yml",
+  "css",
+  "scss",
+  "html",
+  "sh",
+  "bash",
+  "zsh",
+  "sql",
+  "go",
+  "c",
+  "cpp",
+  "h",
+  "hpp",
+  "txt",
+  "lock",
+  "proto",
+  "graphql",
+  "wasm",
+  "dockerfile",
+  "env",
 ])
 
 export function isValidFilePathCandidate(candidate: string): boolean {
@@ -155,6 +183,7 @@ export class GoalCompiler {
 
     graph.addObligation({
       id: rootOblgId,
+      taskId: goalId,
       title: "Fulfill requested goal requirements",
       description: userPrompt,
       targetScope: rootScope,
@@ -182,6 +211,7 @@ export class GoalCompiler {
             const fileOblgId = createObligationId()
             graph.addObligation({
               id: fileOblgId,
+              taskId: goalId,
               title: `Ensure target path '${cleanPath}' is maintained`,
               description: `File constraint for ${cleanPath}`,
               targetScope: Scope.path(repoName, cleanPath, currentRevision),

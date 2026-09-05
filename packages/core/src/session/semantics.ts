@@ -28,6 +28,7 @@ import {
   type VerificationRequest,
 } from "../rivet/accp"
 import { GoalCompiler, type ObligationPredicate } from "../rivet/goal-compiler"
+import { TaskControlController } from "../rivet/task-control"
 import {
   Induction,
   RepositoryInduction,
@@ -50,12 +51,14 @@ import {
   type DependencyRef,
   type EpistemicStatus,
   type EvidenceId,
+  type FailureClass,
   type InvocationId,
   type MemoryFrontier,
   type ObligationId,
   type ObligationKind,
   type PremiseConflict,
   type Provenance,
+  type RecoveryId,
   type SessionId,
   type TaskId,
   type TaskAuthority,
@@ -283,6 +286,7 @@ export class SessionSemantics {
       type: "model_invocation_recorded",
       record: {
         invocationId,
+        focusId: this.hardState.executionFocus?.id ?? null,
         modelId,
         reason: "SEMANTIC_DIAGNOSIS",
         inputTokens: 0,
@@ -980,6 +984,15 @@ export class SessionSemantics {
     const compiled = GoalCompiler.compile(goal, repository, this.hardState.revision, kind)
     const self = this
     return Effect.gen(function* () {
+      const previousTaskId = self.hardState.activeTaskId
+      if (previousTaskId && previousTaskId !== compiled.goalId) {
+        yield* self.append(events, {
+          type: "task_archived",
+          taskId: previousTaskId,
+          reason: `Superseded by user-authorized goal ${compiled.goalId}`,
+          timestamp: new Date().toISOString(),
+        })
+      }
       yield* self.append(events, {
         type: "goal_set",
         goal,
@@ -993,13 +1006,151 @@ export class SessionSemantics {
         [...compiled.graph.nodes.values()].map((obligation) => ({
           type: "obligation_created" as const,
           obligationId: obligation.id,
+          taskId: obligation.taskId,
           description: obligation.description,
           scope: obligation.targetScope,
           kind: obligation.kind,
           predicate: obligation.predicate,
+          dependencies: obligation.dependencies,
           timestamp: new Date().toISOString(),
         })),
       )
+      const first = compiled.graph.openObligations()[0]
+      if (first) {
+        yield* self.append(events, {
+          type: "focus_set",
+          focus: TaskControlController.obligationFocus({
+            taskId: compiled.goalId,
+            obligationId: first.id,
+            objective: first.description,
+            predicate: first.predicate,
+            repository: first.targetScope.repository,
+            pathPattern: first.targetScope.pathPattern,
+            reason: "Initial focus selected when the user goal was admitted",
+          }),
+          timestamp: new Date().toISOString(),
+        })
+      }
+    })
+  }
+
+  advanceFocus(events: EventV2.Interface, obligationId: ObligationId, receipt: VerificationReceipt) {
+    const current = this.hardState.executionFocus
+    if (!current?.targetObligationId) return Effect.fail(new Error("No authoritative obligation focus to advance"))
+    if (this.hardState.verificationReceipts.get(receipt.obligationId)?.receiptId !== receipt.receiptId) {
+      return Effect.fail(new Error("Focus transition requires a recorded Praxis receipt"))
+    }
+    try {
+      TaskControlController.requirePassingVerification(receipt, current.targetObligationId)
+    } catch (error) {
+      return Effect.fail(error instanceof Error ? error : new Error(String(error)))
+    }
+    if (!this.hardState.readyObligationIds().includes(obligationId)) {
+      return Effect.fail(new Error(`Obligation ${obligationId} is not on the active task ready frontier`))
+    }
+    const scope = this.hardState.obligationScopes.get(obligationId)
+    if (!scope || !this.hardState.activeTaskId) return Effect.fail(new Error("Next focus is missing task scope"))
+    const focus = TaskControlController.obligationFocus({
+      taskId: this.hardState.activeTaskId,
+      obligationId,
+      objective: this.hardState.obligationDescriptions.get(obligationId) ?? obligationId,
+      predicate: this.hardState.obligationPredicates.get(obligationId),
+      repository: scope.repository,
+      pathPattern: scope.pathPattern,
+    })
+    return this.appendAll(events, [
+      {
+        type: "focus_archived",
+        focusId: current.id,
+        reason: `Acceptance verified by ${receipt.receiptId}`,
+        timestamp: new Date().toISOString(),
+      },
+      { type: "focus_set", focus, timestamp: new Date().toISOString() },
+    ])
+  }
+
+  pushRecovery(
+    events: EventV2.Interface,
+    input: {
+      readonly failureClass: FailureClass
+      readonly objective: string
+      readonly acceptanceCriteria: readonly string[]
+      readonly budget?: number
+    },
+  ) {
+    const parent = this.hardState.executionFocus
+    if (!parent || !this.hardState.activeTaskId || !parent.targetObligationId) {
+      return Effect.fail(new Error("Recovery requires an active authoritative obligation focus"))
+    }
+    const recovery = TaskControlController.recoveryFocus({
+      taskId: this.hardState.activeTaskId,
+      parentFocusId: parent.id,
+      resumeTarget: parent.targetObligationId,
+      failureClass: input.failureClass,
+      objective: input.objective,
+      acceptanceCriteria: input.acceptanceCriteria,
+      allowedScope: parent.contract.allowedScope,
+      budget: input.budget,
+    })
+    return this.append(events, {
+      type: "recovery_opened",
+      frame: recovery.frame,
+      focus: recovery.focus,
+      timestamp: new Date().toISOString(),
+    }).pipe(Effect.as(recovery.frame))
+  }
+
+  popRecovery(events: EventV2.Interface, recoveryId: RecoveryId, receipt: VerificationReceipt) {
+    const frame = this.hardState.recoveryFrames.get(recoveryId)
+    if (!frame || frame.status !== "open") return Effect.fail(new Error(`Recovery ${recoveryId} is not open`))
+    if (this.hardState.verificationReceipts.get(receipt.obligationId)?.receiptId !== receipt.receiptId) {
+      return Effect.fail(new Error("Recovery transition requires a recorded Praxis receipt"))
+    }
+    try {
+      TaskControlController.requirePassingVerification(receipt, frame.resumeTarget)
+    } catch (error) {
+      return Effect.fail(error instanceof Error ? error : new Error(String(error)))
+    }
+    const parent = this.hardState.focuses.get(frame.parentFocusId)
+    if (!parent) return Effect.fail(new Error(`Recovery ${recoveryId} has no resumable parent focus`))
+    return this.appendAll(events, [
+      {
+        type: "recovery_verified",
+        recoveryId,
+        receiptId: receipt.receiptId,
+        timestamp: new Date().toISOString(),
+      },
+      {
+        type: "recovery_closed",
+        recoveryId,
+        resumeFocus: parent,
+        timestamp: new Date().toISOString(),
+      },
+    ])
+  }
+
+  completeObligation(events: EventV2.Interface, receipt: VerificationReceipt) {
+    return this.recordVerification(events, receipt)
+  }
+
+  archiveTask(events: EventV2.Interface, taskId: TaskId, receipt: VerificationReceipt) {
+    const focus = this.hardState.executionFocus
+    if (!focus?.targetObligationId || focus.taskId !== taskId) {
+      return Effect.fail(new Error(`Task ${taskId} is not the active focus owner`))
+    }
+    if (this.hardState.verificationReceipts.get(receipt.obligationId)?.receiptId !== receipt.receiptId) {
+      return Effect.fail(new Error("Task archive requires a recorded Praxis receipt"))
+    }
+    try {
+      TaskControlController.requirePassingVerification(receipt, focus.targetObligationId)
+    } catch (error) {
+      return Effect.fail(error instanceof Error ? error : new Error(String(error)))
+    }
+    return this.append(events, {
+      type: "task_archived",
+      taskId,
+      reason: `Verifier-backed archive ${receipt.receiptId}`,
+      timestamp: new Date().toISOString(),
     })
   }
 
