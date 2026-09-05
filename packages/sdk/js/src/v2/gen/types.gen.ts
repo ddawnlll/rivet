@@ -24,6 +24,7 @@ export type Event =
   | EventSessionNextContextUpdated
   | EventSessionNextSemantic
   | EventSessionNextSynthetic
+  | EventSessionNextRunStatus
   | EventSessionNextShellStarted
   | EventSessionNextShellEnded
   | EventSessionNextStepStarted
@@ -645,6 +646,56 @@ export type Prompt = {
   agents?: Array<PromptAgentAttachment>
 }
 
+export type SessionStatus =
+  | {
+      type: "idle"
+      outcome?: "completed" | "quiescent" | "stalled" | "interrupted" | "failed"
+      source?: string
+      reason?: string
+      phase?: string
+    }
+  | {
+      type: "retry"
+      attempt: number
+      message: string
+      action?: {
+        reason: string
+        provider: string
+        title: string
+        message: string
+        label: string
+        link?: string
+      }
+      next: number
+      activity?: {
+        operation: string
+        label: string
+        spanId: string
+        startedAt: number
+      }
+      lastCompleted?: {
+        operation: string
+        label: string
+        spanId: string
+        durationMs: number
+      }
+    }
+  | {
+      type: "busy"
+      activity?: {
+        operation: string
+        label: string
+        spanId: string
+        startedAt: number
+      }
+      lastCompleted?: {
+        operation: string
+        label: string
+        spanId: string
+        durationMs: number
+      }
+    }
+
 export type Pty = {
   id: string
   title: string
@@ -670,28 +721,6 @@ export type Todo = {
    */
   priority: string
 }
-
-export type SessionStatus =
-  | {
-      type: "idle"
-    }
-  | {
-      type: "retry"
-      attempt: number
-      message: string
-      action?: {
-        reason: string
-        provider: string
-        title: string
-        message: string
-        label: string
-        link?: string
-      }
-      next: number
-    }
-  | {
-      type: "busy"
-    }
 
 export type QuestionOption = {
   /**
@@ -899,6 +928,15 @@ export type GlobalEvent = {
           sessionID: string
           messageID: string
           text: string
+        }
+      }
+    | {
+        id: string
+        type: "session.next.run.status"
+        properties: {
+          timestamp: number
+          sessionID: string
+          status: SessionStatus
         }
       }
     | {
@@ -1627,6 +1665,7 @@ export type GlobalEvent = {
     | SyncEventSessionNextContextUpdated
     | SyncEventSessionNextSemantic
     | SyncEventSessionNextSynthetic
+    | SyncEventSessionNextRunStatus
     | SyncEventSessionNextShellStarted
     | SyncEventSessionNextShellEnded
     | SyncEventSessionNextStepStarted
@@ -2559,6 +2598,20 @@ export type NotFoundError = {
   }
 }
 
+export type SessionInductionStatus = {
+  status: "idle" | "running" | "complete" | "partial"
+  startedAt?: string
+  completedAt?: string
+  fileCount?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  claimCount?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  packageCount?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  filesRead?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+}
+
+export type SessionInductionStart = {
+  force?: boolean
+}
+
 export type TextPartInput = {
   id?: string
   type: "text"
@@ -2757,6 +2810,7 @@ export type SessionDurableEvent =
   | SessionNextContextUpdated
   | SessionNextSemantic
   | SessionNextSynthetic
+  | SessionNextRunStatus
   | SessionNextShellStarted
   | SessionNextShellEnded
   | SessionNextStepStarted
@@ -2885,6 +2939,7 @@ export type V2Event =
   | SessionNextContextUpdated
   | SessionNextSemantic
   | SessionNextSynthetic
+  | SessionNextRunStatus
   | SessionNextShellStarted
   | SessionNextShellEnded
   | SessionNextStepStarted
@@ -3446,6 +3501,22 @@ export type SyncEventSessionNextSynthetic = {
       sessionID: string
       messageID: string
       text: string
+    }
+  }
+}
+
+export type SyncEventSessionNextRunStatus = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "session.next.run.status.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      timestamp: number
+      sessionID: string
+      status: SessionStatus
     }
   }
 }
@@ -4352,6 +4423,25 @@ export type SessionNextSynthetic = {
     sessionID: string
     messageID: string
     text: string
+  }
+}
+
+export type SessionNextRunStatus = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "session.next.run.status"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    timestamp: number
+    sessionID: string
+    status: SessionStatus
   }
 }
 
@@ -6386,6 +6476,16 @@ export type EventSessionNextSynthetic = {
     sessionID: string
     messageID: string
     text: string
+  }
+}
+
+export type EventSessionNextRunStatus = {
+  id: string
+  type: "session.next.run.status"
+  properties: {
+    timestamp: number
+    sessionID: string
+    status: SessionStatus
   }
 }
 
@@ -10085,6 +10185,74 @@ export type SessionInitResponses = {
 }
 
 export type SessionInitResponse = SessionInitResponses[keyof SessionInitResponses]
+
+export type SessionInductionStatusData = {
+  body?: never
+  path: {
+    sessionID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/session/{sessionID}/induction"
+}
+
+export type SessionInductionStatusErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+}
+
+export type SessionInductionStatusError = SessionInductionStatusErrors[keyof SessionInductionStatusErrors]
+
+export type SessionInductionStatusResponses = {
+  /**
+   * Deep induction status
+   */
+  200: SessionInductionStatus
+}
+
+export type SessionInductionStatusResponse = SessionInductionStatusResponses[keyof SessionInductionStatusResponses]
+
+export type SessionInductionStartData = {
+  body?: SessionInductionStart
+  path: {
+    sessionID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/session/{sessionID}/induction"
+}
+
+export type SessionInductionStartErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+}
+
+export type SessionInductionStartError = SessionInductionStartErrors[keyof SessionInductionStartErrors]
+
+export type SessionInductionStartResponses = {
+  /**
+   * Deep induction status
+   */
+  200: SessionInductionStatus
+}
+
+export type SessionInductionStartResponse = SessionInductionStartResponses[keyof SessionInductionStartResponses]
 
 export type SessionUnshareData = {
   body?: never

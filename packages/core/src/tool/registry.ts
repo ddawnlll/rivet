@@ -1,7 +1,7 @@
 export * as ToolRegistry from "./registry"
 
 import { ToolOutput, type ToolDefinition, type ToolResultValue } from "@opencode-ai/llm"
-import { Context, Effect, Layer, Scope } from "effect"
+import { Context, Duration, Effect, Layer, Scope } from "effect"
 import { AgentV2 } from "../agent"
 import { PermissionV2 } from "../permission"
 import { SessionMessage } from "../session/message"
@@ -76,6 +76,23 @@ const registryLayer = Layer.effect(
         return { result: { type: "error" as const, value: `Stale action provider: ${providerName}` } }
 
       const toolCallID = input.action.proposal.idempotencyKey ?? input.action.proposal.actionId
+      const failureReceipt = (message: string): ExecutionReceipt => ({
+        receiptId: createReceiptId(),
+        actionId: input.action.proposal.actionId,
+        idempotencyKey: toolCallID,
+        actionFingerprint: JSON.stringify(input.action.proposal.parameters),
+        capability: input.action.proposal.capability,
+        target: input.action.proposal.target,
+        success: false,
+        exitCode: 1,
+        scope: input.action.scope,
+        risk: input.action.proposal.estimatedRisk,
+        humanApproved: false,
+        outputSummary: message.slice(0, 500),
+        evidenceId: createEvidenceId(),
+        executionDurationMs: 1,
+        timestamp: new Date().toISOString(),
+      })
       const pending = yield* settle(registration.tool, input.action, {
         sessionID: input.sessionID,
         agent: input.agent,
@@ -83,9 +100,22 @@ const registryLayer = Layer.effect(
         toolCallID,
       }).pipe(
         Effect.map((output) => ({ output })),
-        Effect.catchTag("LLM.ToolFailure", (failure) =>
-          Effect.succeed({ result: { type: "error" as const, value: failure.message } }),
-        ),
+        Effect.catchTag("LLM.ToolFailure", (failure) => {
+          return Effect.succeed({
+            result: { type: "error" as const, value: failure.message },
+            receipt: failureReceipt(failure.message),
+          })
+        }),
+        Effect.timeoutOrElse({
+          duration: Duration.minutes(2),
+          orElse: () => {
+            const message = "Tool execution exceeded the two-minute limit; retry only after reconciling side effects"
+            return Effect.succeed({
+              result: { type: "error" as const, value: message },
+              receipt: { ...failureReceipt(message), uncertain: true },
+            })
+          },
+        }),
       )
       if ("result" in pending) return pending
       const output = pending.output
@@ -102,7 +132,7 @@ const registryLayer = Layer.effect(
         exitCode: result.type === "error" ? 1 : 0,
         scope: input.action.scope,
         risk: input.action.proposal.estimatedRisk,
-        humanApproved: input.action.decision.reason.includes("human"),
+        humanApproved: false,
         outputSummary: result.type === "error" ? String(result.value).slice(0, 500) : "success",
         observations: result,
         evidenceId: createEvidenceId(),

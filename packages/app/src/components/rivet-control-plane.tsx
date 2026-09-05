@@ -1,7 +1,8 @@
 import { useParams } from "@solidjs/router"
-import { createMemo, For, Show, type JSX } from "solid-js"
+import { createEffect, createMemo, createSignal, For, onCleanup, Show, type JSX } from "solid-js"
 import { createStore } from "solid-js/store"
 import type { Part } from "@opencode-ai/sdk/v2/client"
+import type { SessionStatus } from "@opencode-ai/sdk/v2"
 import { Icon } from "@opencode-ai/ui/icon"
 import { useLanguage } from "@/context/language"
 import { useServerSync } from "@/context/server-sync"
@@ -22,9 +23,17 @@ export function RivetControlPlane() {
   const toolParts = createMemo(() => parts().filter(isToolPart))
   const completedTools = createMemo(() => toolParts().filter((part) => part.state.status === "completed"))
   const semanticParts = createMemo(() => completedTools().filter((part) => SEMANTIC_TOOLS.has(part.tool)))
-  const active = createMemo(() => {
+  const status = createMemo<SessionStatus>(() => {
     const id = params.id
-    return id ? sync().session.data.session_status[id]?.type ?? "idle" : "idle"
+    return id ? (sync().session.data.session_status[id] ?? { type: "idle" }) : { type: "idle" }
+  })
+  const [now, setNow] = createSignal(Date.now())
+  createEffect(() => {
+    const current = status()
+    if (current.type !== "busy" && current.type !== "retry") return
+    if (!current.activity) return
+    const timer = setInterval(() => setNow(Date.now()), 100)
+    onCleanup(() => clearInterval(timer))
   })
 
   const project = createMemo(() => {
@@ -59,9 +68,10 @@ export function RivetControlPlane() {
   })
   const revision = createMemo(() => semanticParts().length)
   const statusLabel = createMemo(() => {
-    if (active() === "busy") return language.t("rivet.status.busy")
-    if (active() === "retry") return language.t("rivet.status.retry")
-    return language.t("rivet.status.idle")
+    const current = status()
+    if (current.type === "busy") return language.t("rivet.status.busy")
+    if (current.type === "retry") return language.t("rivet.status.retry")
+    return terminalLabel(current.outcome)
   })
 
   return (
@@ -133,7 +143,7 @@ export function RivetControlPlane() {
             <div class="min-h-0 flex-1 overflow-y-auto p-3">
               <Show when={state.tab === "state"}>
                 <div class="flex flex-col gap-3">
-                  <StatusCard status={active()} label={statusLabel()} />
+                  <StatusCard status={status()} label={statusLabel()} now={now()} />
                   <section class="rounded-lg border-[0.5px] border-v2-border-border-muted bg-v2-background-bg-base p-3">
                     <div class="text-[10px] font-[600] uppercase tracking-[0.08em] text-v2-text-text-muted">
                       {language.t("rivet.state.goal")}
@@ -169,7 +179,10 @@ export function RivetControlPlane() {
 
               <Show when={state.tab === "workspace"}>
                 <div class="flex flex-col gap-2">
-                  <WorkspaceRow label={language.t("rivet.workspace.project")} value={project()?.name ?? project()?.id ?? "—"} />
+                  <WorkspaceRow
+                    label={language.t("rivet.workspace.project")}
+                    value={project()?.name ?? project()?.id ?? "—"}
+                  />
                   <WorkspaceRow
                     label={language.t("rivet.workspace.directory")}
                     value={session()?.directory ?? sync().data.path.directory ?? "—"}
@@ -184,7 +197,8 @@ export function RivetControlPlane() {
                     <Metric label={language.t("rivet.workspace.tools")} value={executionCount()} />
                   </div>
                   <div class="mt-1 rounded-lg border-[0.5px] border-v2-border-border-muted bg-v2-background-bg-base px-3 py-2 text-[12px] text-v2-text-text-muted">
-                    {sync().data.provider.connected.length} {language.t("rivet.workspace.connected").toLocaleLowerCase()}
+                    {sync().data.provider.connected.length}{" "}
+                    {language.t("rivet.workspace.connected").toLocaleLowerCase()}
                   </div>
                 </div>
               </Show>
@@ -254,21 +268,57 @@ function TabButton(props: { active: boolean; onClick: () => void; children: JSX.
   )
 }
 
-function StatusCard(props: { status: string; label: string }) {
-  const running = props.status === "busy"
+function StatusCard(props: { status: SessionStatus; label: string; now: number }) {
+  const running = props.status.type === "busy" || props.status.type === "retry"
+  const activity = props.status.type === "busy" || props.status.type === "retry" ? props.status.activity : undefined
+  const lastCompleted =
+    props.status.type === "busy" || props.status.type === "retry" ? props.status.lastCompleted : undefined
   return (
-    <div class="flex items-center gap-3 rounded-lg border-[0.5px] border-v2-border-border-muted bg-v2-background-bg-base px-3 py-2.5">
-      <span
-        classList={{
-          "size-2 shrink-0 rounded-full": true,
-          "bg-v2-icon-icon-info shadow-[0_0_0_4px_color-mix(in_srgb,var(--v2-icon-icon-info)_12%,transparent)]": running,
-          "bg-v2-icon-icon-success": !running,
-        }}
-      />
-      <span class="text-[12px] font-[600] text-v2-text-text-base">{props.label}</span>
-      <span class="ms-auto text-[10px] uppercase tracking-[0.08em] text-v2-text-text-muted">Noesis</span>
+    <div class="rounded-lg border-[0.5px] border-v2-border-border-muted bg-v2-background-bg-base px-3 py-2.5">
+      <div class="flex items-center gap-3">
+        <span
+          classList={{
+            "size-2 shrink-0 rounded-full": true,
+            "bg-v2-icon-icon-info shadow-[0_0_0_4px_color-mix(in_srgb,var(--v2-icon-icon-info)_12%,transparent)]":
+              running,
+            "bg-v2-icon-icon-success": !running,
+          }}
+        />
+        <span class="text-[12px] font-[600] text-v2-text-text-base">{props.label}</span>
+        <span class="ms-auto text-[10px] uppercase tracking-[0.08em] text-v2-text-text-muted">Noesis</span>
+      </div>
+      <Show when={activity}>
+        {(current) => (
+          <div class="mt-2 flex items-center gap-2 text-[11px] leading-4 text-v2-text-text-muted">
+            <span class="text-v2-icon-icon-info">◌</span>
+            <span class="truncate">{current().label}</span>
+            <span class="ms-auto shrink-0 tabular-nums">{formatDuration(props.now - current().startedAt)}</span>
+          </div>
+        )}
+      </Show>
+      <Show when={lastCompleted}>
+        {(completed) => (
+          <div class="mt-1 flex items-center gap-2 text-[10px] leading-4 text-v2-text-text-muted">
+            <span class="text-v2-icon-icon-success">✓</span>
+            <span class="truncate">{completed().label}</span>
+            <span class="ms-auto shrink-0 tabular-nums">{formatDuration(completed().durationMs)}</span>
+          </div>
+        )}
+      </Show>
     </div>
   )
+}
+
+function terminalLabel(outcome: string | undefined) {
+  if (outcome === "completed") return "Completed"
+  if (outcome === "stalled") return "Stalled"
+  if (outcome === "interrupted") return "Interrupted"
+  if (outcome === "failed") return "Failed"
+  return "Ready"
+}
+
+function formatDuration(milliseconds: number) {
+  return `${Math.max(0, milliseconds / 1000).toFixed(1)}s`
 }
 
 function Metric(props: { label: string; value: number }) {
@@ -284,7 +334,10 @@ function WorkspaceRow(props: { label: string; value: string; truncate?: boolean 
   return (
     <div class="rounded-lg border-[0.5px] border-v2-border-border-muted bg-v2-background-bg-base px-3 py-2">
       <div class="text-[10px] leading-4 text-v2-text-text-muted">{props.label}</div>
-      <div classList={{ "mt-0.5 text-[12px] text-v2-text-text-base": true, "truncate": props.truncate }} title={props.value}>
+      <div
+        classList={{ "mt-0.5 text-[12px] text-v2-text-text-base": true, truncate: props.truncate }}
+        title={props.value}
+      >
         {props.value}
       </div>
     </div>

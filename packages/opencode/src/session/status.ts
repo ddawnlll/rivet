@@ -4,6 +4,7 @@ import { SessionID } from "./schema"
 import { Effect, Layer, Context } from "effect"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { SessionStatusEvent } from "@opencode-ai/schema/session-status-event"
+import type { Payload } from "@opencode-ai/core/event"
 
 export const Info = SessionStatusEvent.Info
 export type Info = SessionStatusEvent.Info
@@ -26,6 +27,20 @@ const layer = Layer.effect(
     const state = yield* InstanceState.make(
       Effect.fn("SessionStatus.state")(() => Effect.succeed(new Map<SessionID, Info>())),
     )
+    const unsubscribe = yield* events.listen((event) => {
+      if (event.type !== Event.Status.type) return Effect.void
+      const statusEvent = event as Payload<typeof Event.Status>
+      return InstanceState.get(state).pipe(
+        Effect.tap((data) =>
+          Effect.sync(() => {
+            if (statusEvent.data.status.type === "idle") data.delete(statusEvent.data.sessionID)
+            else data.set(statusEvent.data.sessionID, statusEvent.data.status)
+          }),
+        ),
+        Effect.asVoid,
+      )
+    })
+    yield* Effect.addFinalizer(() => unsubscribe)
 
     const get = Effect.fn("SessionStatus.get")(function* (sessionID: SessionID) {
       const data = yield* InstanceState.get(state)

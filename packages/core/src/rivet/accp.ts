@@ -124,6 +124,8 @@ export interface ExecutionReceipt {
   /** The authoritative action target, used to bind verification to execution. */
   readonly target?: string
   readonly success: boolean
+  /** True when the harness cannot establish whether an external side effect settled. */
+  readonly uncertain?: boolean
   readonly exitCode?: number | null
   readonly scope: Scope
   readonly risk: ActionRisk
@@ -274,7 +276,7 @@ export function validateEnvelopeDirection(envelope: AccpEnvelope): void {
   if (envelope.accpVersion !== ACCP_VERSION) {
     throw new RivetError(
       "SemanticViolation",
-      `Unsupported ACCP version '${envelope.accpVersion}', expected ${ACCP_VERSION}`
+      `Unsupported ACCP version '${envelope.accpVersion}', expected ${ACCP_VERSION}`,
     )
   }
 
@@ -287,10 +289,7 @@ export function validateEnvelopeDirection(envelope: AccpEnvelope): void {
   }
 
   if (!isKindValidForFamily(envelope.family, envelope.kind)) {
-    throw new RivetError(
-      "SemanticViolation",
-      `ACCP kind '${envelope.kind}' is not valid for family ${envelope.family}`
-    )
+    throw new RivetError("SemanticViolation", `ACCP kind '${envelope.kind}' is not valid for family ${envelope.family}`)
   }
 
   const controllerAllowed = envelope.family === "QUERY" || envelope.family === "PROPOSAL"
@@ -300,14 +299,10 @@ export function validateEnvelopeDirection(envelope: AccpEnvelope): void {
     envelope.family === "RECEIPT" ||
     envelope.family === "SIGNAL"
 
-  const isAllowed =
-    envelope.sender === "COGNITIVE_CONTROLLER" ? controllerAllowed : harnessAllowed
+  const isAllowed = envelope.sender === "COGNITIVE_CONTROLLER" ? controllerAllowed : harnessAllowed
 
   if (!isAllowed) {
-    throw new RivetError(
-      "SemanticViolation",
-      `${envelope.sender} cannot emit ${envelope.family} message`
-    )
+    throw new RivetError("SemanticViolation", `${envelope.sender} cannot emit ${envelope.family} message`)
   }
 }
 
@@ -336,7 +331,7 @@ export class AccpSemanticGate {
 
   static authorize(
     proposal: ActionProposal,
-    policy: ActionAuthorizationPolicy
+    policy: ActionAuthorizationPolicy,
   ): { readonly authorizedAction: AuthorizedAction | null; readonly decision: ActionDecision } {
     const decision = this.authorizeAction(proposal, policy)
     if (decision.verdict === "allow") {
@@ -354,10 +349,7 @@ export class AccpSemanticGate {
     return { authorizedAction: null, decision }
   }
 
-  static authorizeAction(
-    proposal: ActionProposal,
-    policy: ActionAuthorizationPolicy
-  ): ActionDecision {
+  static authorizeAction(proposal: ActionProposal, policy: ActionAuthorizationPolicy): ActionDecision {
     const blocked = (verdict: ActionDecisionVerdict, reason: string): ActionDecision => ({
       actionId: proposal.actionId,
       verdict,
@@ -563,9 +555,10 @@ export class AccpSemanticGate {
    * invalidated. Substantive obligations keep their declared verifier; the
    * model may not mint its own closure by waiving them.
    */
-  static checkInvalidationAuthority(
-    predicate: ObligationPredicate | undefined,
-  ): { readonly allowed: boolean; readonly reason: string } {
+  static checkInvalidationAuthority(predicate: ObligationPredicate | undefined): {
+    readonly allowed: boolean
+    readonly reason: string
+  } {
     if (predicate === undefined) {
       return {
         allowed: false,
@@ -589,7 +582,7 @@ export class AccpSemanticGate {
     if (unclosedObligations.length > 0) {
       throw new RivetError(
         "SemanticViolation",
-        `Cannot complete task: ${unclosedObligations.length} obligations remain unverified`
+        `Cannot complete task: ${unclosedObligations.length} obligations remain unverified`,
       )
     }
   }
@@ -604,11 +597,13 @@ export class AccpSemanticGate {
       readonly getDescription?: (id: ObligationId) => string
     },
     responseDelivered = true,
+    expectedTaskId?: TaskId | null,
   ): CompletionDecision {
     const obligationsSatisfied = unclosedObligations.length === 0
     const revisionMatches = proposal.baseRevision.equals(currentRevision)
     const hasPassingReceipts = passingReceipts.length > 0
-    const internalClosureReady = obligationsSatisfied && revisionMatches && hasPassingReceipts
+    const taskMatches = expectedTaskId === undefined || expectedTaskId === null || proposal.taskId === expectedTaskId
+    const internalClosureReady = obligationsSatisfied && revisionMatches && hasPassingReceipts && taskMatches
     const completed = internalClosureReady && responseDelivered
 
     const blockers: string[] = []
@@ -620,6 +615,15 @@ export class AccpSemanticGate {
       structuredBlockers.push({
         reason,
         actionableGuidance: "Refresh cognitive view to align with current state revision.",
+      })
+    }
+
+    if (!taskMatches) {
+      const reason = `Completion task ${proposal.taskId} does not match the active task ${expectedTaskId}`
+      blockers.push(reason)
+      structuredBlockers.push({
+        reason,
+        actionableGuidance: "Use completion evidence from the active task only.",
       })
     }
 
@@ -666,7 +670,7 @@ export class AccpSemanticGate {
       responseDelivered,
       requiredObligationsSatisfied: obligationsSatisfied && revisionMatches,
       unclosedObligations: [...unclosedObligations],
-      finalReceipt: completed ? passingReceipts[passingReceipts.length - 1] ?? null : null,
+      finalReceipt: completed ? (passingReceipts[passingReceipts.length - 1] ?? null) : null,
       timestamp: new Date().toISOString(),
       blockers,
       structuredBlockers,
@@ -679,10 +683,7 @@ export class AccpSemanticGate {
  * strings back into the decision reason. Fails closed: any target that cannot
  * be canonicalized to a repository-relative identity is a violation.
  */
-function authorityViolation(
-  proposal: ActionProposal,
-  policy: ActionAuthorizationPolicy
-): string | undefined {
+function authorityViolation(proposal: ActionProposal, policy: ActionAuthorizationPolicy): string | undefined {
   if (proposal.scope.repository !== policy.repository) {
     return "declared scope repository does not match Harness repository"
   }

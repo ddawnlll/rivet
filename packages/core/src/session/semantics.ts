@@ -7,7 +7,14 @@ import { EventV2 } from "../event"
 import { Global } from "../global"
 import { SessionEvent } from "./event"
 import { SessionSchema } from "./schema"
-import { CognitiveView, HardState, SoftWorkspace, type ClaimRecord, type NoesisEvent, type Observation } from "../rivet/noesis"
+import {
+  CognitiveView,
+  HardState,
+  SoftWorkspace,
+  type ClaimRecord,
+  type NoesisEvent,
+  type Observation,
+} from "../rivet/noesis"
 import { CognitiveViewCompiler, describePredicate, type RepresentationMode } from "../rivet/view-compiler"
 import {
   AccpSemanticGate,
@@ -72,7 +79,13 @@ export interface EpistemicStateSnapshot {
   readonly memoryFrontier: MemoryFrontier
 }
 
-import { InMemoryRecallStore, AutomaticRecallAdmissionHook, NoesisRecallProjector, SqliteRecallStore, type RecallStore } from "../rivet/recall"
+import {
+  InMemoryRecallStore,
+  AutomaticRecallAdmissionHook,
+  NoesisRecallProjector,
+  SqliteRecallStore,
+  type RecallStore,
+} from "../rivet/recall"
 
 export class SessionSemantics {
   static workspaceRecallStore: RecallStore | null = null
@@ -99,7 +112,11 @@ export class SessionSemantics {
   readonly softWorkspace: SoftWorkspace
   readonly recallStore: RecallStore
 
-  private constructor(readonly sessionID: SessionSchema.ID, hardState: HardState, recallStore?: RecallStore) {
+  private constructor(
+    readonly sessionID: SessionSchema.ID,
+    hardState: HardState,
+    recallStore?: RecallStore,
+  ) {
     this.hardState = hardState
     this.softWorkspace = new SoftWorkspace(sessionID as unknown as SessionId, hardState.revision)
     this.recallStore = recallStore ?? SessionSemantics.getDefaultRecallStore()
@@ -173,7 +190,11 @@ export class SessionSemantics {
   }
 
   admitProviderCommitment(frame: ProviderToolFrame, scope: Scope, policy: ActionAuthorizationPolicy) {
-    const commitment = parseProviderToolFrame(frame, scope)
+    const parsed = parseProviderToolFrame(frame, scope)
+    const commitment =
+      parsed.type === "completion_proposal" && this.hardState.activeTaskId
+        ? { ...parsed, proposal: { ...parsed.proposal, taskId: this.hardState.activeTaskId } }
+        : parsed
     if (commitment.type !== "action_proposal") return { commitment, authorizedAction: null }
     const authorization = AccpSemanticGate.authorize(commitment.proposal, policy)
     return { commitment, authorizedAction: authorization.authorizedAction, decision: authorization.decision }
@@ -201,7 +222,9 @@ export class SessionSemantics {
           exitCode: 0,
           scope: action.scope,
           risk: action.proposal.estimatedRisk,
-          humanApproved: action.decision.reason.includes("human"),
+          // Provider output and policy text are not a human approval receipt.
+          // A future approval event may set this explicitly at admission.
+          humanApproved: false,
           outputSummary: summarize(value),
           observations: value,
           evidenceId: createEvidenceId(),
@@ -210,6 +233,39 @@ export class SessionSemantics {
         } satisfies ExecutionReceipt,
       })),
     )
+  }
+
+  claimExecution(events: EventV2.Interface, action: AuthorizedAction) {
+    const baseIdempotencyKey = action.proposal.idempotencyKey ?? action.proposal.actionId
+    const actionFingerprint = JSON.stringify(action.proposal.parameters)
+    const settled = this.hardState.executionReceipts.find(
+      (receipt) => receipt.idempotencyKey === baseIdempotencyKey && receipt.actionFingerprint === actionFingerprint,
+    )
+    if (settled) return Effect.succeed({ status: "settled" as const, receipt: settled })
+    const existing = this.hardState.executionClaims.get(baseIdempotencyKey)
+    const idempotencyKey =
+      existing && existing.actionFingerprint !== actionFingerprint
+        ? `${baseIdempotencyKey}:${actionFingerprint}`
+        : baseIdempotencyKey
+    const scopedExisting = this.hardState.executionClaims.get(idempotencyKey)
+    if (scopedExisting) {
+      return Effect.succeed({
+        status: "uncertain" as const,
+        message: `An earlier process claimed idempotency key ${idempotencyKey}, but no settlement receipt was committed; execution was not retried`,
+      })
+    }
+    return this.append(events, {
+      type: "execution_claimed",
+      actionId: action.proposal.actionId,
+      idempotencyKey,
+      actionFingerprint,
+      scope: action.scope,
+      timestamp: new Date().toISOString(),
+    }).pipe(Effect.as({ status: "claimed" as const }))
+  }
+
+  isActionCurrent(action: AuthorizedAction): boolean {
+    return action.revision.equals(this.hardState.revision)
   }
 
   recordExecution(events: EventV2.Interface, receipt: ExecutionReceipt) {
@@ -340,12 +396,11 @@ export class SessionSemantics {
     events: EventV2.Interface,
     input: { readonly summary: string; readonly obligationId?: string; readonly atRevision?: Revision },
   ): Effect.Effect<readonly InquiryReceipt[]> {
-    const openInquiryIds = this.hardState.openObligationIds().filter(
-      (id) => this.hardState.obligationKind(id) === "epistemic_inquiry",
-    )
-    const targetIds = input.obligationId !== undefined
-      ? openInquiryIds.filter((id) => id === input.obligationId)
-      : openInquiryIds
+    const openInquiryIds = this.hardState
+      .openObligationIds()
+      .filter((id) => this.hardState.obligationKind(id) === "epistemic_inquiry")
+    const targetIds =
+      input.obligationId !== undefined ? openInquiryIds.filter((id) => id === input.obligationId) : openInquiryIds
     if (targetIds.length === 0) return Effect.succeed([])
     const self = this
     return Effect.gen(function* () {
@@ -376,9 +431,7 @@ export class SessionSemantics {
     events: EventV2.Interface,
     input: { readonly summary: string; readonly obligationId?: string; readonly atRevision?: Revision },
   ): Effect.Effect<InquiryReceipt | undefined> {
-    return this.satisfyInquiries(events, input).pipe(
-      Effect.map((receipts) => receipts[0]),
-    )
+    return this.satisfyInquiries(events, input).pipe(Effect.map((receipts) => receipts[0]))
   }
 
   invalidateObligation(
@@ -465,9 +518,7 @@ export class SessionSemantics {
     predicate: Extract<ObligationPredicate, { type: "command_pass" }>,
   ) {
     const execution = this.hardState.executionReceipts.findLast(
-      (receipt) =>
-        receipt.scope.repository === request.targetScope.repository &&
-        receipt.target === predicate.command,
+      (receipt) => receipt.scope.repository === request.targetScope.repository && receipt.target === predicate.command,
     )
     if (!execution?.observations) return Effect.fail(new Error("Praxis requires the declared command to be executed"))
     if (!this.hardState.evidence.has(execution.evidenceId))
@@ -554,15 +605,21 @@ export class SessionSemantics {
         .filter(
           (claim) =>
             claim.status === "supported" &&
-            claim.supportingEvidence.some((evidenceId) => claimEvidenceIsRelevant(this.hardState, claim.proposition, evidenceId)),
+            claim.supportingEvidence.some((evidenceId) =>
+              claimEvidenceIsRelevant(this.hardState, claim.proposition, evidenceId),
+            ),
         )
         .map((claim) => claim.proposition),
     )
     const missing = predicate.claimPropositions.filter((proposition) => !supported.has(proposition))
     const claimEvidenceMissing = predicate.claimPropositions.filter((proposition) =>
       [...this.hardState.claims.values()].some(
-        (claim) => claim.status === "supported" && claim.proposition === proposition &&
-          !claim.supportingEvidence.some((evidenceId) => claimEvidenceIsRelevant(this.hardState, claim.proposition, evidenceId)),
+        (claim) =>
+          claim.status === "supported" &&
+          claim.proposition === proposition &&
+          !claim.supportingEvidence.some((evidenceId) =>
+            claimEvidenceIsRelevant(this.hardState, claim.proposition, evidenceId),
+          ),
       ),
     )
     const siblingOpenObligations = this.hardState.openObligationIds().filter((id) => id !== obligationId)
@@ -578,17 +635,23 @@ export class SessionSemantics {
       const inquiry = this.hardState.inquiryReceipts.get(id)
       return Boolean(inquiry && inquiry.satisfiedAtRevision.value >= goalRevision.value)
     })
-    const fulfilledBySiblings = siblingOpenObligations.length === 0 && verifiedSiblings.length > 0 && goalRevision !== undefined
+    const fulfilledBySiblings =
+      siblingOpenObligations.length === 0 && verifiedSiblings.length > 0 && goalRevision !== undefined
     const relevantExecution = this.hardState.executionReceipts.findLast(
       (execution) =>
         execution.success &&
         this.hardState.evidence.has(execution.evidenceId) &&
-        meaningfulTokenOverlap(predicate.claimPropositions.join(" "), [
-          this.hardState.evidence.get(execution.evidenceId),
-          execution.target,
-          execution.capability,
-          execution.actionFingerprint,
-        ].filter(Boolean).join(" ")),
+        meaningfulTokenOverlap(
+          predicate.claimPropositions.join(" "),
+          [
+            this.hardState.evidence.get(execution.evidenceId),
+            execution.target,
+            execution.capability,
+            execution.actionFingerprint,
+          ]
+            .filter(Boolean)
+            .join(" "),
+        ),
     )
     const fulfilledByExecution = siblingOpenObligations.length === 0 && relevantExecution !== undefined
     const passed = missing.length === 0 || fulfilledBySiblings || fulfilledByExecution
@@ -602,7 +665,7 @@ export class SessionSemantics {
         ? `Goal wrapper closed by ${verifiedSiblings.length} verified sibling obligations at revision ${goalRevision?.toJSON()}`
         : fulfilledByExecution
           ? `Goal wrapper matched relevant execution ${relevantExecution.receiptId}`
-        : "Supported claims match all predicate propositions"
+          : "Supported claims match all predicate propositions"
       : `Missing supported claims: ${missing.join(" | ")}`
     return {
       passed,
@@ -830,6 +893,8 @@ export class SessionSemantics {
         getKind: (id) => this.hardState.obligationKind(id),
         getDescription: (id) => this.hardState.obligations.get(id) ?? id,
       },
+      true,
+      this.hardState.activeTaskId,
     )
   }
 
@@ -860,6 +925,7 @@ export class SessionSemantics {
         getDescription: (id) => this.hardState.obligations.get(id) ?? id,
       },
       input.responseDelivered ?? true,
+      this.hardState.activeTaskId,
     )
     const readiness = AccpSemanticGate.checkCompletionReadiness({
       unclosedObligations: this.hardState.openObligationIds(),
@@ -1027,8 +1093,10 @@ export class SessionSemantics {
       // 4. Workspaces Structure Claim
       if (census.workspaces.length > 0) {
         const wsNames =
-          census.workspaces.slice(0, 8).map((w) => w.name).join(", ") +
-          (census.workspaces.length > 8 ? ` and ${census.workspaces.length - 8} more` : "")
+          census.workspaces
+            .slice(0, 8)
+            .map((w) => w.name)
+            .join(", ") + (census.workspaces.length > 8 ? ` and ${census.workspaces.length - 8} more` : "")
         yield* self.append(events, {
           type: "claim_asserted",
           claimId: createClaimId("claim_census_workspaces"),
@@ -1037,7 +1105,9 @@ export class SessionSemantics {
           evidence: [evidenceId],
           scope: self.scope(directory),
           validityPolicy: "CURRENT_STATE",
-          dependencies: census.workspaces.slice(0, 20).map((w) => ({ type: "manifest" as const, name: w.manifestPath })),
+          dependencies: census.workspaces
+            .slice(0, 20)
+            .map((w) => ({ type: "manifest" as const, name: w.manifestPath })),
           validFromRevision: self.hardState.revision,
           timestamp: new Date().toISOString(),
         })
@@ -1080,12 +1150,15 @@ export class SessionSemantics {
     options?: { force?: boolean; budgetMs?: number },
   ): Effect.Effect<void> {
     const self = this
-    return Effect.flatMap(Effect.sync(() => Induction.claimInFlight(directory)), (acquired) => {
-      if (!acquired) return Effect.void
-      return self.runDeepInduction(events, directory, options).pipe(
-        Effect.ensuring(Effect.sync(() => Induction.releaseInFlight(directory))),
-      )
-    })
+    return Effect.flatMap(
+      Effect.sync(() => Induction.claimInFlight(directory)),
+      (acquired) => {
+        if (!acquired) return Effect.void
+        return self
+          .runDeepInduction(events, directory, options)
+          .pipe(Effect.ensuring(Effect.sync(() => Induction.releaseInFlight(directory))))
+      },
+    )
   }
 
   private runDeepInduction(
@@ -1105,8 +1178,16 @@ export class SessionSemantics {
       const marker = readInductionMarker(directory)
       const cached = options?.force ? undefined : marker
       if (cached?.result && (cached.status === "complete" || cached.status === "partial")) {
-        yield* self.appendAll(events, inductionClaimEvents(cached.result, self.scope(directory), self.hardState.revision))
-        yield* publishInductionCompleted(events, directory, cached.result, "Replayed cached deep induction (.rivet/induction.json)")
+        yield* self.appendAll(
+          events,
+          inductionClaimEvents(cached.result, self.scope(directory), self.hardState.revision),
+        )
+        yield* publishInductionCompleted(
+          events,
+          directory,
+          cached.result,
+          "Replayed cached deep induction (.rivet/induction.json)",
+        )
         return
       }
 
@@ -1126,7 +1207,8 @@ export class SessionSemantics {
         files,
         census,
         budgetMs: options?.budgetMs,
-        onProgress: (progress) => events.publish(RivetInductionEvent.Progress, { directory, ...progress }).pipe(Effect.ignore),
+        onProgress: (progress) =>
+          events.publish(RivetInductionEvent.Progress, { directory, ...progress }).pipe(Effect.ignore),
       })
 
       const summary = `Deep induction read ${result.filesRead} files across ${result.packages.length} packages (${result.dependencyEdges.length} import edges${result.partial ? ", partial: budget reached" : ""}).`
@@ -1268,7 +1350,11 @@ function decodeNoesisEvent(value: unknown): NoesisEvent {
   const event: Record<string, unknown> = { ...value }
   if ("scope" in event) event.scope = decodeScope(event.scope)
   if ("validFromRevision" in event && event.validFromRevision !== undefined) {
-    event.validFromRevision = Revision.from(typeof event.validFromRevision === "string" || typeof event.validFromRevision === "number" ? event.validFromRevision : 0)
+    event.validFromRevision = Revision.from(
+      typeof event.validFromRevision === "string" || typeof event.validFromRevision === "number"
+        ? event.validFromRevision
+        : 0,
+    )
   }
   if (event.type === "execution_recorded" && isRecord(event.receipt)) {
     event.receipt = { ...event.receipt, scope: decodeScope(event.receipt.scope) }
@@ -1287,7 +1373,9 @@ function decodeScope(value: unknown): Scope {
   return new Scope({
     repository: value.repository,
     pathPattern: typeof value.path_pattern === "string" ? value.path_pattern : null,
-    revision: Revision.from(typeof value.revision === "string" || typeof value.revision === "number" ? value.revision : 0),
+    revision: Revision.from(
+      typeof value.revision === "string" || typeof value.revision === "number" ? value.revision : 0,
+    ),
   })
 }
 
@@ -1311,7 +1399,8 @@ function claimEvidenceIsRelevant(state: HardState, proposition: string, evidence
     .split(/\s+/)
     .map((token) => token.replace(/^[^\w~./-]+|[^\w~./-]+$/g, ""))
     .filter((token) => token.length > 0 && isPathClaimToken(token))
-  if (paths.length > 0 && (!source?.startsWith("file.") || !paths.every((token) => evidenceText.includes(token)))) return false
+  if (paths.length > 0 && (!source?.startsWith("file.") || !paths.every((token) => evidenceText.includes(token))))
+    return false
   return meaningfulTokenOverlap(proposition, evidenceText)
 }
 
@@ -1321,8 +1410,36 @@ function isPathClaimToken(token: string): boolean {
 
 function meaningfulTokenOverlap(left: string, right: string): boolean {
   const ignored = new Set([
-    "a", "an", "and", "are", "at", "be", "by", "for", "from", "goal", "in", "is", "it", "of", "on",
-    "or", "the", "to", "was", "were", "with", "this", "that", "ve", "bir", "bu", "de", "da", "ile", "için",
+    "a",
+    "an",
+    "and",
+    "are",
+    "at",
+    "be",
+    "by",
+    "for",
+    "from",
+    "goal",
+    "in",
+    "is",
+    "it",
+    "of",
+    "on",
+    "or",
+    "the",
+    "to",
+    "was",
+    "were",
+    "with",
+    "this",
+    "that",
+    "ve",
+    "bir",
+    "bu",
+    "de",
+    "da",
+    "ile",
+    "için",
   ])
   const tokens = (value: string) =>
     value
@@ -1344,7 +1461,9 @@ function evaluateFileConstraintOnDisk(
   const homeDir = process.env.HOME || process.env.USERPROFILE || ""
   const isHomePath = predicate.path.startsWith("~/") || predicate.path === "~"
   const expandedPath = isHomePath
-    ? (homeDir ? path.join(homeDir, predicate.path.slice(predicate.path === "~" ? 1 : 2)) : predicate.path)
+    ? homeDir
+      ? path.join(homeDir, predicate.path.slice(predicate.path === "~" ? 1 : 2))
+      : predicate.path
     : predicate.path
 
   const root = path.resolve(repositoryRoot)
@@ -1352,8 +1471,9 @@ function evaluateFileConstraintOnDisk(
   const target = isAbsolute ? path.resolve(expandedPath) : path.resolve(root, expandedPath)
 
   const inRepo = target === root || target.startsWith(root + path.sep)
-  const inHome = homeDir ? (target === homeDir || target.startsWith(homeDir + path.sep)) : false
-  const isConfigLookup = isHomePath || predicate.path.includes(".config") || predicate.path.includes(".rivet") || isAbsolute
+  const inHome = homeDir ? target === homeDir || target.startsWith(homeDir + path.sep) : false
+  const isConfigLookup =
+    isHomePath || predicate.path.includes(".config") || predicate.path.includes(".rivet") || isAbsolute
   if (!inRepo && !(inHome && isConfigLookup)) {
     return {
       passed: false,

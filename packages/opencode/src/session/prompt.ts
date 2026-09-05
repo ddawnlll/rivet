@@ -53,15 +53,21 @@ import { EventV2 } from "@opencode-ai/core/event"
 import { Database } from "@opencode-ai/core/database/database"
 import { ModelV2 } from "@opencode-ai/core/model"
 import { ProviderV2 } from "@opencode-ai/core/provider"
-import { eq } from "drizzle-orm"
+import { and, asc, eq, isNull } from "drizzle-orm"
+import { DateTime } from "effect"
+import { SessionInputTable } from "@opencode-ai/core/session/sql"
+import { SessionEvent } from "@opencode-ai/core/session/event"
+import { SessionMessage } from "@opencode-ai/core/session/message"
 import { SessionTable } from "@opencode-ai/core/session/sql"
 import { SessionReminders } from "./reminders"
 import { SessionTools } from "./tools"
 import { LLMEvent, ToolDefinition, type JsonSchema } from "@opencode-ai/llm"
+import { Prompt } from "@opencode-ai/core/session/prompt"
+import { SessionInput } from "@opencode-ai/core/session/input"
 import { SessionSemantics } from "@opencode-ai/core/session/semantics"
-import { createInvocationId } from "@opencode-ai/core/rivet/types"
-import { TurnAdmissionGate } from "@opencode-ai/core/rivet"
+import { createInvocationId, createTaskId } from "@opencode-ai/core/rivet/types"
 import type { ModelInvocation } from "@opencode-ai/core/session/invocation"
+import { RivetController } from "./rivet-controller"
 
 // @ts-ignore
 globalThis.AI_SDK_LOG_WARNINGS = false
@@ -101,8 +107,6 @@ export class ConstitutionalViolationError extends Error {
   }
 }
 
-
-
 function mcpResourceBase64Size(value: string) {
   const trimmed = value.replace(/\s/g, "")
   const padding = trimmed.endsWith("==") ? 2 : trimmed.endsWith("=") ? 1 : 0
@@ -125,6 +129,8 @@ export interface Interface {
   readonly cancel: (sessionID: SessionID) => Effect.Effect<void>
   readonly prompt: (input: PromptInput) => Effect.Effect<SessionV1.WithParts, Image.Error>
   readonly loop: (input: LoopInput) => Effect.Effect<SessionV1.WithParts>
+  /** Internal Rivet transport drain. Public prompt ownership stays sabotaged. */
+  readonly runTransport: (input: LoopInput) => Effect.Effect<SessionV1.WithParts>
   readonly shell: (input: ShellInput) => Effect.Effect<SessionV1.WithParts, Session.BusyError>
   readonly command: (input: CommandInput) => Effect.Effect<SessionV1.WithParts, Image.Error>
   readonly resolvePromptParts: (template: string) => Effect.Effect<PromptInput["parts"]>
@@ -338,7 +344,7 @@ const layer = Layer.effect(
           allowedScope: scope,
           allowedCapabilities: ["tool.*"],
           allowMaterial: true,
-          humanApproved: true,
+          humanApproved: false,
         },
       )
       if (!admission.authorizedAction) {
@@ -1132,350 +1138,506 @@ const layer = Layer.effect(
       throw new Error("Impossible")
     })
 
-    const runLoop: (sessionID: SessionID) => Effect.Effect<SessionV1.WithParts> = Effect.fn("SessionPrompt.run")(
-      function* (sessionID: SessionID) {
-        yield* Effect.die(new ConstitutionalViolationError("runLoop"))
-        const ctx = yield* InstanceState.context
-        let structured: unknown
-        let step = 0
-        const session = yield* sessions.get(sessionID).pipe(Effect.orDie)
-        const semantics = yield* SessionSemantics.load(db, sessionID)
+    const runTransportLoop: (sessionID: SessionID) => Effect.Effect<SessionV1.WithParts> = Effect.fn(
+      "SessionPrompt.run",
+    )(function* (sessionID: SessionID) {
+      const ctx = yield* InstanceState.context
+      let structured: unknown
+      let step = 0
+      const session = yield* sessions.get(sessionID).pipe(Effect.orDie)
+      const semantics = yield* SessionSemantics.load(db, sessionID)
+      let repeatedToolFingerprint: string | undefined
+      let repeatedToolCount = 0
 
-        while (true) {
-          yield* status.set(sessionID, { type: "busy" })
-          yield* Effect.logInfo("loop", { "session.id": sessionID, step })
+      while (true) {
+        yield* status.set(sessionID, { type: "busy" })
+        yield* Effect.logInfo("loop", { "session.id": sessionID, step })
 
-          let msgs = yield* MessageV2.filterCompactedEffect(sessionID).pipe(
-            Effect.provideService(Database.Service, database),
+        let msgs = yield* MessageV2.filterCompactedEffect(sessionID).pipe(
+          Effect.provideService(Database.Service, database),
+        )
+
+        const { user: lastUser, assistant: lastAssistant, finished: lastFinished, tasks } = MessageV2.latest(msgs)
+
+        if (!lastUser) throw new Error("No user message found in stream. This should never happen.")
+        const lastUserMessage = msgs.findLast((message) => message.info.role === "user")
+        const goal = lastUserMessage?.parts
+          .filter((part): part is SessionV1.TextPart => part.type === "text")
+          .map((part) => part.text)
+          .join("\n")
+        const cognitiveView = yield* RivetController.prepareTurn({
+          session,
+          semantics,
+          events,
+          goal,
+        })
+
+        const lastAssistantMsg = msgs.findLast(
+          (msg) => msg.info.role === "assistant" && msg.info.id === lastAssistant?.id,
+        )
+        // Some providers return "stop" even when the assistant message contains
+        // tool calls. Keep the loop running so tool results can be sent back to
+        // the model, but ignore cleanup-marked interrupted orphans.
+        const hasToolCalls =
+          lastAssistantMsg?.parts.some(
+            (part) => part.type === "tool" && !part.metadata?.providerExecuted && !isOrphanedInterruptedTool(part),
+          ) ?? false
+
+        /**
+         * OpenCode finish is a transport signal, not completion authority.
+         * Before every transport turn, Rivet decides whether the durable
+         * semantic state still requires work. A provider stop only ends the
+         * current HTTP stream; it cannot close the session on its own.
+         */
+        const transportTurnComplete =
+          lastAssistant?.finish !== undefined &&
+          !["tool-calls", "unknown"].includes(lastAssistant.finish) &&
+          !hasToolCalls &&
+          lastAssistant.parentID === lastUser.id
+
+        // Rivet owns bounded continuation. The inherited stream doom-loop
+        // guard only sees calls within one HTTP response, so repeated
+        // provider turns are fingerprinted here as well.
+        for (const tool of (lastAssistantMsg?.parts ?? [])
+          .filter((part): part is SessionV1.ToolPart => part.type === "tool")
+          .toReversed()) {
+          if (tool.state.status !== "completed" && tool.state.status !== "error") continue
+          const fingerprint = `${tool.tool}#${JSON.stringify(tool.state.input)}`
+          if (fingerprint === repeatedToolFingerprint) {
+            repeatedToolCount += 1
+          } else {
+            repeatedToolFingerprint = fingerprint
+            repeatedToolCount = 1
+          }
+          if (repeatedToolCount >= 3 && lastAssistant) {
+            const error = new NamedError.Unknown({
+              message: `Rivet halted repeated identical tool call: ${tool.tool}`,
+            }).toObject()
+            yield* events.publish(Session.Event.Error, { sessionID, error })
+            if (!lastAssistant.time.completed) {
+              lastAssistant.error = error
+              lastAssistant.time.completed = Date.now()
+              yield* sessions.updateMessage(lastAssistant)
+            }
+            return { info: lastAssistant, parts: lastAssistantMsg?.parts ?? [] }
+          }
+        }
+
+        if (transportTurnComplete) {
+          const orphan = lastAssistantMsg?.parts.find(
+            (part): part is SessionV1.ToolPart => part.type === "tool" && isOrphanedInterruptedTool(part),
           )
-
-          const { user: lastUser, assistant: lastAssistant, finished: lastFinished, tasks } = MessageV2.latest(msgs)
-
-          if (!lastUser) throw new Error("No user message found in stream. This should never happen.")
-          const lastUserMessage = msgs.findLast((message) => message.info.role === "user")
-          const goal = lastUserMessage?.parts
-            .filter((part): part is SessionV1.TextPart => part.type === "text")
-            .map((part) => part.text)
-            .join("\n")
-          yield* semantics.ensureColdStart(events, session.directory)
-          if (goal) {
-            const admission = TurnAdmissionGate.classify(goal, semantics.hardState.goalDescription)
-            if (admission.shouldCreateGoal && admission.goalText && admission.goalText.length > 0) {
-              yield* semantics.ensureGoal(events, admission.goalText, session.directory, admission.obligationKind)
-            }
-          }
-          const cognitiveView = yield* semantics.cognitiveView({
-            repositoryId: session.directory,
-            goalDescription: semantics.hardState.goalDescription ?? undefined,
-            userPrompt: goal,
-          })
-
-          const lastAssistantMsg = msgs.findLast(
-            (msg) => msg.info.role === "assistant" && msg.info.id === lastAssistant?.id,
-          )
-          // Some providers return "stop" even when the assistant message contains
-          // tool calls. Keep the loop running so tool results can be sent back to
-          // the model, but ignore cleanup-marked interrupted orphans.
-          const hasToolCalls =
-            lastAssistantMsg?.parts.some(
-              (part) => part.type === "tool" && !part.metadata?.providerExecuted && !isOrphanedInterruptedTool(part),
-            ) ?? false
-
-          if (
-            lastAssistant?.finish &&
-            !["tool-calls", "unknown"].includes(lastAssistant.finish) &&
-            !hasToolCalls &&
-            lastAssistant.parentID === lastUser.id
-          ) {
-            const orphan = lastAssistantMsg?.parts.find(
-              (part): part is SessionV1.ToolPart => part.type === "tool" && isOrphanedInterruptedTool(part),
-            )
-            if (orphan) {
-              yield* Effect.logWarning("loop exit with orphaned interrupted tool", {
-                "session.id": sessionID,
-                messageID: lastAssistant.id,
-                tool: orphan.tool,
-                callID: orphan.callID,
-              })
-            }
-            yield* Effect.logInfo("exiting loop", { "session.id": sessionID })
-            break
-          }
-
-          step++
-          if (step === 1)
-            yield* title({
-              session,
-              modelID: lastUser.model.modelID,
-              providerID: lastUser.model.providerID,
-              history: msgs,
-            }).pipe(Effect.ignore, Effect.forkIn(scope))
-
-          const model = yield* getModel(lastUser.model.providerID, lastUser.model.modelID, sessionID)
-          const task = tasks.pop()
-
-          if (task?.type === "subtask") {
-            yield* handleSubtask({ task, model, lastUser, sessionID, session, msgs, semantics, events })
-            continue
-          }
-
-          if (task?.type === "compaction") {
-            const result = yield* compaction.process({
-              messages: msgs,
-              parentID: lastUser.id,
-              sessionID,
-              auto: task.auto,
-              overflow: task.overflow,
+          if (orphan) {
+            yield* Effect.logWarning("loop exit with orphaned interrupted tool", {
+              "session.id": sessionID,
+              messageID: lastAssistant.id,
+              tool: orphan.tool,
+              callID: orphan.callID,
             })
-            if (result === "stop") break
-            continue
           }
+          yield* Effect.logInfo("Rivet accepted transport completion", { "session.id": sessionID })
+          break
+        }
 
-          if (
-            lastFinished &&
-            lastFinished.summary !== true &&
-            (yield* compaction.isOverflow({ tokens: lastFinished.tokens, model }))
-          ) {
-            yield* compaction.create({ sessionID, agent: lastUser.agent, model: lastUser.model, auto: true })
-            continue
-          }
+        step++
+        if (step === 1)
+          yield* title({
+            session,
+            modelID: lastUser.model.modelID,
+            providerID: lastUser.model.providerID,
+            history: msgs,
+          }).pipe(Effect.ignore, Effect.forkIn(scope))
 
-          const agent = yield* agents.get(lastUser.agent)
-          if (!agent) {
-            const available = (yield* agents.list()).filter((a) => !a.hidden).map((a) => a.name)
-            const hint = available.length ? ` Available agents: ${available.join(", ")}` : ""
-            const error = new NamedError.Unknown({ message: `Agent not found: "${lastUser.agent}".${hint}` })
-            yield* events.publish(Session.Event.Error, { sessionID, error: error.toObject() })
-            throw error
-          }
-          const maxSteps = agent.steps ?? Infinity
-          const isLastStep = step >= maxSteps
-          msgs = yield* SessionReminders.apply({ messages: msgs, agent, session }).pipe(
-            Effect.provideService(RuntimeFlags.Service, flags),
-            Effect.provideService(FSUtil.Service, fsys),
-            Effect.provideService(Session.Service, sessions),
-          )
+        const model = yield* getModel(lastUser.model.providerID, lastUser.model.modelID, sessionID)
+        const task = tasks.pop()
 
-          const msg: SessionV1.Assistant = {
-            id: MessageID.ascending(),
-            parentID: lastUser.id,
-            role: "assistant",
-            mode: agent.name,
-            agent: agent.name,
-            variant: lastUser.model.variant,
-            path: { cwd: ctx.directory, root: ctx.worktree },
-            cost: 0,
-            tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
-            modelID: model.id,
-            providerID: model.providerID,
-            time: { created: Date.now() },
-            sessionID,
-          }
-          yield* sessions.updateMessage(msg)
-
-          const finalizeInterruptedAssistant = Effect.gen(function* () {
-            if (msg.time.completed) return
-            msg.error ??= MessageV2.fromError(new DOMException("Aborted", "AbortError"), {
-              providerID: msg.providerID,
-              aborted: true,
-            })
-            msg.time.completed = Date.now()
-            yield* sessions.updateMessage(msg)
-          })
-
-          const handle = yield* processor
-            .create({
-              assistantMessage: msg,
-              sessionID,
-              model,
-            })
-            .pipe(Effect.onInterrupt(() => finalizeInterruptedAssistant))
-
-          const outcome: "break" | "continue" = yield* Effect.gen(function* () {
-            const lastUserMsg = msgs.findLast((m) => m.info.role === "user")
-            const bypassAgentCheck = lastUserMsg?.parts.some((p) => p.type === "agent") ?? false
-            const promptOps = yield* ops()
-
-            const tools = yield* SessionTools.resolve({
-              agent,
-              session,
-              model,
-              processor: handle,
-              bypassAgentCheck,
-              messages: msgs,
-              promptOps,
-              semantics,
-              events,
-            }).pipe(
-              Effect.provideService(Plugin.Service, plugin),
-              Effect.provideService(Permission.Service, permission),
-              Effect.provideService(ToolRegistry.Service, registry),
-              Effect.provideService(MCP.Service, mcp),
-              Effect.provideService(Truncate.Service, truncate),
-              Effect.provideService(RuntimeFlags.Service, flags),
-            )
-
-            if (lastUser.format?.type === "json_schema") {
-              tools["StructuredOutput"] = createStructuredOutputTool({
-                schema: lastUser.format.schema,
-                onSuccess(output) {
-                  structured = output
-                },
-              })
-            }
-
-            const invocationID = createInvocationId(`${sessionID}:${step}`)
-            yield* semantics.recordInvocation(events, invocationID, model.id)
-            const invocation: ModelInvocation = {
-              systemContract: { name: "Rivet Harness", version: "1", authority: "Harness" },
-              cognitiveView,
-              availableActions: Object.entries(tools).map(
-                ([name, item]) =>
-                  new ToolDefinition({
-                    name,
-                    description: item.description ?? "",
-                    inputSchema: asSchema(item.inputSchema).jsonSchema as JsonSchema,
-                  }),
-              ),
-              budget: { outputTokens: agent.steps },
-              invocation: invocationID,
-            }
-
-            if (step === 1)
-              yield* summary.summarize({ sessionID, messageID: lastUser.id }).pipe(Effect.ignore, Effect.forkIn(scope))
-
-            yield* plugin.trigger("experimental.chat.messages.transform", {}, { messages: msgs })
-
-            const [skills, env, instructions, mcpInstructions, modelMsgs] = yield* Effect.all([
-              sys.skills(agent),
-              sys.environment(model),
-              instruction.system().pipe(Effect.orDie),
-              sys.mcp(agent, session.permission),
-              MessageV2.toModelMessagesEffect(msgs, model),
-            ])
-            const system = [
-              BUILD_SYSTEM,
-              ...env,
-              ...instructions,
-              ...(mcpInstructions ? [mcpInstructions] : []),
-              ...(skills ? [skills] : []),
-              cognitiveView.formatPromptBlock(),
-            ]
-            const format = lastUser.format ?? { type: "text" as const }
-            if (format.type === "json_schema") system.push(STRUCTURED_OUTPUT_SYSTEM_PROMPT)
-            // Regex-based Rivet tool steering was removed with the legacy
-            // harness; the Rivet SessionRunner owns cognitive tool steering.
-            const toolChoice =
-              format.type === "json_schema"
-                ? "required"
-                : isLastStep
-                  ? "none"
-                  : undefined
-            const result = yield* handle.process({
-              user: lastUser,
-              agent,
-              permission: session.permission,
-              sessionID,
-              parentSessionID: session.parentID,
-              system,
-              messages: [
-                ...modelMsgs,
-                ...(isLastStep ? [{ role: "assistant" as const, content: MAX_STEPS_PROMPT }] : []),
-              ],
-              tools,
-              cognitiveView,
-              invocation,
-              executeTool: (call, abort) =>
-                Effect.promise(async () => {
-                  const item = tools[call.name]
-                  if (!item?.execute)
-                    return [
-                      LLMEvent.toolResult({
-                        id: call.id,
-                        name: call.name,
-                        result: { type: "error", value: `Unknown authorized action: ${call.name}` },
-                      }),
-                    ]
-                  const value = await item.execute(call.input, {
-                    toolCallId: call.id,
-                    messages: [],
-                    abortSignal: abort,
-                  })
-                  const output =
-                    value && typeof value === "object" && "output" in value
-                      ? String(value.output)
-                      : typeof value === "string"
-                        ? value
-                        : JSON.stringify(value)
-                  return [LLMEvent.toolResult({ id: call.id, name: call.name, result: { type: "text", value: output } })]
-                }),
-              model,
-              toolChoice,
-            })
-
-            if (structured !== undefined) {
-              handle.message.structured = structured
-              handle.message.finish = handle.message.finish ?? "stop"
-              yield* sessions.updateMessage(handle.message)
-              return "break" as const
-            }
-
-            if (semantics.hardState.completedTasks.size > 0) return "break" as const
-
-            const finished = handle.message.finish && !["tool-calls", "unknown"].includes(handle.message.finish)
-            if (finished && !handle.message.error) {
-              // Surface any content-filter finish (e.g. Anthropic stop_reason:
-              // refusal) as an error. These turns may have produced no visible
-              // output at all — previously the session went idle silently — or
-              // partial text that was cut off by the provider's filter.
-              if (handle.message.finish === "content-filter") {
-                handle.message.error = new SessionV1.ContentFilterError({
-                  message: "The response was blocked by the provider's content filter",
-                }).toObject()
-                yield* sessions.updateMessage(handle.message)
-                yield* events.publish(Session.Event.Error, { sessionID, error: handle.message.error })
-                return "break" as const
-              }
-              if (format.type === "json_schema") {
-                handle.message.error = new SessionV1.StructuredOutputError({
-                  message: "Model did not produce structured output",
-                  retries: 0,
-                }).toObject()
-                yield* sessions.updateMessage(handle.message)
-                return "break" as const
-              }
-            }
-
-            if (result === "stop") return "break" as const
-            if (result === "compact") {
-              yield* compaction.create({
-                sessionID,
-                agent: lastUser.agent,
-                model: lastUser.model,
-                auto: true,
-                overflow: !handle.message.finish,
-              })
-            }
-            return "continue" as const
-          }).pipe(
-            Effect.ensuring(instruction.clear(handle.message.id)),
-            Effect.onInterrupt(() => finalizeInterruptedAssistant),
-          )
-          if (outcome === "break") break
+        if (task?.type === "subtask") {
+          yield* handleSubtask({ task, model, lastUser, sessionID, session, msgs, semantics, events })
           continue
         }
 
-        yield* compaction.prune({ sessionID }).pipe(Effect.ignore, Effect.forkIn(scope))
-        return yield* lastAssistant(sessionID)
-      },
-    )
+        if (task?.type === "compaction") {
+          const result = yield* compaction.process({
+            messages: msgs,
+            parentID: lastUser.id,
+            sessionID,
+            auto: task.auto,
+            overflow: task.overflow,
+          })
+          if (result === "stop") break
+          continue
+        }
+
+        if (
+          lastFinished &&
+          lastFinished.summary !== true &&
+          (yield* compaction.isOverflow({ tokens: lastFinished.tokens, model }))
+        ) {
+          yield* compaction.create({ sessionID, agent: lastUser.agent, model: lastUser.model, auto: true })
+          continue
+        }
+
+        const agent = yield* agents.get(lastUser.agent)
+        if (!agent) {
+          const available = (yield* agents.list()).filter((a) => !a.hidden).map((a) => a.name)
+          const hint = available.length ? ` Available agents: ${available.join(", ")}` : ""
+          const error = new NamedError.Unknown({ message: `Agent not found: "${lastUser.agent}".${hint}` })
+          yield* events.publish(Session.Event.Error, { sessionID, error: error.toObject() })
+          throw error
+        }
+        const maxSteps = agent.steps ?? Infinity
+        const isLastStep = step >= maxSteps
+        msgs = yield* SessionReminders.apply({ messages: msgs, agent, session }).pipe(
+          Effect.provideService(RuntimeFlags.Service, flags),
+          Effect.provideService(FSUtil.Service, fsys),
+          Effect.provideService(Session.Service, sessions),
+        )
+
+        const msg: SessionV1.Assistant = {
+          id: MessageID.ascending(),
+          parentID: lastUser.id,
+          role: "assistant",
+          mode: agent.name,
+          agent: agent.name,
+          variant: lastUser.model.variant,
+          path: { cwd: ctx.directory, root: ctx.worktree },
+          cost: 0,
+          tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+          modelID: model.id,
+          providerID: model.providerID,
+          time: { created: Date.now() },
+          sessionID,
+        }
+        yield* sessions.updateMessage(msg)
+
+        const finalizeInterruptedAssistant = Effect.gen(function* () {
+          if (msg.time.completed) return
+          msg.error ??= MessageV2.fromError(new DOMException("Aborted", "AbortError"), {
+            providerID: msg.providerID,
+            aborted: true,
+          })
+          msg.time.completed = Date.now()
+          yield* sessions.updateMessage(msg)
+        })
+
+        const handle = yield* processor
+          .create({
+            assistantMessage: msg,
+            sessionID,
+            model,
+          })
+          .pipe(Effect.onInterrupt(() => finalizeInterruptedAssistant))
+
+        const outcome: "break" | "continue" = yield* Effect.gen(function* () {
+          const lastUserMsg = msgs.findLast((m) => m.info.role === "user")
+          const bypassAgentCheck = lastUserMsg?.parts.some((p) => p.type === "agent") ?? false
+          const promptOps = yield* ops()
+
+          const tools = yield* SessionTools.resolve({
+            agent,
+            session,
+            model,
+            processor: handle,
+            bypassAgentCheck,
+            messages: msgs,
+            promptOps,
+            semantics,
+            events,
+          }).pipe(
+            Effect.provideService(Plugin.Service, plugin),
+            Effect.provideService(Permission.Service, permission),
+            Effect.provideService(ToolRegistry.Service, registry),
+            Effect.provideService(MCP.Service, mcp),
+            Effect.provideService(Truncate.Service, truncate),
+            Effect.provideService(RuntimeFlags.Service, flags),
+          )
+
+          if (lastUser.format?.type === "json_schema") {
+            tools["StructuredOutput"] = createStructuredOutputTool({
+              schema: lastUser.format.schema,
+              onSuccess(output) {
+                structured = output
+              },
+            })
+          }
+
+          const invocationID = createInvocationId(`${sessionID}:${step}`)
+          yield* semantics.recordInvocation(events, invocationID, model.id)
+          const invocation: ModelInvocation = {
+            systemContract: { name: "Rivet Harness", version: "1", authority: "Harness" },
+            cognitiveView,
+            availableActions: Object.entries(tools).map(
+              ([name, item]) =>
+                new ToolDefinition({
+                  name,
+                  description: item.description ?? "",
+                  inputSchema: asSchema(item.inputSchema).jsonSchema as JsonSchema,
+                }),
+            ),
+            budget: { outputTokens: agent.steps },
+            invocation: invocationID,
+          }
+
+          if (step === 1)
+            yield* summary.summarize({ sessionID, messageID: lastUser.id }).pipe(Effect.ignore, Effect.forkIn(scope))
+
+          yield* plugin.trigger("experimental.chat.messages.transform", {}, { messages: msgs })
+
+          const [skills, env, instructions, mcpInstructions, modelMsgs] = yield* Effect.all([
+            sys.skills(agent),
+            sys.environment(model),
+            instruction.system().pipe(Effect.orDie),
+            sys.mcp(agent, session.permission),
+            MessageV2.toModelMessagesEffect(msgs, model),
+          ])
+          const system = [
+            BUILD_SYSTEM,
+            ...env,
+            ...instructions,
+            ...(mcpInstructions ? [mcpInstructions] : []),
+            ...(skills ? [skills] : []),
+            cognitiveView.formatPromptBlock(),
+          ]
+          const format = lastUser.format ?? { type: "text" as const }
+          if (format.type === "json_schema") system.push(STRUCTURED_OUTPUT_SYSTEM_PROMPT)
+          // Regex-based Rivet tool steering was removed with the legacy
+          // harness; the Rivet SessionRunner owns cognitive tool steering.
+          const toolChoice = format.type === "json_schema" ? "required" : isLastStep ? "none" : undefined
+          const result = yield* handle.process({
+            user: lastUser,
+            agent,
+            permission: session.permission,
+            sessionID,
+            parentSessionID: session.parentID,
+            system,
+            messages: [
+              ...modelMsgs,
+              ...(isLastStep ? [{ role: "assistant" as const, content: MAX_STEPS_PROMPT }] : []),
+            ],
+            tools,
+            cognitiveView,
+            invocation,
+            executeTool: (call, abort) =>
+              Effect.promise(async () => {
+                const item = tools[call.name]
+                if (!item?.execute)
+                  return [
+                    LLMEvent.toolResult({
+                      id: call.id,
+                      name: call.name,
+                      result: { type: "error", value: `Unknown authorized action: ${call.name}` },
+                    }),
+                  ]
+                const value = await item.execute(call.input, {
+                  toolCallId: call.id,
+                  messages: [],
+                  abortSignal: abort,
+                })
+                const output =
+                  value && typeof value === "object" && "output" in value
+                    ? String(value.output)
+                    : typeof value === "string"
+                      ? value
+                      : JSON.stringify(value)
+                return [LLMEvent.toolResult({ id: call.id, name: call.name, result: { type: "text", value: output } })]
+              }),
+            model,
+            toolChoice,
+          })
+
+          if (structured !== undefined) {
+            handle.message.structured = structured
+            handle.message.finish = handle.message.finish ?? "stop"
+            yield* sessions.updateMessage(handle.message)
+            return "break" as const
+          }
+
+          const transportCompletion = yield* RivetController.decideCompletion({
+            semantics,
+            summary:
+              lastAssistantMsg?.parts
+                .filter((part): part is SessionV1.TextPart => part.type === "text")
+                .map((part) => part.text)
+                .join(" ")
+                .slice(0, 500) ?? "",
+          })
+          if (transportCompletion.completed) return "break" as const
+
+          const finished = handle.message.finish && !["tool-calls", "unknown"].includes(handle.message.finish)
+          if (finished && !handle.message.error) {
+            // Surface any content-filter finish (e.g. Anthropic stop_reason:
+            // refusal) as an error. These turns may have produced no visible
+            // output at all — previously the session went idle silently — or
+            // partial text that was cut off by the provider's filter.
+            if (handle.message.finish === "content-filter") {
+              handle.message.error = new SessionV1.ContentFilterError({
+                message: "The response was blocked by the provider's content filter",
+              }).toObject()
+              yield* sessions.updateMessage(handle.message)
+              yield* events.publish(Session.Event.Error, { sessionID, error: handle.message.error })
+              return "break" as const
+            }
+            if (format.type === "json_schema") {
+              handle.message.error = new SessionV1.StructuredOutputError({
+                message: "Model did not produce structured output",
+                retries: 0,
+              }).toObject()
+              yield* sessions.updateMessage(handle.message)
+              return "break" as const
+            }
+          }
+
+          if (result === "stop") return "break" as const
+          if (result === "compact") {
+            yield* compaction.create({
+              sessionID,
+              agent: lastUser.agent,
+              model: lastUser.model,
+              auto: true,
+              overflow: !handle.message.finish,
+            })
+          }
+          return "continue" as const
+        }).pipe(
+          Effect.ensuring(
+            Effect.all(
+              [
+                instruction.clear(handle.message.id),
+                SessionInput.promoteSteers(
+                  database.db,
+                  events,
+                  sessionID,
+                  yield* EventV2.latestSequence(database.db, sessionID),
+                ).pipe(Effect.ignore),
+              ],
+              { discard: true },
+            ),
+          ),
+          Effect.onInterrupt(() => finalizeInterruptedAssistant),
+        )
+        if (outcome === "break") break
+        continue
+      }
+
+      yield* compaction.prune({ sessionID }).pipe(Effect.ignore, Effect.forkIn(scope))
+      return yield* lastAssistant(sessionID)
+    })
+
+    /**
+     * Materialize a durable Rivet admission for this internal transport drain.
+     * The projection must be complete before the inherited loop reads V1
+     * message tables. Steers stay pending at this boundary; they are promoted
+     * at Rivet's safe provider-turn boundary by the existing projector.
+     */
+    const projectInitialTransportInput = Effect.fn("SessionPrompt.projectInitialTransportInput")(function* (
+      sessionID: SessionID,
+    ) {
+      const existing = yield* MessageV2.filterCompactedEffect(sessionID).pipe(
+        Effect.provideService(Database.Service, database),
+      )
+      if (existing.length > 0) return
+      const rows = yield* database.db
+        .select()
+        .from(SessionInputTable)
+        .where(and(eq(SessionInputTable.session_id, sessionID), isNull(SessionInputTable.promoted_seq)))
+        .orderBy(asc(SessionInputTable.admitted_seq))
+        .all()
+        .pipe(Effect.orDie)
+      for (const row of rows) {
+        if (row.delivery !== "steer") continue
+        const prompt = Schema.decodeUnknownSync(Prompt)(row.prompt)
+        const timestamp = DateTime.makeUnsafe(row.time_created)
+        const event = yield* events
+          .publish(SessionEvent.Prompted, {
+            sessionID,
+            timestamp,
+            messageID: SessionMessage.ID.make(row.id),
+            prompt,
+            delivery: row.delivery,
+          })
+          .pipe(Effect.catchDefect(() => Effect.succeed(undefined)))
+        if (event === undefined) continue
+
+        // A durable first prompt can arrive through SessionV2 without a V1
+        // model selection. Resolve it from the living provider catalog so the
+        // inherited loop keeps using one model source and one status owner.
+        const current = yield* sessions.get(sessionID).pipe(Effect.orDie)
+        if (current.model === undefined) {
+          const providers = yield* provider.list()
+          const models = Object.values(providers).flatMap((item) => Object.values(item.models))
+          const model = models[0]
+          if (model === undefined) {
+            yield* events.publish(Session.Event.Error, {
+              sessionID,
+              error: new NamedError.Unknown({
+                message: "No provider model is available to materialize the durable prompt",
+              }).toObject(),
+            })
+            return yield* Effect.die("Rivet transport input has no available provider model")
+          }
+          yield* sessions.setAgentModel({
+            sessionID,
+            agent: current.agent ?? "build",
+            model: {
+              id: model.id,
+              providerID: model.providerID,
+            },
+            time: Date.now(),
+          })
+        }
+        const refreshed = yield* sessions.get(sessionID).pipe(Effect.orDie)
+        if (refreshed.model === undefined)
+          return yield* Effect.die("Rivet transport input could not resolve a provider model")
+        const v1ID = MessageID.make(row.id)
+        const created = DateTime.toEpochMillis(timestamp)
+        const model = {
+          providerID: refreshed.model.providerID,
+          modelID: refreshed.model.id,
+          ...(refreshed.model.variant && refreshed.model.variant !== "default"
+            ? { variant: refreshed.model.variant }
+            : {}),
+        }
+        yield* events.publish(SessionV1.Event.MessageUpdated, {
+          sessionID,
+          info: {
+            id: v1ID,
+            role: "user",
+            sessionID,
+            time: { created },
+            agent: refreshed.agent ?? "build",
+            model,
+          } satisfies SessionV1.Info,
+        })
+        yield* events.publish(SessionV1.Event.PartUpdated, {
+          sessionID,
+          time: created,
+          part: {
+            id: PartID.ascending(),
+            messageID: v1ID,
+            sessionID,
+            type: "text",
+            text: prompt.text,
+            synthetic: false,
+            time: { start: created, end: created },
+          } satisfies SessionV1.Part,
+        })
+      }
+    })
+
+    const runTransportInput = (sessionID: SessionID) =>
+      Effect.gen(function* () {
+        yield* projectInitialTransportInput(sessionID)
+        return yield* state.ensureRunning(sessionID, lastAssistant(sessionID), runTransportLoop(sessionID))
+      })
 
     const loop: (input: LoopInput) => Effect.Effect<SessionV1.WithParts> = Effect.fn("SessionPrompt.loop")(function* (
       input: LoopInput,
     ) {
       yield* Effect.die(new ConstitutionalViolationError("loop"))
-      return yield* state.ensureRunning(input.sessionID, lastAssistant(input.sessionID), runLoop(input.sessionID))
+      return yield* runTransportInput(input.sessionID)
     })
+
+    const runTransport = (input: LoopInput) => runTransportInput(input.sessionID)
 
     const shell: (input: ShellInput) => Effect.Effect<SessionV1.WithParts, Session.BusyError> = Effect.fn(
       "SessionPrompt.shell",
@@ -1616,6 +1778,7 @@ const layer = Layer.effect(
       cancel,
       prompt,
       loop,
+      runTransport,
       shell,
       command,
       resolvePromptParts,

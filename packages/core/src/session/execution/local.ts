@@ -32,30 +32,36 @@ const layer = Layer.effect(
               ? Effect.void
               : Effect.logError("Failed to drain Session", cause).pipe(Effect.annotateLogs({ sessionID })),
           ),
-          Effect.ensuring(
-            Effect.all(
-              [
-                events.publish(
-                  SessionStatusEvent.Status,
-                  { sessionID, status: { type: "idle" } },
-                  { location: session.location },
-                ),
-                events.publish(
-                  SessionStatusEvent.Idle,
-                  { sessionID },
-                  { location: session.location },
-                ),
-              ],
-              { discard: true },
-            ).pipe(Effect.ignore),
-          ),
         )
       }),
     })
 
+    const interrupt = Effect.fn("SessionExecution.interrupt")(function* (
+      sessionID: SessionSchema.ID,
+      source: "user_abort" | "host_runtime_cancellation" | "session_shutdown" = "user_abort",
+    ) {
+      yield* coordinator.interrupt(sessionID)
+      const current = yield* store.get(sessionID)
+      if (!current) return
+      yield* events.publish(
+        SessionStatusEvent.Status,
+        {
+          sessionID,
+          status: {
+            type: "idle",
+            outcome: "interrupted",
+            source,
+            reason: source === "user_abort" ? "User requested interruption" : "Execution owner interrupted",
+            phase: "session_runner",
+          },
+        },
+        { location: current.location },
+      )
+    })
+
     return SessionExecution.Service.of({
       active: coordinator.active,
-      interrupt: coordinator.interrupt,
+      interrupt,
       resume: coordinator.run,
       wake: coordinator.wake,
     })
@@ -69,4 +75,3 @@ export const node = makeGlobalNode({
 })
 
 export * as SessionExecutionLocal from "./local"
-

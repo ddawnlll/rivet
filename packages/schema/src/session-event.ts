@@ -12,6 +12,7 @@ import { SessionID } from "./session-id"
 import { Location } from "./location"
 import { SessionMessage } from "./session-message"
 import { Revert } from "./revert"
+import { SessionStatusEvent } from "./session-status-event"
 
 export { FileAttachment }
 
@@ -131,6 +132,19 @@ export const Synthetic = Event.define({
   },
 })
 export type Synthetic = typeof Synthetic.Type
+
+/** Durable terminal/run provenance. Live activity stays on session.status. */
+export namespace Run {
+  export const Status = Event.define({
+    type: "session.next.run.status",
+    ...options,
+    schema: {
+      ...Base,
+      status: SessionStatusEvent.Info,
+    },
+  })
+  export type Status = typeof Status.Type
+}
 
 export namespace Shell {
   export const Started = Event.define({
@@ -466,6 +480,7 @@ export const DurableDefinitions = Event.inventory(
   ContextUpdated,
   Semantic,
   Synthetic,
+  Run.Status,
   Shell.Started,
   Shell.Ended,
   Step.Started,
@@ -498,6 +513,7 @@ export const Definitions = Event.inventory(
   ContextUpdated,
   Semantic,
   Synthetic,
+  Run.Status,
   Shell.Started,
   Shell.Ended,
   Step.Started,

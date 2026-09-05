@@ -56,9 +56,10 @@ import { ReferenceGuidance } from "@opencode-ai/core/reference/guidance"
 import { ModelV2 } from "@opencode-ai/core/model"
 import { Location } from "@opencode-ai/core/location"
 import { ProviderV2 } from "@opencode-ai/core/provider"
-import { Cause, DateTime, Deferred, Effect, Exit, Fiber, Layer, Schema, Stream } from "effect"
+import { Cause, DateTime, Deferred, Duration, Effect, Exit, Fiber, Layer, Schema, Stream } from "effect"
 import { asc, eq } from "drizzle-orm"
 import { testEffect } from "./lib/effect"
+import * as TestClock from "effect/testing/TestClock"
 
 const requests: LLMRequest[] = []
 let response: LLMEvent[] = []
@@ -330,6 +331,8 @@ const setup = Effect.gen(function* () {
   toolExecutionsReady = 5
   activeToolExecutions = 0
   maxActiveToolExecutions = 0
+  executions.length = 0
+  authorizations.length = 0
   yield* db
     .insert(ProjectTable)
     .values({ id: Project.ID.global, worktree: AbsolutePath.make("/project"), sandboxes: [] })
@@ -527,6 +530,7 @@ const verifyPartialFlushOnInterruption = (kind: FragmentKind) =>
   Effect.gen(function* () {
     yield* setup
     const session = yield* SessionV2.Service
+    const { db } = yield* Database.Service
     const prompt = `Interrupt after ${kind}`
     const fixture = fragmentFixture(kind, fragmentID(kind, "interrupted"), ["Partial"])
     const streamed = yield* Deferred.make<void>()
@@ -553,6 +557,15 @@ const verifyPartialFlushOnInterruption = (kind: FragmentKind) =>
         ],
       },
     ])
+    const terminal = yield* db
+      .select({ data: EventTable.data })
+      .from(EventTable)
+      .where(eq(EventTable.type, EventV2.versionedType(SessionEvent.Run.Status.type, 1)))
+      .all()
+      .pipe(Effect.orDie)
+    expect(terminal.at(-1)?.data).toMatchObject({
+      status: { outcome: "interrupted", source: "host_runtime_cancellation" },
+    })
   })
 
 describe("SessionRunnerLLM", () => {
@@ -763,7 +776,9 @@ describe("SessionRunnerLLM", () => {
       yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Second" }), resume: false })
       yield* session.resume(sessionID)
 
-      expect(requests.every((request) => request.system.some((part) => part.text.includes("Initial context")))).toBe(true)
+      expect(requests.every((request) => request.system.some((part) => part.text.includes("Initial context")))).toBe(
+        true,
+      )
       expect(requests[1]?.messages.map((message) => message.role)).toEqual(["user", "user", "system"])
       expect(requests[1]?.messages.at(-1)?.content).toEqual([{ type: "text", text: "Changed context" }])
       expect(yield* session.messages({ sessionID })).toHaveLength(3)
@@ -1506,7 +1521,9 @@ describe("SessionRunnerLLM", () => {
       yield* Fiber.join(run)
 
       expect(requests.map((request) => request.model)).toEqual([model, replacementModel])
-      expect(requests.every((request) => request.system.some((part) => part.text.includes("Initial context")))).toBe(true)
+      expect(requests.every((request) => request.system.some((part) => part.text.includes("Initial context")))).toBe(
+        true,
+      )
       expect(systemTexts(requests[1]!)).toContain("Replacement context")
     }),
   )
@@ -3415,7 +3432,13 @@ describe("SessionRunnerLLM", () => {
           LLMEvent.stepFinish({ index: 0, reason: "tool-calls" }),
           LLMEvent.finish({ reason: "tool-calls" }),
         ],
-        [LLMEvent.textStart({ id: "semantic-answer" }), LLMEvent.textDelta({ id: "semantic-answer", text: "done" }), LLMEvent.textEnd({ id: "semantic-answer" }), LLMEvent.stepFinish({ index: 0, reason: "stop" }), LLMEvent.finish({ reason: "stop" })],
+        [
+          LLMEvent.textStart({ id: "semantic-answer" }),
+          LLMEvent.textDelta({ id: "semantic-answer", text: "done" }),
+          LLMEvent.textEnd({ id: "semantic-answer" }),
+          LLMEvent.stepFinish({ index: 0, reason: "stop" }),
+          LLMEvent.finish({ reason: "stop" }),
+        ],
       ]
 
       yield* session.resume(sessionID)
@@ -3436,9 +3459,239 @@ describe("SessionRunnerLLM", () => {
       const restarted = yield* SessionSemantics.load(db, sessionID)
       expect(restarted.hardState.goalDescription).toBe("Run the semantic echo")
       expect(restarted.hardState.executionReceipts).toHaveLength(1)
+      expect(restarted.hardState.executionReceipts[0]?.humanApproved).toBe(false)
       expect(restarted.hardState.observations.size).toBe(1)
       expect(restarted.hardState.evidence.size).toBe(1)
       expect((yield* restarted.cognitiveView({ repositoryId: "/project" })).recentEvidence).toHaveLength(1)
+    }),
+  )
+
+  it.effect("delivers a response after ACCP denies an internal-runtime read", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      yield* session.prompt({
+        sessionID,
+        prompt: Prompt.make({ text: "/goal Investigate the project test state" }),
+        resume: false,
+      })
+      requests.length = 0
+      responses = [
+        [
+          LLMEvent.toolCall({
+            id: "call-denied-read",
+            name: "read",
+            input: { path: "packages/core/src/rivet/flight-recorder/recorder.ts" },
+          }),
+          LLMEvent.stepFinish({ index: 0, reason: "tool-calls" }),
+          LLMEvent.finish({ reason: "tool-calls" }),
+        ],
+        [
+          LLMEvent.textStart({ id: "denial-answer" }),
+          LLMEvent.textDelta({ id: "denial-answer", text: "The internal runtime inspection was blocked by policy." }),
+          LLMEvent.textEnd({ id: "denial-answer" }),
+          LLMEvent.stepFinish({ index: 0, reason: "stop" }),
+          LLMEvent.finish({ reason: "stop" }),
+        ],
+      ]
+
+      yield* session.resume(sessionID)
+
+      expect(requests).toHaveLength(2)
+      expect(requests[1]?.tools).toHaveLength(0)
+      const context = yield* session.context(sessionID)
+      expect(
+        context.some(
+          (message) =>
+            message.type === "assistant" &&
+            message.content.some(
+              (part) =>
+                part.type === "text" && part.text.startsWith("The internal runtime inspection was blocked by policy"),
+            ),
+        ),
+      ).toBe(true)
+      expect(
+        context.some(
+          (message) =>
+            message.type === "assistant" &&
+            message.content.some(
+              (part) => part.type === "tool" && part.id === "call-denied-read" && part.state.status === "error",
+            ),
+        ),
+      ).toBe(true)
+    }),
+  )
+
+  it.effect("records a bounded provider timeout as a failed terminal run", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const { db } = yield* Database.Service
+      yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Wait for the provider" }), resume: false })
+      responseStream = Stream.never
+      const run = yield* session.resume(sessionID).pipe(Effect.forkChild)
+      yield* Effect.yieldNow
+      yield* TestClock.adjust(Duration.seconds(31))
+
+      const exit = yield* Fiber.join(run).pipe(Effect.exit)
+      expect(Exit.isFailure(exit)).toBe(true)
+      const terminal = yield* db
+        .select({ data: EventTable.data })
+        .from(EventTable)
+        .where(eq(EventTable.type, EventV2.versionedType(SessionEvent.Run.Status.type, 1)))
+        .all()
+        .pipe(Effect.orDie)
+      expect(terminal.at(-1)?.data).toMatchObject({ status: { outcome: "failed", source: "timeout" } })
+    }),
+  )
+
+  it.effect("settles a stalled tool with an explicit uncertain receipt", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const { db } = yield* Database.Service
+      yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Run the blocked tool" }), resume: false })
+      toolExecutionGate = yield* Deferred.make<void>()
+      toolExecutionsStarted = yield* Deferred.make<void>()
+      toolExecutionsReady = 1
+      responses = [
+        [
+          LLMEvent.toolCall({ id: "call-tool-timeout", name: "echo", input: { text: "blocked" } }),
+          LLMEvent.stepFinish({ index: 0, reason: "tool-calls" }),
+          LLMEvent.finish({ reason: "tool-calls" }),
+        ],
+        [],
+      ]
+      const run = yield* session.resume(sessionID).pipe(Effect.forkChild)
+      yield* Deferred.await(toolExecutionsStarted)
+      yield* TestClock.adjust(Duration.seconds(121))
+      yield* Fiber.join(run)
+
+      const restarted = yield* SessionSemantics.load(db, sessionID)
+      expect(restarted.hardState.executionReceipts).toContainEqual(
+        expect.objectContaining({ idempotencyKey: "call-tool-timeout", success: false, uncertain: true }),
+      )
+      expect(yield* session.context(sessionID)).toMatchObject([
+        { type: "user", text: "Run the blocked tool" },
+        { type: "assistant", content: [{ type: "tool", id: "call-tool-timeout", state: { status: "error" } }] },
+      ])
+    }),
+  )
+
+  it.effect("does not replay a side effect after a durable claim survives restart", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const events = yield* EventV2.Service
+      const { db } = yield* Database.Service
+      const semantics = yield* SessionSemantics.load(db, sessionID)
+      const scope = semantics.scope("/project")
+      const admitted = semantics.admitProviderCommitment(
+        { id: "call-crash-claim", name: "echo", input: { text: "one" } },
+        scope,
+        {
+          repository: "/project",
+          currentRevision: semantics.hardState.revision,
+          allowedScope: scope,
+          allowedCapabilities: ["tool.*"],
+          allowMaterial: true,
+          humanApproved: false,
+        },
+      )
+      expect(admitted.authorizedAction).toBeDefined()
+      const first = yield* semantics.claimExecution(events, admitted.authorizedAction!)
+      expect(first.status).toBe("claimed")
+
+      const restarted = yield* SessionSemantics.load(db, sessionID)
+      const second = yield* restarted.claimExecution(events, admitted.authorizedAction!)
+      expect(second.status).toBe("uncertain")
+
+      semantics.hardState.apply({ type: "goal_set", goal: "Revision changed", timestamp: new Date().toISOString() })
+      let executed = false
+      const stale = yield* semantics
+        .executeAuthorizedAction(
+          admitted.authorizedAction!,
+          () =>
+            Effect.sync(() => {
+              executed = true
+              return "should-not-run"
+            }),
+          String,
+        )
+        .pipe(Effect.exit)
+      expect(Exit.isFailure(stale)).toBe(true)
+      expect(executed).toBe(false)
+    }),
+  )
+
+  it.effect("denies an internal-runtime mutation without executing it", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      yield* session.prompt({
+        sessionID,
+        prompt: Prompt.make({ text: "/goal Inspect the current project" }),
+        resume: false,
+      })
+      requests.length = 0
+      responses = [
+        [
+          LLMEvent.toolCall({
+            id: "call-denied-write",
+            name: "write",
+            input: { path: "packages/core/src/rivet/noesis.ts", content: "forbidden" },
+          }),
+          LLMEvent.toolCall({
+            id: "call-denied-bash",
+            name: "bash",
+            input: { command: "cat packages/core/src/rivet/accp.ts" },
+          }),
+          LLMEvent.stepFinish({ index: 0, reason: "tool-calls" }),
+          LLMEvent.finish({ reason: "tool-calls" }),
+        ],
+        [
+          LLMEvent.textStart({ id: "mutation-denial-answer" }),
+          LLMEvent.textDelta({ id: "mutation-denial-answer", text: "The requested mutation was blocked by policy." }),
+          LLMEvent.textEnd({ id: "mutation-denial-answer" }),
+          LLMEvent.stepFinish({ index: 0, reason: "stop" }),
+          LLMEvent.finish({ reason: "stop" }),
+        ],
+      ]
+
+      yield* session.resume(sessionID)
+
+      expect(executions).toHaveLength(0)
+      expect(requests).toHaveLength(2)
+      expect(requests[1]?.tools).toHaveLength(0)
+    }),
+  )
+
+  it.effect("halts repeated identical tool calls while allowing advancing calls", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const { db } = yield* Database.Service
+      yield* session.prompt({
+        sessionID,
+        prompt: Prompt.make({ text: "/goal Repeat the same read only when it makes progress" }),
+        resume: false,
+      })
+      requests.length = 0
+      responses = Array.from({ length: 3 }, (_, index) => [
+        LLMEvent.toolCall({ id: `call-repeat-${index}`, name: "echo", input: { text: "same" } }),
+        LLMEvent.stepFinish({ index: 0, reason: "tool-calls" }),
+        LLMEvent.finish({ reason: "tool-calls" }),
+      ])
+
+      yield* session.resume(sessionID)
+
+      expect(executions).toEqual(["same", "same", "same"])
+      const terminal = yield* db
+        .select({ data: EventTable.data })
+        .from(EventTable)
+        .where(eq(EventTable.type, EventV2.versionedType(SessionEvent.Run.Status.type, 1)))
+        .all()
+        .pipe(Effect.orDie)
+      expect(terminal.at(-1)?.data).toMatchObject({ status: { outcome: "stalled", source: "stagnation_guard" } })
     }),
   )
 
@@ -3447,7 +3700,11 @@ describe("SessionRunnerLLM", () => {
       yield* setup
       requests.length = 0
       const session = yield* SessionV2.Service
-      yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Run and verify the semantic echo" }), resume: false })
+      yield* session.prompt({
+        sessionID,
+        prompt: Prompt.make({ text: "Run and verify the semantic echo" }),
+        resume: false,
+      })
       responses = [
         [
           LLMEvent.toolCall({ id: "call-test-output", name: "echo", input: { text: "semantic echo" } }),
@@ -3455,12 +3712,20 @@ describe("SessionRunnerLLM", () => {
           LLMEvent.finish({ reason: "tool-calls" }),
         ],
         [
-          LLMEvent.toolCall({ id: "call-request-verification", name: "request_verification", input: { predicate: "bun test" } }),
+          LLMEvent.toolCall({
+            id: "call-request-verification",
+            name: "request_verification",
+            input: { predicate: "bun test" },
+          }),
           LLMEvent.stepFinish({ index: 0, reason: "tool-calls" }),
           LLMEvent.finish({ reason: "tool-calls" }),
         ],
         [
-          LLMEvent.toolCall({ id: "call-request-completion", name: "request_completion", input: { summary: "Verified" } }),
+          LLMEvent.toolCall({
+            id: "call-request-completion",
+            name: "request_completion",
+            input: { summary: "Verified" },
+          }),
           LLMEvent.stepFinish({ index: 0, reason: "tool-calls" }),
           LLMEvent.finish({ reason: "tool-calls" }),
         ],
@@ -3483,7 +3748,9 @@ describe("SessionRunnerLLM", () => {
       expect(requests).toHaveLength(4)
       expect(
         (yield* session.messages({ sessionID })).some(
-          (message) => message.type === "assistant" && message.content.some((part) => part.type === "text" && part.text.includes("semantic echo")),
+          (message) =>
+            message.type === "assistant" &&
+            message.content.some((part) => part.type === "text" && part.text.includes("semantic echo")),
         ),
       ).toBe(true)
     }),
@@ -3505,11 +3772,21 @@ describe("SessionRunnerLLM", () => {
         ],
       ]
 
-      yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Where do we configure the custom provider?" }), resume: false })
+      yield* session.prompt({
+        sessionID,
+        prompt: Prompt.make({ text: "Where do we configure the custom provider?" }),
+        resume: false,
+      })
       yield* session.resume(sessionID)
 
       const firstMessages = yield* session.messages({ sessionID })
-      expect(firstMessages.some((message) => message.type === "assistant" && message.content.some((part) => part.type === "text" && part.text === answer))).toBe(true)
+      expect(
+        firstMessages.some(
+          (message) =>
+            message.type === "assistant" &&
+            message.content.some((part) => part.type === "text" && part.text === answer),
+        ),
+      ).toBe(true)
       expect(requests).toHaveLength(1)
 
       responses = [
@@ -3521,13 +3798,27 @@ describe("SessionRunnerLLM", () => {
           LLMEvent.finish({ reason: "stop" }),
         ],
       ]
-      yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "You didn't answer my question." }), resume: false })
+      yield* session.prompt({
+        sessionID,
+        prompt: Prompt.make({ text: "You didn't answer my question." }),
+        resume: false,
+      })
       yield* session.resume(sessionID)
 
       expect(requests).toHaveLength(2)
-      expect(requests[1]?.tools?.some((tool) => ["request_completion", "request_verification"].includes(tool.name))).toBe(false)
-      expect(requests[1]?.messages.some((message) => message.role === "assistant" && message.content.some((part) => part.type === "text" && part.text === answer))).toBe(true)
-      expect((yield* SessionSemantics.load((yield* Database.Service).db, sessionID)).hardState.goalDescription).toBeNull()
+      expect(
+        requests[1]?.tools?.some((tool) => ["request_completion", "request_verification"].includes(tool.name)),
+      ).toBe(false)
+      expect(
+        requests[1]?.messages.some(
+          (message) =>
+            message.role === "assistant" &&
+            message.content.some((part) => part.type === "text" && part.text === answer),
+        ),
+      ).toBe(true)
+      expect(
+        (yield* SessionSemantics.load((yield* Database.Service).db, sessionID)).hardState.goalDescription,
+      ).toBeNull()
     }),
   )
 
@@ -3535,14 +3826,20 @@ describe("SessionRunnerLLM", () => {
     Effect.gen(function* () {
       yield* setup
       const session = yield* SessionV2.Service
-      yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Fix and verify the semantic echo" }), resume: false })
-      responses = [[
-        LLMEvent.textStart({ id: "ordinary-stop" }),
-        LLMEvent.textDelta({ id: "ordinary-stop", text: "done" }),
-        LLMEvent.textEnd({ id: "ordinary-stop" }),
-        LLMEvent.stepFinish({ index: 0, reason: "stop" }),
-        LLMEvent.finish({ reason: "stop" }),
-      ]]
+      yield* session.prompt({
+        sessionID,
+        prompt: Prompt.make({ text: "Fix and verify the semantic echo" }),
+        resume: false,
+      })
+      responses = [
+        [
+          LLMEvent.textStart({ id: "ordinary-stop" }),
+          LLMEvent.textDelta({ id: "ordinary-stop", text: "done" }),
+          LLMEvent.textEnd({ id: "ordinary-stop" }),
+          LLMEvent.stepFinish({ index: 0, reason: "stop" }),
+          LLMEvent.finish({ reason: "stop" }),
+        ],
+      ]
 
       yield* session.resume(sessionID)
 
@@ -3553,33 +3850,39 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
-  it.effect("provides epistemic tools and directives to LLM on hard state inquiry prompt without forced regex steering", () =>
-    Effect.gen(function* () {
-      yield* setup
-      const session = yield* SessionV2.Service
-      requests.length = 0
-      yield* session.prompt({
-        sessionID,
-        prompt: Prompt.make({ text: "hocam selam hard state ne durumda" }),
-        resume: false,
-      })
-      responses = [[
-        LLMEvent.textStart({ id: "text-1" }),
-        LLMEvent.textDelta({ id: "text-1", text: "Hard state kontrol ediliyor." }),
-        LLMEvent.textEnd({ id: "text-1" }),
-        LLMEvent.stepFinish({ index: 0, reason: "stop" }),
-        LLMEvent.finish({ reason: "stop" }),
-      ]]
+  it.effect(
+    "provides epistemic tools and directives to LLM on hard state inquiry prompt without forced regex steering",
+    () =>
+      Effect.gen(function* () {
+        yield* setup
+        const session = yield* SessionV2.Service
+        requests.length = 0
+        yield* session.prompt({
+          sessionID,
+          prompt: Prompt.make({ text: "hocam selam hard state ne durumda" }),
+          resume: false,
+        })
+        responses = [
+          [
+            LLMEvent.textStart({ id: "text-1" }),
+            LLMEvent.textDelta({ id: "text-1", text: "Hard state kontrol ediliyor." }),
+            LLMEvent.textEnd({ id: "text-1" }),
+            LLMEvent.stepFinish({ index: 0, reason: "stop" }),
+            LLMEvent.finish({ reason: "stop" }),
+          ],
+        ]
 
-      yield* session.resume(sessionID)
+        yield* session.resume(sessionID)
 
-      expect(requests).toHaveLength(1)
-      expect(requests[0]?.toolChoice).toBeUndefined()
-      expect(requests[0]?.tools?.some((t) => t.name === "query_epistemic_state")).toBe(true)
-      expect(requests[0]?.tools?.some((t) => t.name === "retrieve_memory")).toBe(true)
-      expect(requests[0]?.system.some((part) => part.text.includes("You are Rivet's active Cognitive Controller."))).toBe(true)
-      expect(requests[0]?.system.some((part) => part.text.includes("CRITICAL HARNESS DIRECTIVES:"))).toBe(true)
-    }),
+        expect(requests).toHaveLength(1)
+        expect(requests[0]?.toolChoice).toBeUndefined()
+        expect(requests[0]?.tools?.some((t) => t.name === "query_epistemic_state")).toBe(true)
+        expect(requests[0]?.tools?.some((t) => t.name === "retrieve_memory")).toBe(true)
+        expect(
+          requests[0]?.system.some((part) => part.text.includes("You are Rivet's active Cognitive Controller.")),
+        ).toBe(true)
+        expect(requests[0]?.system.some((part) => part.text.includes("CRITICAL HARNESS DIRECTIVES:"))).toBe(true)
+      }),
   )
 
   it.effect("provides memory tools and directives to LLM on memory prompt without forced regex steering", () =>
@@ -3592,20 +3895,24 @@ describe("SessionRunnerLLM", () => {
         prompt: Prompt.make({ text: "bi memory retrieve yapar misn" }),
         resume: false,
       })
-      responses = [[
-        LLMEvent.textStart({ id: "text-2" }),
-        LLMEvent.textDelta({ id: "text-2", text: "Hafıza taranıyor." }),
-        LLMEvent.textEnd({ id: "text-2" }),
-        LLMEvent.stepFinish({ index: 0, reason: "stop" }),
-        LLMEvent.finish({ reason: "stop" }),
-      ]]
+      responses = [
+        [
+          LLMEvent.textStart({ id: "text-2" }),
+          LLMEvent.textDelta({ id: "text-2", text: "Hafıza taranıyor." }),
+          LLMEvent.textEnd({ id: "text-2" }),
+          LLMEvent.stepFinish({ index: 0, reason: "stop" }),
+          LLMEvent.finish({ reason: "stop" }),
+        ],
+      ]
 
       yield* session.resume(sessionID)
 
       expect(requests).toHaveLength(1)
       expect(requests[0]?.toolChoice).toBeUndefined()
       expect(requests[0]?.tools?.some((t) => t.name === "retrieve_memory")).toBe(true)
-      expect(requests[0]?.system.some((part) => part.text.includes("You are Rivet's active Cognitive Controller."))).toBe(true)
+      expect(
+        requests[0]?.system.some((part) => part.text.includes("You are Rivet's active Cognitive Controller.")),
+      ).toBe(true)
     }),
   )
 
@@ -3619,13 +3926,15 @@ describe("SessionRunnerLLM", () => {
         prompt: Prompt.make({ text: "bu proje ne işe yarıyor?" }),
         resume: false,
       })
-      responses = [[
-        LLMEvent.textStart({ id: "text-q" }),
-        LLMEvent.textDelta({ id: "text-q", text: "Bu proje Rivet adında bir AI asistanıdır." }),
-        LLMEvent.textEnd({ id: "text-q" }),
-        LLMEvent.stepFinish({ index: 0, reason: "stop" }),
-        LLMEvent.finish({ reason: "stop" }),
-      ]]
+      responses = [
+        [
+          LLMEvent.textStart({ id: "text-q" }),
+          LLMEvent.textDelta({ id: "text-q", text: "Bu proje Rivet adında bir AI asistanıdır." }),
+          LLMEvent.textEnd({ id: "text-q" }),
+          LLMEvent.stepFinish({ index: 0, reason: "stop" }),
+          LLMEvent.finish({ reason: "stop" }),
+        ],
+      ]
 
       yield* session.resume(sessionID)
 
@@ -3647,13 +3956,15 @@ describe("SessionRunnerLLM", () => {
         prompt: Prompt.make({ text: "selam" }),
         resume: false,
       })
-      responses = [[
-        LLMEvent.textStart({ id: "text-g" }),
-        LLMEvent.textDelta({ id: "text-g", text: "Selam! Nasıl yardımcı olabilirim?" }),
-        LLMEvent.textEnd({ id: "text-g" }),
-        LLMEvent.stepFinish({ index: 0, reason: "stop" }),
-        LLMEvent.finish({ reason: "stop" }),
-      ]]
+      responses = [
+        [
+          LLMEvent.textStart({ id: "text-g" }),
+          LLMEvent.textDelta({ id: "text-g", text: "Selam! Nasıl yardımcı olabilirim?" }),
+          LLMEvent.textEnd({ id: "text-g" }),
+          LLMEvent.stepFinish({ index: 0, reason: "stop" }),
+          LLMEvent.finish({ reason: "stop" }),
+        ],
+      ]
 
       yield* session.resume(sessionID)
 

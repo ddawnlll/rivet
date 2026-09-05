@@ -193,6 +193,11 @@ import type {
   SessionForkResponses,
   SessionGetErrors,
   SessionGetResponses,
+  SessionInductionStart,
+  SessionInductionStartErrors,
+  SessionInductionStartResponses,
+  SessionInductionStatusErrors,
+  SessionInductionStatusResponses,
   SessionInitErrors,
   SessionInitResponses,
   SessionListErrors,
@@ -3359,6 +3364,87 @@ export class Provider extends HeyApiClient {
   }
 }
 
+export class Induction extends HeyApiClient {
+  /**
+   * Get deep induction status
+   *
+   * Report the status of the deterministic deep repository induction (hard scan) for the session's project.
+   */
+  public status<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<
+      SessionInductionStatusResponses,
+      SessionInductionStatusErrors,
+      ThrowOnError
+    >({
+      url: "/session/{sessionID}/induction",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Start deep repository induction
+   *
+   * Start a deterministic deep repository induction (hard scan): census → structure → deepread → claims assert architecture claims into Hard State. Progress streams via rivet.induction.* events.
+   */
+  public start<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      directory?: string
+      workspace?: string
+      sessionInductionStart?: SessionInductionStart
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { key: "sessionInductionStart", map: "body" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      SessionInductionStartResponses,
+      SessionInductionStartErrors,
+      ThrowOnError
+    >({
+      url: "/session/{sessionID}/induction",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+}
+
 export class Session2 extends HeyApiClient {
   /**
    * List sessions
@@ -4324,6 +4410,11 @@ export class Session2 extends HeyApiClient {
       ...options,
       ...params,
     })
+  }
+
+  private _induction?: Induction
+  get induction(): Induction {
+    return (this._induction ??= new Induction({ client: this.client }))
   }
 }
 

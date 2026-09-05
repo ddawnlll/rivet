@@ -198,7 +198,7 @@ const invokeChildTool = Effect.fn("CodeMode.invokeChildTool")(function* (input: 
         allowedScope: scope,
         allowedCapabilities: ["mcp.*", "tool.*"],
         allowMaterial: true,
-        humanApproved: true,
+        humanApproved: false,
       },
     )
     if (!admission.authorizedAction) throw new Error(admission.decision?.reason ?? "MCP action was not authorized")

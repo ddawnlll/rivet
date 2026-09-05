@@ -33,6 +33,7 @@ import { Instruction } from "@/session/instruction"
 import { LLM } from "@/session/llm"
 import { SessionProcessor } from "@/session/processor"
 import { SessionPrompt } from "@/session/prompt"
+import { RivetSessionExecution } from "@/session/rivet-execution"
 import { SessionRevert } from "@/session/revert"
 import { SessionRunState } from "@/session/run-state"
 import { Session } from "@/session/session"
@@ -298,7 +299,10 @@ export function createRoutes(
     Layer.provide(
       AppNodeBuilderV1.build(SessionV2.node, [
         [LocationServiceMap.node, locationServiceMapV2],
-        [SessionExecution.node, SessionExecutionLocal.node],
+        [
+          SessionExecution.node,
+          process.env.RIVET_HARNESS === "1" ? RivetSessionExecution.node : SessionExecutionLocal.node,
+        ],
       ]),
     ),
     Layer.provide(locationServiceMapV2),

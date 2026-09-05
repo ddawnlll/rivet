@@ -14,7 +14,10 @@ export interface Interface {
   /** Registers newly recorded work. Repeated wakeups may coalesce. */
   readonly wake: (sessionID: SessionSchema.ID) => Effect.Effect<void>
   /** Interrupt active work owned by this process. Idle interruption is a no-op. */
-  readonly interrupt: (sessionID: SessionSchema.ID) => Effect.Effect<void>
+  readonly interrupt: (
+    sessionID: SessionSchema.ID,
+    source?: "user_abort" | "host_runtime_cancellation" | "session_shutdown",
+  ) => Effect.Effect<void>
 }
 
 /** Routes execution from a Session ID to the runner owned by that Session's Location. */

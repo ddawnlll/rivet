@@ -5,11 +5,12 @@ import {
   LLMEvent,
   Message,
   SystemPart,
+  TransportReason,
   ToolDefinition,
   isContextOverflowFailure,
   type ProviderErrorEvent,
 } from "@opencode-ai/llm"
-import { Cause, DateTime, Effect, Exit, FiberSet, Layer, Option, Semaphore, Stream } from "effect"
+import { Cause, DateTime, Duration, Effect, Exit, FiberSet, Layer, Option, Semaphore, Stream } from "effect"
 import { AgentV2 } from "../../agent"
 import { AgentPlugin } from "../../plugin/agent"
 import { Config } from "../../config"
@@ -52,6 +53,25 @@ import { type ModelInvocation, ModelInvocationGate, type ModelInvocationReceipt 
 import { FlightRecorder, ExecutionEconomics, type ActiveSpanContext } from "../../rivet/flight-recorder"
 import { SessionTable } from "../sql"
 import { eq } from "drizzle-orm"
+import { SessionStatusEvent } from "@opencode-ai/schema/session-status-event"
+
+const PROVIDER_INACTIVITY_TIMEOUT = Duration.seconds(30)
+const PROVIDER_TURN_TIMEOUT = Duration.minutes(15)
+const TOOL_SETTLEMENT_TIMEOUT = Duration.minutes(2)
+
+function stableToolFingerprint(name: string, input: unknown): string {
+  return `${name}:${JSON.stringify(stableToolValue(input))}`
+}
+
+function stableToolValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(stableToolValue)
+  if (typeof value !== "object" || value === null) return value
+  return Object.fromEntries(
+    Object.entries(value)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, child]) => [key, stableToolValue(child)]),
+  )
+}
 
 /**
  * Runs one durable Rivet Session until its Harness-owned continuation settles.
@@ -119,6 +139,26 @@ const layer = Layer.effect(
     const config = yield* Config.Service
     const snapshots = yield* Snapshot.Service
     const db = (yield* Database.Service).db
+    const publishStatus = Effect.fn("SessionRunner.publishStatus")(function* (
+      session: SessionSchema.Info,
+      status: SessionStatusEvent.Info,
+    ) {
+      yield* events.publish(
+        SessionStatusEvent.Status,
+        { sessionID: session.id, status },
+        { location: session.location },
+      )
+      if (status.type === "idle" && status.outcome !== undefined) {
+        yield* events.publish(
+          SessionEvent.Run.Status,
+          { sessionID: session.id, timestamp: yield* DateTime.now, status },
+          { location: session.location },
+        )
+        // Preserve the legacy wake-up edge for consumers that still await the
+        // deprecated Idle event; the richer status carries the actual outcome.
+        yield* events.publish(SessionStatusEvent.Idle, { sessionID: session.id }, { location: session.location })
+      }
+    })
     // Process-lifetime fiber set so the background deep induction outlives the
     // drain that started it without being joined by tool settlement.
     const inductionFibers = yield* FiberSet.makeRuntime<never, void, never>()
@@ -155,7 +195,16 @@ const layer = Layer.effect(
     })
 
     const awaitToolFibers = (fibers: FiberSet.FiberSet<void, ToolOutputStore.Error>) =>
-      Effect.raceFirst(FiberSet.join(fibers), FiberSet.awaitEmpty(fibers))
+      Effect.timeoutOrElse(Effect.raceFirst(FiberSet.join(fibers), FiberSet.awaitEmpty(fibers)), {
+        duration: TOOL_SETTLEMENT_TIMEOUT,
+        orElse: () =>
+          Effect.fail(
+            new ToolOutputStore.StorageError({
+              operation: "write",
+              cause: new Error("Tool settlement exceeded the two-minute limit"),
+            }),
+          ),
+      })
 
     // Match V1: declining a user prompt halts the loop instead of becoming model-facing tool output.
     const isUserDeclined = (cause: Cause.Cause<unknown>) =>
@@ -197,6 +246,66 @@ const layer = Layer.effect(
       const session = yield* getSession(sessionID)
       if (session.location.directory !== location.directory || session.location.workspaceID !== location.workspaceID)
         return yield* Effect.interrupt
+      let lastCompletedActivity: SessionStatusEvent.CompletedActivity | undefined
+      const activityLabel = (operation: string) =>
+        ({
+          "turn.admission": "Understanding request",
+          "goal.compile": "Compiling goal",
+          "hardstate.load": "Loading Hard State",
+          "recall.query": "Searching memory",
+          "recall.index_delta": "Indexing memory",
+          "cognitive_view.compile": "Compiling context",
+          "prompt.assemble": "Preparing model request",
+          "provider.request": "Preparing model request",
+          "provider.wait_first_token": "Waiting for model",
+          "provider.stream": "Generating",
+          "tool.dispatch": "Checking authorization",
+          "tool.execute": "Executing tool",
+          "tool.result_process": "Processing tool result",
+          "praxis.evaluate": "Verifying evidence",
+          "completion.evaluate": "Checking completion",
+          "provider.finalize": "Delivering response",
+        })[operation] ?? operation
+      const publishActivity = (span: ActiveSpanContext) =>
+        publishStatus(session, {
+          type: "busy",
+          activity: {
+            operation: span.operation,
+            label: activityLabel(span.operation),
+            spanId: span.spanId,
+            startedAt: Date.parse(span.wallStart),
+          },
+          ...(lastCompletedActivity ? { lastCompleted: lastCompletedActivity } : {}),
+        })
+      const publishCompletedActivity = (span: ReturnType<typeof FlightRecorder.endSpan>) => {
+        lastCompletedActivity = {
+          operation: span.operation,
+          label: activityLabel(span.operation),
+          spanId: span.spanId,
+          durationMs: Math.max(0, Math.round(span.duration)),
+        }
+      }
+      const withActivity = <A, E, R>(
+        category: Parameters<typeof FlightRecorder.startSpan>[0],
+        operation: Parameters<typeof FlightRecorder.startSpan>[1],
+        effect: Effect.Effect<A, E, R>,
+        options?: Parameters<typeof FlightRecorder.startSpan>[2],
+      ) =>
+        Effect.gen(function* () {
+          const span = FlightRecorder.startSpan(category, operation, options)
+          yield* publishActivity(span)
+          const exit = yield* effect.pipe(Effect.exit)
+          const completed = FlightRecorder.endSpan(span, {
+            status: Exit.isSuccess(exit) ? "ok" : Cause.hasInterrupts(exit.cause) ? "cancelled" : "error",
+          })
+          publishCompletedActivity(completed)
+          yield* publishStatus(session, {
+            type: "busy",
+            ...(lastCompletedActivity ? { lastCompleted: lastCompletedActivity } : {}),
+          })
+          if (Exit.isFailure(exit)) return yield* Effect.failCause(exit.cause)
+          return exit.value
+        })
       const semantics = yield* SessionSemantics.load(db, session.id)
       yield* semantics.ensureColdStart(events, session.location.directory)
       // Fork the deep repository induction in the background: the first drain
@@ -212,6 +321,7 @@ const layer = Layer.effect(
       let requireResponse = responseRequired
       let currentStep = step
       let toolCallsInTurn = 0
+      let lastSettledTool: { readonly fingerprint: string; readonly summary: string } | undefined
       if (promotion) {
         const cutoff = yield* EventV2.latestSequence(db, session.id)
         let promoted = 0
@@ -249,7 +359,7 @@ const layer = Layer.effect(
       let effectiveGoal = semantics.hardState.goalDescription
       if (latestAdmission?.shouldCreateGoal && latestAdmission.goalText && latestAdmission.goalText.length > 0) {
         if (semantics.hardState.goalDescription !== latestAdmission.goalText) {
-          yield* FlightRecorder.withSpanEffect(
+          yield* withActivity(
             "turn",
             "goal.compile",
             semantics.ensureGoal(
@@ -267,15 +377,10 @@ const layer = Layer.effect(
         if (initialAdmission.shouldCreateGoal && initialAdmission.goalText && initialAdmission.goalText.length > 0) {
           effectiveGoal = initialAdmission.goalText
           if (!semantics.hardState.goalDescription) {
-            yield* FlightRecorder.withSpanEffect(
+            yield* withActivity(
               "turn",
               "goal.compile",
-              semantics.ensureGoal(
-                events,
-                effectiveGoal,
-                session.location.directory,
-                initialAdmission.obligationKind,
-              ),
+              semantics.ensureGoal(events, effectiveGoal, session.location.directory, initialAdmission.obligationKind),
               { sessionId: session.id, turnId: currentStep },
             )
           }
@@ -283,117 +388,121 @@ const layer = Layer.effect(
       }
 
       // Explicit non-goal turn only when neither HardState nor the current prompt has a goal
-      const isExplicitNonGoalTurn = !effectiveGoal && Boolean(
-        latestAdmission && !latestAdmission.shouldCreateGoal,
-      )
+      const isExplicitNonGoalTurn = !effectiveGoal && Boolean(latestAdmission && !latestAdmission.shouldCreateGoal)
 
       const isLastStep = agent.info?.steps !== undefined && currentStep >= agent.info.steps
       const responseOnly = responseRequired
-      const toolMaterialization = responseOnly || isLastStep ? undefined : yield* tools.materialize(agent.info?.permissions)
+      const toolMaterialization =
+        responseOnly || isLastStep ? undefined : yield* tools.materialize(agent.info?.permissions)
       const promptCacheKey = /^ses_[0-9a-f]{64}$/.test(session.id) ? session.id.slice(4) : session.id
-      const hasAutonomousGoal = Boolean(
-        effectiveGoal ||
-        (latestAdmission && latestAdmission.shouldCreateGoal),
-      )
-      const availableActions = isLastStep || !toolMaterialization || toolMaterialization.definitions.length === 0
-        ? []
-        : [
-            ...toolMaterialization.definitions,
-            ...(hasAutonomousGoal
-              ? [
-                  new ToolDefinition({
-                    name: "request_completion",
-                    description:
-                      "Propose completion only for active autonomous goals when COMPLETION READINESS is READY and all required obligations are closed and verified. Do NOT call when BLOCKED or for conversational inquiries.",
-                    inputSchema: {
-                      type: "object",
-                      properties: { summary: { type: "string" } },
-                      required: ["summary"],
-                      additionalProperties: false,
-                    },
-                  }),
-                  new ToolDefinition({
-                    name: "request_verification",
-                    description:
-                      "Ask Praxis to verify an observed execution (e.g. test run). Do NOT call this for epistemic inquiries; only call this when an execution obligation requires Praxis verification.",
-                    inputSchema: {
-                      type: "object",
-                      properties: {
-                        predicate: { type: "string" },
-                        obligation_id: { type: "string" },
+      const hasAutonomousGoal = Boolean(effectiveGoal || (latestAdmission && latestAdmission.shouldCreateGoal))
+      const availableActions =
+        isLastStep || !toolMaterialization || toolMaterialization.definitions.length === 0
+          ? []
+          : [
+              ...toolMaterialization.definitions,
+              ...(hasAutonomousGoal
+                ? [
+                    new ToolDefinition({
+                      name: "request_completion",
+                      description:
+                        "Propose completion only for active autonomous goals when COMPLETION READINESS is READY and all required obligations are closed and verified. Do NOT call when BLOCKED or for conversational inquiries.",
+                      inputSchema: {
+                        type: "object",
+                        properties: { summary: { type: "string" } },
+                        required: ["summary"],
+                        additionalProperties: false,
                       },
-                      required: ["predicate"],
-                      additionalProperties: false,
-                    },
-                  }),
-                  new ToolDefinition({
-                    name: "invalidate_obligation",
-                    description:
-                      "Invalidate or waive an inapplicable or malformed obligation (e.g. created from conversational text or an impossible predicate). Provide the obligation ID and clear rationale.",
-                    inputSchema: {
-                      type: "object",
-                      properties: {
-                        obligation_id: { type: "string", description: "The obligation ID to invalidate" },
-                        reason: { type: "string", description: "Clear explanation of why this obligation is invalid or inapplicable" },
+                    }),
+                    new ToolDefinition({
+                      name: "request_verification",
+                      description:
+                        "Ask Praxis to verify an observed execution (e.g. test run). Do NOT call this for epistemic inquiries; only call this when an execution obligation requires Praxis verification.",
+                      inputSchema: {
+                        type: "object",
+                        properties: {
+                          predicate: { type: "string" },
+                          obligation_id: { type: "string" },
+                        },
+                        required: ["predicate"],
+                        additionalProperties: false,
                       },
-                      required: ["obligation_id", "reason"],
-                      additionalProperties: false,
+                    }),
+                    new ToolDefinition({
+                      name: "invalidate_obligation",
+                      description:
+                        "Invalidate or waive an inapplicable or malformed obligation (e.g. created from conversational text or an impossible predicate). Provide the obligation ID and clear rationale.",
+                      inputSchema: {
+                        type: "object",
+                        properties: {
+                          obligation_id: { type: "string", description: "The obligation ID to invalidate" },
+                          reason: {
+                            type: "string",
+                            description: "Clear explanation of why this obligation is invalid or inapplicable",
+                          },
+                        },
+                        required: ["obligation_id", "reason"],
+                        additionalProperties: false,
+                      },
+                    }),
+                  ]
+                : []),
+              new ToolDefinition({
+                name: "propose_claim",
+                description: "Propose a supported claim backed by already admitted evidence.",
+                inputSchema: {
+                  type: "object",
+                  properties: {
+                    proposition: { type: "string" },
+                    supporting_evidence: { type: "array", items: { type: "string" } },
+                  },
+                  required: ["proposition"],
+                  additionalProperties: false,
+                },
+              }),
+              new ToolDefinition({
+                name: "query_epistemic_state",
+                description:
+                  "Query Rivet's authoritative epistemic state (Noesis HardState revision, active validated claims, open obligations, premise conflicts, and memory frontier). NOTE: Hard State is an internal runtime state, NOT files on disk. Do NOT use glob/grep to look for state files; call this tool instead.",
+                inputSchema: {
+                  type: "object",
+                  properties: {
+                    include_frontier: { type: "boolean", description: "Include associative memory frontier" },
+                  },
+                  additionalProperties: false,
+                },
+              }),
+              new ToolDefinition({
+                name: "retrieve_memory",
+                description:
+                  "Search and retrieve associative project memory, past session decisions, architectural conventions, and failure-avoidance patterns from Rivet's memory store. NOTE: Memory records are stored internally in Rivet's recall store, NOT in workspace files. Do NOT use glob/grep to search for memory files; call this tool instead.",
+                inputSchema: {
+                  type: "object",
+                  properties: {
+                    query: { type: "string", description: "Search query or topic to recall from memory" },
+                    symbols: {
+                      type: "array",
+                      items: { type: "string" },
+                      description: "Specific code symbols to recall related memories for",
                     },
-                  }),
-                ]
-              : []),
-            new ToolDefinition({
-              name: "propose_claim",
-              description: "Propose a supported claim backed by already admitted evidence.",
-              inputSchema: {
-                type: "object",
-                properties: {
-                  proposition: { type: "string" },
-                  supporting_evidence: { type: "array", items: { type: "string" } },
+                  },
+                  additionalProperties: false,
                 },
-                required: ["proposition"],
-                additionalProperties: false,
-              },
-            }),
-            new ToolDefinition({
-              name: "query_epistemic_state",
-              description:
-                "Query Rivet's authoritative epistemic state (Noesis HardState revision, active validated claims, open obligations, premise conflicts, and memory frontier). NOTE: Hard State is an internal runtime state, NOT files on disk. Do NOT use glob/grep to look for state files; call this tool instead.",
-              inputSchema: {
-                type: "object",
-                properties: {
-                  include_frontier: { type: "boolean", description: "Include associative memory frontier" },
-                },
-                additionalProperties: false,
-              },
-            }),
-            new ToolDefinition({
-              name: "retrieve_memory",
-              description:
-                "Search and retrieve associative project memory, past session decisions, architectural conventions, and failure-avoidance patterns from Rivet's memory store. NOTE: Memory records are stored internally in Rivet's recall store, NOT in workspace files. Do NOT use glob/grep to search for memory files; call this tool instead.",
-              inputSchema: {
-                type: "object",
-                properties: {
-                  query: { type: "string", description: "Search query or topic to recall from memory" },
-                  symbols: { type: "array", items: { type: "string" }, description: "Specific code symbols to recall related memories for" },
-                },
-                additionalProperties: false,
-              },
-            }),
-          ]
+              }),
+            ]
       const invocationID = createInvocationId(`${session.id}:${currentStep}`)
       yield* semantics.recordInvocation(events, invocationID, model.id)
-      const cognitiveView = yield* FlightRecorder.withSpanEffect(
+      const cognitiveView = yield* withActivity(
         "cognitive_view",
         "cognitive_view.compile",
         semantics.cognitiveView({
           repositoryId: session.location.directory,
           goalDescription: hasAutonomousGoal
-            ? ((semantics.hardState.goalDescription ?? effectiveGoal) ?? undefined)
+            ? (semantics.hardState.goalDescription ?? effectiveGoal ?? undefined)
             : isExplicitNonGoalTurn
               ? ""
               : undefined,
-          userPrompt: (latestUserMessage ?? effectiveGoal) ?? undefined,
+          userPrompt: latestUserMessage ?? effectiveGoal ?? undefined,
         }),
         { sessionId: session.id, turnId: currentStep },
       )
@@ -407,14 +516,12 @@ const layer = Layer.effect(
       const gateEvaluation = ModelInvocationGate.evaluate(invocation)
       const baseRivetSystem = cognitiveView.formatPromptBlock()
       const rivetStateSystem =
-        agent.info?.system === undefined
-          ? `${AgentPlugin.BUILD_SYSTEM}\n\n${baseRivetSystem}`
-          : baseRivetSystem
+        agent.info?.system === undefined ? `${AgentPlugin.BUILD_SYSTEM}\n\n${baseRivetSystem}` : baseRivetSystem
       const toolChoice = responseOnly || isLastStep ? "none" : undefined
-      const request = FlightRecorder.withSpan(
+      const request = yield* withActivity(
         "cognitive_view",
         "prompt.assemble",
-        () =>
+        Effect.sync(() =>
           LLM.request({
             model,
             http: {
@@ -442,6 +549,7 @@ const layer = Layer.effect(
             tools: availableActions,
             toolChoice,
           }),
+        ),
         { sessionId: session.id, turnId: currentStep },
       )
       TokenLedger.record({
@@ -477,6 +585,7 @@ const layer = Layer.effect(
         provider: model.provider,
         model: model.id,
       })
+      yield* publishActivity(providerReqSpan)
       let ttftSpan: ActiveSpanContext | undefined = FlightRecorder.startSpan("provider", "provider.wait_first_token", {
         sessionId: session.id,
         turnId: currentStep,
@@ -484,22 +593,39 @@ const layer = Layer.effect(
         provider: model.provider,
         model: model.id,
       })
+      yield* publishActivity(ttftSpan)
       let streamSpan: ActiveSpanContext | undefined = undefined
       let firstTokenSeen = false
 
       const providerStream = llm.stream(request).pipe(
+        Stream.timeoutOrElse({
+          duration: PROVIDER_INACTIVITY_TIMEOUT,
+          orElse: () =>
+            Stream.fail(
+              new LLMError({
+                module: "SessionRunner",
+                method: "stream",
+                reason: new TransportReason({
+                  message: "Provider response stalled before the next chunk",
+                  kind: "timeout",
+                }),
+              }),
+            ),
+        }),
         Stream.runForEach((event) =>
           Effect.gen(function* () {
-            if (!firstTokenSeen && (
-              event.type === "text-start" ||
-              event.type === "text-delta" ||
-              event.type === "reasoning-start" ||
-              event.type === "reasoning-delta" ||
-              event.type === "tool-call"
-            )) {
+            if (
+              !firstTokenSeen &&
+              (event.type === "text-start" ||
+                event.type === "text-delta" ||
+                event.type === "reasoning-start" ||
+                event.type === "reasoning-delta" ||
+                event.type === "tool-call")
+            ) {
               firstTokenSeen = true
               if (ttftSpan) {
-                FlightRecorder.endSpan(ttftSpan, { status: "ok" })
+                const completed = FlightRecorder.endSpan(ttftSpan, { status: "ok" })
+                publishCompletedActivity(completed)
                 ttftSpan = undefined
               }
               streamSpan = FlightRecorder.startSpan("provider", "provider.stream", {
@@ -509,6 +635,7 @@ const layer = Layer.effect(
                 provider: model.provider,
                 model: model.id,
               })
+              yield* publishActivity(streamSpan)
             }
             if (overflowFailure || publisher.hasProviderError()) return
             if (LLMEvent.is.providerError(event)) {
@@ -537,18 +664,14 @@ const layer = Layer.effect(
               "governance",
               "accp.evaluate",
               () =>
-                semantics.admitProviderCommitment(
-                  { id: event.id, name: event.name, input: event.input },
-                  rivetScope,
-                  {
-                    repository: session.location.directory,
-                    currentRevision: semantics.hardState.revision,
-                    allowedScope: rivetScope,
-                    allowedCapabilities: ["file.read", "file.write", "process.exec", "tool.*"],
-                    allowMaterial: true,
-                    humanApproved: true,
-                  },
-                ),
+                semantics.admitProviderCommitment({ id: event.id, name: event.name, input: event.input }, rivetScope, {
+                  repository: session.location.directory,
+                  currentRevision: semantics.hardState.revision,
+                  allowedScope: rivetScope,
+                  allowedCapabilities: ["file.read", "file.write", "process.exec", "tool.*"],
+                  allowMaterial: true,
+                  humanApproved: false,
+                }),
               { sessionId: session.id, turnId: currentStep, tool: event.name },
             )
             if (commitment.commitment.type === "completion_proposal") {
@@ -566,15 +689,15 @@ const layer = Layer.effect(
               const rejectionMessage = decision.internalClosureReady
                 ? "Rivet internal completion checks passed. The requested answer has not been delivered yet; respond to the user with the answer before completion."
                 : !decision.completed
-                ? [
-                    "Rivet completion rejected: The proposed transition did not satisfy the contract.",
-                    "Status: BLOCKED",
-                    ...(decision.blockers.length > 0
-                      ? ["Blockers:", ...decision.blockers.map((b) => `- [BLOCKER] ${b}`)]
-                      : ["Blockers: Open obligations remain unverified."]),
-                    "Directive: Target ONLY the reported blockers above. Do NOT perform unrelated work, invent additional verification, or run unprompted shell commands.",
-                  ].join("\n")
-                : "Rivet completion accepted: All obligations satisfied and verified."
+                  ? [
+                      "Rivet completion rejected: The proposed transition did not satisfy the contract.",
+                      "Status: BLOCKED",
+                      ...(decision.blockers.length > 0
+                        ? ["Blockers:", ...decision.blockers.map((b) => `- [BLOCKER] ${b}`)]
+                        : ["Blockers: Open obligations remain unverified."]),
+                      "Directive: Target ONLY the reported blockers above. Do NOT perform unrelated work, invent additional verification, or run unprompted shell commands.",
+                    ].join("\n")
+                  : "Rivet completion accepted: All obligations satisfied and verified."
 
               yield* publish(
                 LLMEvent.toolResult({
@@ -618,7 +741,8 @@ const layer = Layer.effect(
                     name: event.name,
                     result: {
                       type: "text",
-                      value: "Praxis inquiry verification passed: Epistemic inquiry satisfied by authoritative projection.",
+                      value:
+                        "Praxis inquiry verification passed: Epistemic inquiry satisfied by authoritative projection.",
                     },
                   }),
                 )
@@ -627,12 +751,15 @@ const layer = Layer.effect(
               const receipt = verification.value.receipt
               const isPassed = receipt.passed
               const diagnosticsMsg = receipt.diagnostics ? `\nDiagnostics: ${receipt.diagnostics}` : ""
-              const reasonCodesMsg = receipt.reasonCodes?.length ? `\nReason Codes: ${receipt.reasonCodes.join(", ")}` : ""
+              const reasonCodesMsg = receipt.reasonCodes?.length
+                ? `\nReason Codes: ${receipt.reasonCodes.join(", ")}`
+                : ""
 
               const isFileNotFound = receipt.reasonCodes?.includes("FILE_NOT_FOUND")
               const isPathEscapes = receipt.reasonCodes?.includes("PATH_ESCAPES_REPOSITORY")
               const isClaimNotAdmitted = receipt.reasonCodes?.includes("CLAIM_NOT_ADMITTED")
-              const isTestFailure = receipt.reasonCodes?.includes("TEST_FAILED") || receipt.reasonCodes?.includes("TESTS_FAILED")
+              const isTestFailure =
+                receipt.reasonCodes?.includes("TEST_FAILED") || receipt.reasonCodes?.includes("TESTS_FAILED")
 
               const gateRejections = semantics.hardState.gateRejectionCount
               const maxGateRetries = 3
@@ -647,16 +774,20 @@ const layer = Layer.effect(
                   : "The requested file or target was not found on disk. If the user asked whether the file exists, report that it does NOT exist. Do NOT search or debug Rivet harness source code."
                 retryAllowed = hasAutonomousGoal && canRetry
               } else if (isPathEscapes) {
-                directiveMsg = "Path resolves outside the permitted workspace scope. If the path constraint is malformed or inapplicable, call invalidate_obligation with the obligation ID and reason. Do NOT search or debug Rivet harness source code."
+                directiveMsg =
+                  "Path resolves outside the permitted workspace scope. If the path constraint is malformed or inapplicable, call invalidate_obligation with the obligation ID and reason. Do NOT search or debug Rivet harness source code."
                 retryAllowed = canRetry
               } else if (isClaimNotAdmitted) {
-                directiveMsg = "Required claim has not been admitted. If you observed evidence via tools, call propose_claim with the proposition and supporting evidence ID from RECENT AUTHORITATIVE EVIDENCE. Do NOT search or debug Rivet harness source code."
+                directiveMsg =
+                  "Required claim has not been admitted. If you observed evidence via tools, call propose_claim with the proposition and supporting evidence ID from RECENT AUTHORITATIVE EVIDENCE. Do NOT search or debug Rivet harness source code."
                 retryAllowed = canRetry
               } else if (isTestFailure) {
-                directiveMsg = "Inspect and fix the reported test failure. Do NOT fabricate files or run unrelated commands."
+                directiveMsg =
+                  "Inspect and fix the reported test failure. Do NOT fabricate files or run unrelated commands."
                 retryAllowed = canRetry
               } else if (!isPassed) {
-                directiveMsg = "Verification could not be satisfied. Report the unresolved verification state to the user. Do NOT search or debug Rivet harness source code."
+                directiveMsg =
+                  "Verification could not be satisfied. Report the unresolved verification state to the user. Do NOT search or debug Rivet harness source code."
                 retryAllowed = canRetry
               }
 
@@ -759,7 +890,9 @@ const layer = Layer.effect(
                 ...(snapshot.premiseConflicts.length > 0
                   ? [
                       `Premise Conflicts (${snapshot.premiseConflicts.length}):`,
-                      ...snapshot.premiseConflicts.map((pc) => `  - [PREMISE CONFLICT] User: "${pc.userPremise}" vs Valid: "${pc.currentValidState}"`),
+                      ...snapshot.premiseConflicts.map(
+                        (pc) => `  - [PREMISE CONFLICT] User: "${pc.userPremise}" vs Valid: "${pc.currentValidState}"`,
+                      ),
                     ]
                   : []),
                 `Memory Frontier (${memoryItems.length} items):`,
@@ -776,9 +909,10 @@ const layer = Layer.effect(
                 summary: `Authoritative epistemic projection served at revision ${snapshot.revision.toJSON()}`,
                 atRevision: snapshot.revision,
               })
-              const closureSummary = inquiryReceipts.length > 0
-                ? `\n✓ Epistemic inquiry satisfied by authoritative Noesis projection @${snapshot.revision.toJSON()}`
-                : ""
+              const closureSummary =
+                inquiryReceipts.length > 0
+                  ? `\n✓ Epistemic inquiry satisfied by authoritative Noesis projection @${snapshot.revision.toJSON()}`
+                  : ""
 
               yield* publish(
                 LLMEvent.toolResult({
@@ -817,13 +951,17 @@ const layer = Layer.effect(
                 ...(memoryFrontier?.rejected ?? []),
               ]
 
-              const symbolsStr = memoryFrontier?.relatedSymbols?.length ? ` (symbols: ${memoryFrontier.relatedSymbols.join(", ")})` : ""
+              const symbolsStr = memoryFrontier?.relatedSymbols?.length
+                ? ` (symbols: ${memoryFrontier.relatedSymbols.join(", ")})`
+                : ""
               const summary = [
                 `=== RIVET PROJECT MEMORY RETRIEVAL ===`,
                 `Query: "${queryPrompt}"`,
                 `Recalled Records (${items.length}):`,
                 ...(items.length > 0
-                  ? items.map((m) => `  - [${m.type}] ${m.summary}${m.tags?.length ? ` [tags: ${m.tags.join(", ")}]` : ""}`)
+                  ? items.map(
+                      (m) => `  - [${m.type}] ${m.summary}${m.tags?.length ? ` [tags: ${m.tags.join(", ")}]` : ""}`,
+                    )
                   : [`  (No associative memory records matched query in memory store)`]),
                 ...(symbolsStr ? [`Related Symbols: ${memoryFrontier?.relatedSymbols.join(", ")}`] : []),
               ].join("\n")
@@ -862,7 +1000,10 @@ const layer = Layer.effect(
                 LLMEvent.toolResult({
                   id: event.id,
                   name: event.name,
-                  result: { type: "error", value: `ACCP action rejected: ${commitment.decision?.reason ?? "not authorized"}` },
+                  result: {
+                    type: "error",
+                    value: `ACCP action rejected: ${commitment.decision?.reason ?? "not authorized"}`,
+                  },
                 }),
               )
               return
@@ -886,30 +1027,67 @@ const layer = Layer.effect(
                   name: event.name,
                   result: {
                     type: "error",
-                    value: "ACCP policy violation: Active goal cannot expand into inspecting or debugging Rivet's internal runtime harness or governance modules solely because internal verification or bookkeeping failed. Deliver the response to the user with existing workspace observations.",
+                    value:
+                      "ACCP policy violation: Active goal cannot expand into inspecting or debugging Rivet's internal runtime harness or governance modules solely because internal verification or bookkeeping failed. Deliver the response to the user with existing workspace observations.",
                   },
                 }),
               )
               return
             }
 
-            yield* FlightRecorder.withSpanEffect(
+            const claim = yield* semantics.claimExecution(events, authorizedAction)
+            if (claim.status !== "claimed") {
+              needsContinuation = false
+              requireResponse = true
+              yield* publish(
+                LLMEvent.toolResult({
+                  id: event.id,
+                  name: event.name,
+                  result: {
+                    type: "error",
+                    value:
+                      claim.status === "settled"
+                        ? "This action was already settled; no duplicate side effect was executed."
+                        : claim.message,
+                  },
+                }),
+              )
+              return
+            }
+
+            yield* withActivity(
               "tool",
               "tool.execute",
               Effect.uninterruptibleMask((restore) =>
                 restore(
-                  toolMaterialization.settle({
-                    sessionID: session.id,
-                    agent: agent.id,
-                    assistantMessageID,
-                    action: authorizedAction,
+                  Effect.gen(function* () {
+                    if (!semantics.isActionCurrent(authorizedAction)) {
+                      return {
+                        result: {
+                          type: "error" as const,
+                          value: "Action authorization became stale before execution; no side effect was executed.",
+                        },
+                      }
+                    }
+                    return yield* toolMaterialization.settle({
+                      sessionID: session.id,
+                      agent: agent.id,
+                      assistantMessageID,
+                      action: authorizedAction,
+                    })
                   }),
                 ).pipe(
                   Effect.tap((settlement) => {
+                    if (settlement.receipt) {
+                      lastSettledTool = {
+                        fingerprint: stableToolFingerprint(event.name, event.input),
+                        summary: settlement.receipt.outputSummary,
+                      }
+                    }
                     if (!settlement.receipt) return Effect.void
                     const receipt = settlement.receipt
                     return withSemanticCommit(
-                      FlightRecorder.withSpanEffect(
+                      withActivity(
                         "tool",
                         "tool.result_process",
                         Effect.gen(function* () {
@@ -945,6 +1123,20 @@ const layer = Layer.effect(
             ).pipe(FiberSet.run(toolFibers))
           }),
         ),
+        Effect.timeoutOrElse({
+          duration: PROVIDER_TURN_TIMEOUT,
+          orElse: () =>
+            Effect.fail(
+              new LLMError({
+                module: "SessionRunner",
+                method: "stream",
+                reason: new TransportReason({
+                  message: "Provider turn exceeded the session time limit",
+                  kind: "timeout",
+                }),
+              }),
+            ),
+        }),
         Effect.ensuring(
           withPublication(
             FlightRecorder.withSpanEffect(
@@ -952,14 +1144,18 @@ const layer = Layer.effect(
               "provider.finalize",
               Effect.gen(function* () {
                 if (ttftSpan) {
-                  FlightRecorder.endSpan(ttftSpan, { status: "ok" })
+                  publishCompletedActivity(FlightRecorder.endSpan(ttftSpan, { status: "ok" }))
                   ttftSpan = undefined
                 }
                 if (streamSpan) {
-                  FlightRecorder.endSpan(streamSpan, { status: "ok" })
+                  publishCompletedActivity(FlightRecorder.endSpan(streamSpan, { status: "ok" }))
                   streamSpan = undefined
                 }
-                FlightRecorder.endSpan(providerReqSpan, { status: "ok" })
+                publishCompletedActivity(FlightRecorder.endSpan(providerReqSpan, { status: "ok" }))
+                yield* publishStatus(session, {
+                  type: "busy",
+                  ...(lastCompletedActivity ? { lastCompleted: lastCompletedActivity } : {}),
+                })
                 yield* publisher.flush()
               }),
               { sessionId: session.id, turnId: currentStep },
@@ -1149,13 +1345,17 @@ const layer = Layer.effect(
             needsContinuation:
               !completionAccepted &&
               !publisher.hasProviderError() &&
-              (needsContinuation || pendingCompletion !== undefined || (requireResponse && !publisher.hasUserFacingText())),
+              (needsContinuation ||
+                pendingCompletion !== undefined ||
+                (requireResponse && !publisher.hasUserFacingText())),
             step: currentStep,
             stallSignature,
             pendingCompletion,
             responseRequired: requireResponse && !publisher.hasUserFacingText(),
             toolCallsCount: toolCallsInTurn,
             hasActiveGoal: Boolean(hasAutonomousGoal && openExecutionObligations.length > 0),
+            lastToolFingerprint: lastSettledTool?.fingerprint,
+            lastToolSummary: lastSettledTool?.summary,
           }
         }),
       )
@@ -1168,6 +1368,8 @@ const layer = Layer.effect(
       readonly responseRequired: boolean
       readonly toolCallsCount: number
       readonly hasActiveGoal: boolean
+      readonly lastToolFingerprint?: string
+      readonly lastToolSummary?: string
     }
     type RunTurn = (
       sessionID: SessionSchema.ID,
@@ -1177,97 +1379,214 @@ const layer = Layer.effect(
       responseRequired?: boolean,
     ) => Effect.Effect<RunTurnResult, RunError>
 
-    const runAfterOverflowCompaction: RunTurn = Effect.fnUntraced(function* (sessionID, promotion, step, completionResponse, responseRequired) {
-      return yield* runTurnAttempt(sessionID, promotion, step, undefined, completionResponse, responseRequired).pipe(
-        Effect.catchDefect(
-          Effect.fnUntraced(function* (defect) {
-            if (!(defect instanceof TurnTransitionError)) return yield* Effect.die(defect)
-            if (defect.transition._tag === "ContinueAfterOverflowCompaction")
-              return yield* Effect.die("Post-compaction provider attempt cannot recover another overflow")
-            yield* Effect.yieldNow
-            return yield* runAfterOverflowCompaction(sessionID, undefined, defect.transition.step, completionResponse, responseRequired)
-          }),
-        ),
-      )
-    })
+    const runAfterOverflowCompaction: RunTurn = Effect.fnUntraced(
+      function* (sessionID, promotion, step, completionResponse, responseRequired) {
+        return yield* runTurnAttempt(sessionID, promotion, step, undefined, completionResponse, responseRequired).pipe(
+          Effect.catchDefect(
+            Effect.fnUntraced(function* (defect) {
+              if (!(defect instanceof TurnTransitionError)) return yield* Effect.die(defect)
+              if (defect.transition._tag === "ContinueAfterOverflowCompaction")
+                return yield* Effect.die("Post-compaction provider attempt cannot recover another overflow")
+              yield* Effect.yieldNow
+              return yield* runAfterOverflowCompaction(
+                sessionID,
+                undefined,
+                defect.transition.step,
+                completionResponse,
+                responseRequired,
+              )
+            }),
+          ),
+        )
+      },
+    )
 
-    const runTurn: RunTurn = Effect.fnUntraced(function* (sessionID, promotion, step, completionResponse, responseRequired) {
-      return yield* runTurnAttempt(sessionID, promotion, step, compaction.compactAfterOverflow, completionResponse, responseRequired).pipe(
-        Effect.catchDefect(
-          Effect.fnUntraced(function* (defect) {
-            if (!(defect instanceof TurnTransitionError)) return yield* Effect.die(defect)
-            yield* Effect.yieldNow
-            if (defect.transition._tag === "ContinueAfterOverflowCompaction")
-              return yield* runAfterOverflowCompaction(sessionID, undefined, defect.transition.step, completionResponse, responseRequired)
-            return yield* runTurn(sessionID, undefined, defect.transition.step, completionResponse, responseRequired)
-          }),
-        ),
-      )
-    })
+    const runTurn: RunTurn = Effect.fnUntraced(
+      function* (sessionID, promotion, step, completionResponse, responseRequired) {
+        return yield* runTurnAttempt(
+          sessionID,
+          promotion,
+          step,
+          compaction.compactAfterOverflow,
+          completionResponse,
+          responseRequired,
+        ).pipe(
+          Effect.catchDefect(
+            Effect.fnUntraced(function* (defect) {
+              if (!(defect instanceof TurnTransitionError)) return yield* Effect.die(defect)
+              yield* Effect.yieldNow
+              if (defect.transition._tag === "ContinueAfterOverflowCompaction")
+                return yield* runAfterOverflowCompaction(
+                  sessionID,
+                  undefined,
+                  defect.transition.step,
+                  completionResponse,
+                  responseRequired,
+                )
+              return yield* runTurn(sessionID, undefined, defect.transition.step, completionResponse, responseRequired)
+            }),
+          ),
+        )
+      },
+    )
 
     const run = Effect.fn("SessionRunner.run")(function* (input: {
       readonly sessionID: SessionSchema.ID
       readonly force: boolean
     }) {
-      const hasSteer = yield* SessionInput.hasPending(db, input.sessionID, "steer")
-      const hasQueue = hasSteer ? false : yield* SessionInput.hasPending(db, input.sessionID, "queue")
-      if (!input.force && !hasSteer && !hasQueue) return
-      yield* failInterruptedTools(input.sessionID)
-      let promotion: SessionInput.Delivery | undefined = hasSteer ? "steer" : hasQueue ? "queue" : undefined
-      let shouldRun = input.force || hasSteer || hasQueue
-      while (shouldRun) {
-        let needsContinuation = true
-        let step = 1
-        let pendingCompletion: CompletionProposal | undefined
-        let responseRequired = false
-        // Bounded retry policy: autonomous re-drive may continue only while
-        // obligation/verification state changes. An unchanged stall signature
-        // means the model is burning cycles on the same failure; stop the
-        // loop, keep obligations open (fail-closed), and surface the stall.
-        const maxStagnantDrives = 2
-        let lastStallSignature: string | undefined
-        let stagnantDrives = 0
-        while (needsContinuation) {
-          const result: RunTurnResult = yield* runTurn(input.sessionID, promotion, step, pendingCompletion, responseRequired)
-          pendingCompletion = result.pendingCompletion
-          responseRequired = result.responseRequired
-          needsContinuation = result.needsContinuation
-          if (needsContinuation) {
-            // Stagnation guard applies only to autonomous goal re-drives where no forward progress
-            // (no tool calls) occurred in the turn and open obligations remain unchanged.
-            // Intra-turn tool sequences (e.g. read_file -> read_file -> answer) are normal progress and must not be killed.
-            if (result.hasActiveGoal && result.toolCallsCount === 0) {
-              if (result.stallSignature === lastStallSignature) {
-                stagnantDrives += 1
+      const session = yield* getSession(input.sessionID)
+      let outcome: SessionStatusEvent.Info = {
+        type: "idle",
+        outcome: "quiescent",
+        source: "session_runner",
+        phase: "admission",
+      }
+      return yield* Effect.gen(function* () {
+        const hasSteer = yield* SessionInput.hasPending(db, input.sessionID, "steer")
+        const hasQueue = hasSteer ? false : yield* SessionInput.hasPending(db, input.sessionID, "queue")
+        if (!input.force && !hasSteer && !hasQueue) return
+        outcome = {
+          type: "idle",
+          outcome: "completed",
+          source: "session_runner",
+          phase: "response_delivery",
+        }
+        yield* failInterruptedTools(input.sessionID)
+        let promotion: SessionInput.Delivery | undefined = hasSteer ? "steer" : hasQueue ? "queue" : undefined
+        let shouldRun = input.force || hasSteer || hasQueue
+        while (shouldRun) {
+          let needsContinuation = true
+          let step = 1
+          let pendingCompletion: CompletionProposal | undefined
+          let responseRequired = false
+          // Bounded retry policy: autonomous re-drive may continue only while
+          // obligation/verification state changes. An unchanged stall signature
+          // means the model is burning cycles on the same failure; stop the
+          // loop, keep obligations open (fail-closed), and surface the stall.
+          const maxStagnantDrives = 2
+          let lastStallSignature: string | undefined
+          let stagnantDrives = 0
+          let lastToolFingerprint: string | undefined
+          let lastToolSummary: string | undefined
+          let repeatedToolCalls = 0
+          let drives = 0
+          while (needsContinuation) {
+            drives++
+            if (drives > 50) {
+              yield* Effect.logWarning("autonomous drive limit reached; obligations remain open", {
+                "session.id": input.sessionID,
+              })
+              needsContinuation = false
+              outcome = {
+                type: "idle",
+                outcome: "stalled",
+                source: "stagnation_guard",
+                reason: "Autonomous continuation exceeded the 50-drive safety limit",
+                phase: "continuation",
+              }
+              break
+            }
+            const result: RunTurnResult = yield* runTurn(
+              input.sessionID,
+              promotion,
+              step,
+              pendingCompletion,
+              responseRequired,
+            )
+            pendingCompletion = result.pendingCompletion
+            responseRequired = result.responseRequired
+            needsContinuation = result.needsContinuation
+            if (result.lastToolFingerprint !== undefined) {
+              if (result.lastToolFingerprint === lastToolFingerprint && result.lastToolSummary === lastToolSummary) {
+                repeatedToolCalls++
+              } else {
+                lastToolFingerprint = result.lastToolFingerprint
+                lastToolSummary = result.lastToolSummary
+                repeatedToolCalls = 1
+              }
+              if (repeatedToolCalls >= 3) {
+                yield* Effect.logWarning("repeated identical tool call halted; side effects will not be retried", {
+                  "session.id": input.sessionID,
+                  fingerprint: result.lastToolFingerprint,
+                })
+                needsContinuation = false
+                outcome = {
+                  type: "idle",
+                  outcome: "stalled",
+                  source: "stagnation_guard",
+                  reason: "Repeated identical tool call produced no new observable result",
+                  phase: "tool_settlement",
+                }
+              }
+            }
+            if (needsContinuation) {
+              // Stagnation guard applies only to autonomous goal re-drives where no forward progress
+              // (no tool calls) occurred in the turn and open obligations remain unchanged.
+              // Intra-turn tool sequences (e.g. read_file -> read_file -> answer) are normal progress and must not be killed.
+              if (result.hasActiveGoal && result.toolCallsCount === 0) {
+                if (result.stallSignature === lastStallSignature) {
+                  stagnantDrives += 1
+                } else {
+                  stagnantDrives = 0
+                  lastStallSignature = result.stallSignature
+                }
+                if (stagnantDrives >= maxStagnantDrives) {
+                  yield* Effect.logWarning("stagnant autonomous drive halted; obligations remain open", {
+                    "session.id": input.sessionID,
+                    step: result.step,
+                    stallSignature: result.stallSignature,
+                  })
+                  needsContinuation = false
+                  outcome = {
+                    type: "idle",
+                    outcome: "stalled",
+                    source: "stagnation_guard",
+                    reason: "Repeated autonomous drive made no observable progress",
+                    phase: "continuation",
+                  }
+                  stagnantDrives = 0
+                  lastStallSignature = undefined
+                }
               } else {
                 stagnantDrives = 0
                 lastStallSignature = result.stallSignature
               }
-              if (stagnantDrives >= maxStagnantDrives) {
-                yield* Effect.logWarning("stagnant autonomous drive halted; obligations remain open", {
-                  "session.id": input.sessionID,
-                  step: result.step,
-                  stallSignature: result.stallSignature,
-                })
-                needsContinuation = false
-                stagnantDrives = 0
-                lastStallSignature = undefined
-              }
             } else {
               stagnantDrives = 0
-              lastStallSignature = result.stallSignature
+              lastStallSignature = undefined
             }
-          } else {
-            stagnantDrives = 0
-            lastStallSignature = undefined
+            step = result.step + 1
+            promotion = "steer"
+            if (!needsContinuation) needsContinuation = yield* SessionInput.hasPending(db, input.sessionID, "steer")
           }
-          step = result.step + 1
-          promotion = "steer"
-          if (!needsContinuation) needsContinuation = yield* SessionInput.hasPending(db, input.sessionID, "steer")
+          shouldRun = yield* SessionInput.hasPending(db, input.sessionID, "queue")
+          promotion = shouldRun ? "queue" : undefined
         }
-        shouldRun = yield* SessionInput.hasPending(db, input.sessionID, "queue")
-        promotion = shouldRun ? "queue" : undefined
-      }
+      }).pipe(
+        Effect.onExit((exit) => {
+          if (Exit.isSuccess(exit)) return publishStatus(session, outcome)
+          const failure = Cause.squash(exit.cause)
+          const timedOut =
+            failure instanceof LLMError && failure.reason._tag === "Transport" && failure.reason.kind === "timeout"
+          return Effect.uninterruptible(
+            publishStatus(session, {
+              type: "idle",
+              outcome: Cause.hasInterrupts(exit.cause) ? "interrupted" : "failed",
+              source: Cause.hasInterrupts(exit.cause)
+                ? "host_runtime_cancellation"
+                : timedOut
+                  ? "timeout"
+                  : "provider_failure",
+              reason: Cause.hasInterrupts(exit.cause)
+                ? "Session runner interrupted"
+                : timedOut
+                  ? "Provider wait exceeded its time limit"
+                  : "Session runner failed",
+              phase: "session_runner",
+            }),
+          )
+        }),
+      )
     })
 
     return Service.of({

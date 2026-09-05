@@ -96,7 +96,104 @@ Taxonomy:
    - Redb durable persistence & replay determinism: operational (`rivet-store`).
    - Restart continuity without rediscovery: operational (`HarnessCore::from_state`).
 
+## 2026-09-05 TypeScript Production-Path Addendum
+
+This addendum supersedes the historical Rust Harness assessment for the active runtime. The production path is the TypeScript V2 Session implementation under `packages/core` and its OpenCode integration under `packages/opencode`.
+
+### Critical findings
+
+1. **P0 — Provider and tool waits are not bounded end to end.** `packages/core/src/session/runner/llm.ts` calls `llm.stream(request)` without a first-header, stalled-chunk, or whole-turn deadline and then awaits all local tool fibers without a settlement deadline. The Core model route does not expose the mature OpenCode provider timeout controls. A stalled provider stream or tool can therefore keep the Session busy indefinitely.
+2. **P0 — The continuation guard has oscillated between premature stop and unbounded repetition.** The previous stagnation signature treated consecutive successful inspection turns as unchanged and could silently halt ordinary discovery. The current fix exempts every turn containing a tool call, so repeated identical calls evade the guard. The default agent has no effective outer provider-turn limit; the `50`-step fallback currently controls only directive emission. A halt is logged but not represented as a user-visible durable terminal state.
+3. **P0 — Cancellation and terminal state are observationally ambiguous.** The local execution layer publishes `idle` in `ensuring` after success, interruption, provider failure, or harness stall. The runner emits the generic text `Provider turn interrupted` but does not persist the abort initiator or reason. The TUI waits for `idle`, so it cannot reliably distinguish completion from interruption or fail-closed stagnation.
+4. **P0 — The action authority boundary is incomplete.** The runner supplies `humanApproved: true` while admitting all provider actions. `ToolRegistry` checks the stored decision but bypasses `SessionSemantics.executeAuthorizedAction`, which performs the current-revision check immediately before execution. Destructive actions can consequently be labeled human-approved without an actual approval receipt, and an authorization can become stale before its side effect runs.
+5. **P0 — Execution settlement is not crash/idempotency safe.** An idempotency key is passed to the tool context but not durably claimed. A side effect may happen before its receipt is committed, and `LLM.ToolFailure` returns without any `ExecutionReceipt`. Recovery marks interrupted calls but cannot prove whether an external side effect occurred, so retry can duplicate it.
+6. **P1 — Completion evidence is not task-bound.** `request_completion` creates a new task ID for every provider call, while `evaluateCompletion` accepts any passing receipt when no obligations remain. A receipt from an earlier task can therefore authorize a later completion proposal.
+7. **P1 — Telemetry masks the failure modes.** Provider spans are closed with `ok` even on failure/interruption, unsuccessful turns can leave the turn span open, and step IDs are reused after steering. Token/economics lookup selects the first matching step, so later turns can overwrite or misattribute data. Existing benchmark traces indicate normal latency is dominated by provider time-to-first-token, but the missing timeout and correlation data prevent attribution of abnormal waits.
+
+### Harness migration decision
+
+**Decision: retain Rivet's semantic architecture and move it onto the hardened OpenCode harness mechanisms. This is not a return to OpenCode's orchestration semantics.**
+
+- Rivet remains the source of truth for durable prompt admission, Session semantics, ACCP authorization, Noesis state, Praxis verification, Cognitive View, completion authority, and continuation decisions.
+- OpenCode remains the mechanism layer for provider preparation and transforms, streaming, timeout/abort propagation, bounded retry status, identical-tool-loop detection, tool lifecycle cleanup, plugin/MCP integration, snapshots/patches, and TUI event delivery.
+- The dependency direction must remain intact: Core owns a narrow harness port; `packages/opencode` implements that port. Core must not import Server/OpenCode runtime code.
+- Provider `finish` is only a transport signal. Rivet must make the final continue/complete decision after durable tool and verification settlement.
+- There must be one Session owner and one durable event writer during cutover. Do not run `SessionRunner` and the legacy `SessionPrompt.loop` as competing transcript authorities.
+- Do not resurrect the legacy V1 loop wholesale. Reuse its proven `SessionProcessor`, provider, retry, tool, plugin, and TUI mechanics behind a new Rivet-owned adapter. `packages/opencode/src/session/tools.ts` already wraps regular and MCP tools with Rivet admission and evidence recording, demonstrating that the semantic code transfers rather than being discarded.
+
+### Recommended cutover order
+
+1. Add immediate safety rails to the active path: provider header/chunk/turn deadlines, bounded tool settlement, durable `retrying`/`stalled`/`interrupted`/`failed` states, abort reason/source, a fingerprinted repeated-tool guard, and a real total provider-turn budget.
+2. Extract a Core-owned turn-control port for commitment admission, pre-execution revision/approval checks, settlement recording, and continuation/completion decisions.
+3. Implement the port in OpenCode around `SessionProcessor`, provider retry/timeout handling, and `SessionTools`; add Rivet controller tools without weakening ACCP for ordinary actions.
+4. Run recorded provider/tool streams through both paths and compare durable events, receipts, projections, cancellation, and completion decisions. Cut over behind a single-writer flag only after parity.
+5. Retire duplicated orchestration in `packages/core/src/session/runner/llm.ts` after parity. Preserve all Rivet semantic modules and tests; only duplicated transport/harness mechanics should disappear.
+
+### Verification receipts
+
+- `packages/core`: `bun test test/session-runner.test.ts test/rivet/controller_turn_regression.test.ts` — **103 passed, 0 failed**.
+- `packages/opencode`: `bun test test/provider/header-timeout.test.ts test/session/retry.test.ts test/session/processor-effect.test.ts` — **83 passed, 0 failed**.
+- Missing regression coverage remains material: no Core test currently proves provider/tool timeout settlement, identical tool-call bounding, completion receipt/task binding, stale authorization rejection at execution time, or interruption-reason persistence.
+
 ## Open Questions for Human Authority
+
+## 2026-09-05 Day-1 Stabilization Closeout
+
+The following findings from the addendum were rechecked against the active TypeScript path after the stabilization changes:
+
+- Provider inactivity and whole-turn waits are bounded in `packages/core/src/session/runner/llm.ts`; local tool execution and aggregate settlement are bounded in `packages/core/src/tool/registry.ts` and the runner.
+- ACCP denials return model-facing structured tool errors and force a text-only response turn. Denied actions do not enter the executor.
+- Terminal status events preserve `outcome`, `source`, `reason`, and `phase`; terminal state is durably recorded as `session.next.run.status`. Live status carries actual Flight Recorder operation/span identity and measured completed duration.
+- Provider-originated actions and the OpenCode compatibility paths no longer manufacture `humanApproved: true`. The final Core execution boundary rechecks the current revision.
+- Durable `execution_claimed` semantic events protect retries after a crash. A missing post-side-effect receipt is reported as uncertain and is not replayed automatically; this is not an exactly-once claim for external systems.
+- Completion evaluation now checks the active task identity in addition to obligations, revision, and closure receipts.
+
+### Frozen OpenCode/Rivet capability ownership matrix
+
+Evidence used for this freeze: healthy OpenCode mechanics in `packages/opencode/src/session/prompt.ts`, `processor.ts`, `retry.ts`, provider timeout/abort code, and the pinned baseline commit `d63d584`; active Rivet semantics in `packages/core/src/session/semantics.ts`, `packages/core/src/rivet/*`, and the Core `SessionRunner` regression suite. This is an ownership decision for the current boundary, not a cutover claim.
+
+| Capability | Owner | Current evidence / boundary |
+| --- | --- | --- |
+| Provider request construction | MERGE / RIVET HOOK INTO OPENCODE | Core adds Cognitive View and invocation metadata; OpenCode owns mature transport request assembly. |
+| Provider transforms | KEEP OPENCODE | Provider transform modules remain in `packages/opencode/src/provider`. |
+| Stream lifecycle | KEEP OPENCODE | OpenCode processor/provider lifecycle is the healthy baseline; Core currently has a bounded stream adapter. |
+| Finish handling | MERGE / RIVET HOOK INTO OPENCODE | OpenCode finishes transport steps; Rivet decides continuation/completion semantics. |
+| Retry/backoff | KEEP OPENCODE | `packages/opencode/src/session/retry.ts` and processor retry path. |
+| Header/chunk/turn timeout | KEEP OPENCODE | OpenCode has provider timeout machinery; Core has interim bounded guards until cutover parity. |
+| Abort propagation | KEEP OPENCODE | OpenCode owns AbortSignal/fiber propagation; Rivet records provenance at the semantic boundary. |
+| Tool scheduling | MERGE / RIVET HOOK INTO OPENCODE | OpenCode schedules tool work; Rivet admits each action before settlement. |
+| Tool settlement | MERGE / RIVET HOOK INTO OPENCODE | OpenCode settles tool lifecycle; Rivet owns revision, claim, receipt, observation, and evidence. |
+| Concurrent tools | KEEP OPENCODE | Existing OpenCode processor and Core eager-settlement regression preserve concurrent execution. |
+| Identical-tool doom-loop | MERGE / RIVET HOOK INTO OPENCODE | OpenCode loop mechanics remain substrate; Rivet adds normalized action/result progress guard. |
+| Tool cleanup | KEEP OPENCODE | `SessionProcessor.cleanup` is the healthy lifecycle implementation. |
+| Compaction | KEEP OPENCODE | OpenCode compaction/provider mechanics remain intact; Rivet context is recompiled after compaction. |
+| Snapshots | KEEP OPENCODE | Snapshot/patch lifecycle remains an OpenCode responsibility. |
+| Plugin/MCP | KEEP OPENCODE | OpenCode owns discovery, lifecycle, and transport; Rivet gates resulting commitments. |
+| Session event plumbing | MERGE / RIVET HOOK INTO OPENCODE | OpenCode bus/projectors deliver events; Rivet emits semantic and structured run-status events. |
+| TUI delivery | KEEP OPENCODE | OpenCode event delivery remains the transport; Rivet control-plane projection renders live activity. |
+| Mechanical continuation after tool results | KEEP OPENCODE | The desired `model → tool → result → model` loop belongs to the mature processor. |
+| Prompt/context construction | MERGE / RIVET HOOK INTO OPENCODE | OpenCode serializes history; Rivet supplies Cognitive View and semantic directives. |
+| Cognitive View injection | KEEP RIVET | `SessionSemantics.cognitiveView` and the Core invocation request are semantic authority. |
+| TurnAdmission | KEEP RIVET | `TurnAdmissionGate` controls durable prompt/goal admission. |
+| Persistent goals | KEEP RIVET | Noesis/SessionSemantics own goal and obligation state. |
+| ACCP authorization | KEEP RIVET | `AccpSemanticGate` is the normative action authority. |
+| Revision validation | MERGE / RIVET HOOK INTO OPENCODE | Rivet validates immediately before side effect; OpenCode supplies the final execution call. |
+| Evidence admission | KEEP RIVET | Evidence and receipt linkage are Noesis/ACCP responsibilities. |
+| Praxis | KEEP RIVET | Verification predicates and receipts remain Rivet-owned. |
+| Autonomous redrive | KEEP RIVET | Goal obligation progress and fail-closed stagnation remain semantic decisions. |
+| Response-delivery authority | KEEP RIVET | A denial or accepted internal closure can require a text-only response turn. |
+| Completion authority | KEEP RIVET | Task-bound completion checks remain `AccpSemanticGate`/`SessionSemantics`. |
+
+The boundary is **not cutover-ready**: the OpenCode transport experiment remains env-gated, and parity evidence for one writer, one tool registry, one cancellation chain, and identical durable projections has not yet been collected. No second production owner is enabled by default.
+
+### Closeout test receipts
+
+- `packages/core`: `bun test --max-concurrency=1 test/session-runner.test.ts` — 99 passed, 0 failed.
+- `packages/core`: `bun test --max-concurrency=1 test/rivet/authoritative_gate_contracts.test.ts` — 4 passed, 0 failed.
+- `packages/core`: `bun typecheck` — passed.
+- `packages/opencode`: `bun test --max-concurrency=1 test/session/sabotage.test.ts test/session/rivet-execution.test.ts` — 6 passed, 0 failed.
+- `packages/opencode`: `bun typecheck` — passed.
+- `packages/app`: `bun typecheck` — passed.
 
 - [UNKNOWN-USER-AUTHORITY] **Model Provider Preference in Production:** Both `genai` and `rig` multi-provider adapters are operational. Should the default CLI provider be configurable via `.rivet/config.toml` or environment variables?
 - [UNKNOWN-USER-AUTHORITY] **External MCP Tool Registration:** `rivet-mcp` is equipped to discover local MCP servers over stdio; a user-level configuration schema for declaring persistent external MCP servers can be finalized.

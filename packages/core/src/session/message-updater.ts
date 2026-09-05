@@ -147,6 +147,7 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
           }),
         ),
       "session.next.semantic": () => Effect.void,
+      "session.next.run.status": () => Effect.void,
       "session.next.synthetic": (event) => {
         return adapter.appendMessage(
           SessionMessage.Synthetic.make({

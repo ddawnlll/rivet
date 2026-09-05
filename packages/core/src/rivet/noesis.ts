@@ -185,6 +185,14 @@ export type NoesisEvent =
       readonly timestamp: string
     }
   | {
+      readonly type: "execution_claimed"
+      readonly actionId: ActionId
+      readonly idempotencyKey: string
+      readonly actionFingerprint: string
+      readonly scope: Scope
+      readonly timestamp: string
+    }
+  | {
       readonly type: "observation_recorded"
       readonly observation: Observation
     }
@@ -283,7 +291,7 @@ export interface ArchitectureEpoch {
 
 // Telemetry events are recorded for observability but carry no epistemic
 // mutation, so replaying them must not advance the canonical revision.
-const RUNTIME_TELEMETRY_EVENT_TYPES: ReadonlySet<string> = new Set(["model_invocation_recorded"])
+const RUNTIME_TELEMETRY_EVENT_TYPES: ReadonlySet<string> = new Set(["model_invocation_recorded", "execution_claimed"])
 
 function isRuntimeTelemetryEvent(event: NoesisEvent): boolean {
   return RUNTIME_TELEMETRY_EVENT_TYPES.has(event.type)
@@ -309,6 +317,14 @@ export class HardState {
   readonly evidenceSources: Map<EvidenceId, string> = new Map()
   readonly evidenceExecutionReceipts: Map<EvidenceId, ReceiptId> = new Map()
   readonly executionReceipts: ExecutionReceipt[] = []
+  readonly executionClaims: Map<
+    string,
+    {
+      readonly actionId: ActionId
+      readonly actionFingerprint: string
+      readonly scope: Scope
+    }
+  > = new Map()
   readonly observations: Map<string, Observation> = new Map()
   readonly verificationReceipts: Map<ObligationId, VerificationReceipt> = new Map()
   readonly modelInvocations: ModelInvocationRecord[] = []
@@ -334,9 +350,7 @@ export class HardState {
       toolCallsAfterRejection: this.toolCallsAfterRejection,
       firstAttemptAccepted: this.firstAttemptAccepted,
       firstAttemptAcceptanceRate:
-        this.completionAttempts > 0
-          ? (this.firstAttemptAccepted ? 1 : 0) / (this.completedTasks.size || 1)
-          : 0,
+        this.completionAttempts > 0 ? (this.firstAttemptAccepted ? 1 : 0) / (this.completedTasks.size || 1) : 0,
     }
   }
 
@@ -426,7 +440,12 @@ export class HardState {
       }
       case "claim_dirtied": {
         const record = this.claims.get(event.claimId)
-        if (record && record.validityPolicy !== "HISTORICAL" && record.status !== "rejected" && record.status !== "superseded") {
+        if (
+          record &&
+          record.validityPolicy !== "HISTORICAL" &&
+          record.status !== "rejected" &&
+          record.status !== "superseded"
+        ) {
           record.status = "dirty"
           record.updatedAt = event.timestamp
         }
@@ -510,10 +529,7 @@ export class HardState {
       }
       case "claim_promoted": {
         if (!this.evidence.has(event.evidenceId)) {
-          throw new RivetError(
-            "SemanticViolation",
-            `Unknown evidence reference: ${event.evidenceId}`,
-          )
+          throw new RivetError("SemanticViolation", `Unknown evidence reference: ${event.evidenceId}`)
         }
         const record = this.claims.get(event.claimId)
         if (record) {
@@ -551,6 +567,14 @@ export class HardState {
       }
       case "execution_recorded": {
         this.executionReceipts.push(event.receipt)
+        break
+      }
+      case "execution_claimed": {
+        this.executionClaims.set(event.idempotencyKey, {
+          actionId: event.actionId,
+          actionFingerprint: event.actionFingerprint,
+          scope: event.scope,
+        })
         break
       }
       case "observation_recorded": {
@@ -727,7 +751,10 @@ export class HardState {
       case "command_pass":
         return receipt.predicate === `command_pass: "${predicate.command}" exit=${predicate.expectedExitCode}`
       case "file_constraint":
-        return receipt.predicate === `file_constraint: path "${predicate.path}" mustExist=${predicate.mustExist}${predicate.contentPattern ? ` content~"${predicate.contentPattern}"` : ""}`
+        return (
+          receipt.predicate ===
+          `file_constraint: path "${predicate.path}" mustExist=${predicate.mustExist}${predicate.contentPattern ? ` content~"${predicate.contentPattern}"` : ""}`
+        )
       case "claims_verified":
         return receipt.predicate === `claims_verified: ${predicate.claimPropositions.join("; ")}`
       case "human_approval":
@@ -781,12 +808,7 @@ export class SoftWorkspace {
   }
 
   itemCount(): number {
-    return (
-      this.activeFocus.length +
-      this.hypotheses.length +
-      this.unknowns.length +
-      this.candidateActions.length
-    )
+    return this.activeFocus.length + this.hypotheses.length + this.unknowns.length + this.candidateActions.length
   }
 
   private trimToCapacity(): void {
@@ -885,23 +907,41 @@ export class CognitiveView {
     lines.push("================================================================================")
     lines.push("CRITICAL HARNESS DIRECTIVES:")
     lines.push("1. Epistemic state & project memory are internal Harness runtime structures, NOT disk files.")
-    lines.push("   - NEVER run bash ('git status', 'ls', 'find'), glob ('**/*state*'), or grep ('*memory*') to look for state or memory.")
+    lines.push(
+      "   - NEVER run bash ('git status', 'ls', 'find'), glob ('**/*state*'), or grep ('*memory*') to look for state or memory.",
+    )
     lines.push("   - There are NO '.rivet/state' or 'hardstate' files on disk.")
     lines.push("2. MANDATORY TOOL SELECTION:")
-    lines.push("   - To inspect project knowledge, hard state status, or verified claims: CALL `query_epistemic_state`.")
+    lines.push(
+      "   - To inspect project knowledge, hard state status, or verified claims: CALL `query_epistemic_state`.",
+    )
     lines.push("   - To recall associative memories, past decisions, or conventions: CALL `retrieve_memory`.")
-    lines.push("   - DO NOT make a planning list (todowrite) or execute bash commands when asked about state or memory.")
+    lines.push(
+      "   - DO NOT make a planning list (todowrite) or execute bash commands when asked about state or memory.",
+    )
     if (this.completionReadiness.status !== "NOT_REQUIRED" && this.goalDescription) {
       lines.push("3. OBLIGATION CONTRACTS & COMPLETION READINESS:")
-      lines.push("   - Inspect the active obligation's closure contract and completion readiness BEFORE attempting completion.")
-      lines.push("   - An authoritative Noesis projection (`query_epistemic_state`) satisfies epistemic inquiries. Praxis is NOT required.")
-      lines.push("   - Do NOT call `request_verification` (Praxis) unless the obligation explicitly requires Praxis verification.")
-      lines.push("   - Only call `request_completion` when COMPLETION READINESS is READY. If BLOCKED, address ONLY the listed blockers.")
-      lines.push("   - If rejected, address ONLY the reported blocker. Do NOT run unrelated shell commands or invent verification work.")
+      lines.push(
+        "   - Inspect the active obligation's closure contract and completion readiness BEFORE attempting completion.",
+      )
+      lines.push(
+        "   - An authoritative Noesis projection (`query_epistemic_state`) satisfies epistemic inquiries. Praxis is NOT required.",
+      )
+      lines.push(
+        "   - Do NOT call `request_verification` (Praxis) unless the obligation explicitly requires Praxis verification.",
+      )
+      lines.push(
+        "   - Only call `request_completion` when COMPLETION READINESS is READY. If BLOCKED, address ONLY the listed blockers.",
+      )
+      lines.push(
+        "   - If rejected, address ONLY the reported blocker. Do NOT run unrelated shell commands or invent verification work.",
+      )
     } else {
       lines.push("3. CONVERSATIONAL / CHAT PROJECTION MODE:")
       lines.push("   - You are in conversational mode. Respond directly, politely, and helpfully in natural prose.")
-      lines.push("   - Do NOT recite internal state tables, obligations, or completion blockers unless the user specifically asks for status.")
+      lines.push(
+        "   - Do NOT recite internal state tables, obligations, or completion blockers unless the user specifically asks for status.",
+      )
       lines.push("   - Do NOT call `request_completion` or `request_verification`.")
     }
     lines.push("================================================================================\n")
@@ -914,7 +954,9 @@ export class CognitiveView {
     if (this.completionReadiness.status === "NOT_REQUIRED" || !this.goalDescription) {
       lines.push("### CONVERSATIONAL MODE (No Active Autonomous Goal)")
       lines.push("Harness gate: NOT_REQUIRED. Respond directly to the user in natural prose.")
-      lines.push("Do NOT invoke 'request_completion' or 'request_verification' for conversational turns or general questions.\n")
+      lines.push(
+        "Do NOT invoke 'request_completion' or 'request_verification' for conversational turns or general questions.\n",
+      )
     } else if (this.completionReadiness.status === "READY") {
       lines.push(`### COMPLETION READINESS: READY`)
       lines.push("All required obligations are closed and verified by authoritative receipts.")
@@ -926,7 +968,9 @@ export class CognitiveView {
       for (const blocker of this.completionReadiness.blockers) {
         lines.push(`- [BLOCKER] ${blocker}`)
       }
-      lines.push("Directives: Address ONLY the blockers listed above. Do not invent verification work or run unrelated commands. For questions and inquiries, answer the user directly in prose.\n")
+      lines.push(
+        "Directives: Address ONLY the blockers listed above. Do not invent verification work or run unrelated commands. For questions and inquiries, answer the user directly in prose.\n",
+      )
     }
 
     if (this.completionReadiness.status !== "NOT_REQUIRED" && Boolean(this.goalDescription)) {
@@ -945,7 +989,9 @@ export class CognitiveView {
           if (o.legalTransitions && o.legalTransitions.length > 0) {
             lines.push(`    Legal Transitions: ${o.legalTransitions.join(" | ")}`)
           }
-          lines.push(`    Accepted Proof Refs: ${o.closure.acceptedProofRefs.length > 0 ? o.closure.acceptedProofRefs.join(", ") : "(None yet)"}`)
+          lines.push(
+            `    Accepted Proof Refs: ${o.closure.acceptedProofRefs.length > 0 ? o.closure.acceptedProofRefs.join(", ") : "(None yet)"}`,
+          )
           if (o.blockers.length > 0) {
             lines.push(`  Blockers:`)
             for (const b of o.blockers) {
@@ -985,12 +1031,16 @@ export class CognitiveView {
       lines.push("### AUTHORITATIVE HARD CLAIMS:")
       for (const c of this.activeClaims) {
         const policyTag = c.validityPolicy !== "EPISTEMIC" ? ` [${c.validityPolicy}]` : ""
-        lines.push(`- [${c.status}] ${c.id}: ${c.proposition}${policyTag} (valid: ${c.validFromRevision}..${c.validToRevision ?? "now"})`)
+        lines.push(
+          `- [${c.status}] ${c.id}: ${c.proposition}${policyTag} (valid: ${c.validFromRevision}..${c.validToRevision ?? "now"})`,
+        )
       }
       lines.push("")
     } else {
       lines.push("### AUTHORITATIVE HARD CLAIMS:")
-      lines.push("- (None currently admitted in Hard State. Use `propose_claim` or `query_epistemic_state` to inspect/assert claims)")
+      lines.push(
+        "- (None currently admitted in Hard State. Use `propose_claim` or `query_epistemic_state` to inspect/assert claims)",
+      )
       lines.push("")
     }
 
@@ -1087,7 +1137,9 @@ export class CognitiveView {
       lines.push("")
     }
 
-    lines.push(`### RUNTIME STATE METADATA: HardState Revision ${this.hardRevision} · ${this.modelInvocationCount} prior model calls`)
+    lines.push(
+      `### RUNTIME STATE METADATA: HardState Revision ${this.hardRevision} · ${this.modelInvocationCount} prior model calls`,
+    )
 
     let out = lines.join("\n")
     const marker = "\n[view truncated]"
@@ -1101,21 +1153,9 @@ export class CognitiveView {
 
 export type MemoryHorizon = "H0_IMMEDIATE" | "H1_RECENT" | "H2_LONG_TERM" | "H3_ARCHIVE"
 
-export type TaskPhase =
-  | "orientation"
-  | "diagnosis"
-  | "planning"
-  | "implementation"
-  | "verification"
-  | "brainstorming"
+export type TaskPhase = "orientation" | "diagnosis" | "planning" | "implementation" | "verification" | "brainstorming"
 
-export type EpistemicRole =
-  | "authoritative"
-  | "episodic"
-  | "procedural"
-  | "provisional"
-  | "rejected"
-  | "superseded"
+export type EpistemicRole = "authoritative" | "episodic" | "procedural" | "provisional" | "rejected" | "superseded"
 
 export interface NoesisAdmissionCandidate {
   readonly id: string
@@ -1159,10 +1199,7 @@ export class Noesis {
    * 4. SoftWorkspace provisional hypotheses are SUPPRESSED during orientation, planning, diagnosis, and implementation.
    * 5. Long-term memory (H2/H3 or cross-epoch) requires stronger evidence or explicit symbol match.
    */
-  static admitMemory(
-    candidate: NoesisAdmissionCandidate,
-    context: CognitiveAdmissionContext
-  ): MemoryAdmissionDecision {
+  static admitMemory(candidate: NoesisAdmissionCandidate, context: CognitiveAdmissionContext): MemoryAdmissionDecision {
     // 1. Calculate Horizon: Architecture Epoch + Revision Distance
     let horizon: MemoryHorizon = "H2_LONG_TERM"
     const currentRev = context.currentRevision
@@ -1209,7 +1246,11 @@ export class Noesis {
         }
       } else if (canonicalClaim.status === "rejected") {
         role = "rejected"
-      } else if (canonicalClaim.status === "stale" || canonicalClaim.status === "dirty" || canonicalClaim.status === "superseded") {
+      } else if (
+        canonicalClaim.status === "stale" ||
+        canonicalClaim.status === "dirty" ||
+        canonicalClaim.status === "superseded"
+      ) {
         role = "superseded"
       } else {
         role = "episodic"

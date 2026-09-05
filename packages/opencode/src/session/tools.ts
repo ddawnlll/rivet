@@ -23,14 +23,18 @@ import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
 import { EventV2 } from "@opencode-ai/core/event"
 import { SessionSemantics } from "@opencode-ai/core/session/semantics"
+import { createActionId, createReceiptId, createEvidenceId } from "@opencode-ai/core/rivet/types"
 import { isRecord } from "@/util/record"
 import { RuntimeFlags } from "@/effect/runtime-flags"
+import { RivetController } from "./rivet-controller"
 
 const MCP_RESOURCE_TOOLS = {
   list: "list_mcp_resources",
   listTemplates: "list_mcp_resource_templates",
   read: "read_mcp_resource",
 } as const
+const REJECTION_RISK = "inspect" as const
+const ZERO_DURATION_MS = 0
 const MAX_MCP_RESOURCE_BLOB_BYTES = 10 * 1024 * 1024
 const SUPPORTED_MCP_RESOURCE_ATTACHMENT_MIMES = new Set([
   "application/pdf",
@@ -100,21 +104,16 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
   })
 
   const admit = (name: string, args: unknown, callID: string) => {
-    const scope = input.semantics.scope(input.session.directory)
-    const result = input.semantics.admitProviderCommitment(
-      { id: callID, name, input: isRecord(args) ? args : {} },
-      scope,
-      {
-        repository: input.session.directory,
-        currentRevision: input.semantics.hardState.revision,
-        allowedScope: scope,
-        allowedCapabilities: ["file.read", "file.write", "process.exec", "tool.*", "mcp.*"],
-        allowMaterial: true,
-        humanApproved: true,
-      },
+    return Effect.runSync(
+      RivetController.admitCommitment({
+        session: input.session,
+        semantics: input.semantics,
+        callID,
+        name,
+        args: isRecord(args) ? args : {},
+        capabilities: ["file.read", "file.write", "process.exec", "tool.*", "mcp.*"],
+      }),
     )
-    if (!result.authorizedAction) throw new Error(result.decision?.reason ?? "Provider commitment was not authorized")
-    return result.authorizedAction
   }
 
   for (const item of yield* registry.tools({
@@ -132,48 +131,100 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
           Effect.gen(function* () {
             const ctx = context(args, options)
 
-            const scope = input.semantics.scope(input.session.directory)
-            const admission = input.semantics.admitProviderCommitment(
-              { id: options.toolCallId, name: item.id, input: isRecord(args) ? args : {} },
-              scope,
-              {
-                repository: input.session.directory,
-                currentRevision: input.semantics.hardState.revision,
-                allowedScope: scope,
-                allowedCapabilities: ["file.read", "file.write", "process.exec", "tool.*"],
-                allowMaterial: true,
-                humanApproved: true,
-              },
-            )
-            if (!admission.authorizedAction) {
-              const reason = admission.decision?.reason ?? "Only ACCP action commitments may execute"
+            const admission = yield* RivetController.admitCommitment({
+              session: input.session,
+              semantics: input.semantics,
+              callID: options.toolCallId,
+              name: item.id,
+              args: isRecord(args) ? args : {},
+              capabilities: ["file.read", "file.write", "process.exec", "tool.*"],
+            }).pipe(Effect.catch((error) => Effect.succeed(error.message)))
+            if (typeof admission === "string") {
+              const reason = admission
               const rejectionOutput = { title: item.id, metadata: {}, output: `ACCP authority rejection: ${reason}` }
-              if (options.abortSignal?.aborted) yield* input.processor.completeToolCall(options.toolCallId, rejectionOutput)
+              const actionId = createActionId(options.toolCallId)
+              yield* input.semantics.recordExecution(input.events, {
+                receiptId: createReceiptId(),
+                actionId,
+                idempotencyKey: options.toolCallId,
+                actionFingerprint: JSON.stringify(isRecord(args) ? args : {}),
+                capability: `tool.${item.id}`,
+                target: item.id,
+                success: false,
+                exitCode: 1,
+                scope: input.semantics.scope(input.session.directory),
+                risk: REJECTION_RISK,
+                humanApproved: false,
+                outputSummary: reason.slice(0, 500),
+                evidenceId: createEvidenceId(),
+                executionDurationMs: ZERO_DURATION_MS,
+                timestamp: new Date().toISOString(),
+              })
+              if (options.abortSignal?.aborted)
+                yield* input.processor.completeToolCall(options.toolCallId, rejectionOutput)
               return rejectionOutput
             }
+            if (!admission.revision.equals(input.semantics.hardState.revision))
+              return {
+                title: item.id,
+                metadata: {},
+                output: "ACCP authority rejected: action revision is stale",
+              }
 
             yield* plugin.trigger(
               "tool.execute.before",
               { tool: item.id, sessionID: ctx.sessionID, callID: ctx.callID },
               { args },
             )
-            const executed = yield* input.semantics.executeAuthorizedAction(
-              admission.authorizedAction,
-              (action) => item.execute(action.proposal.parameters as typeof args, ctx),
-              (value) => value.output,
-            )
-            yield* input.semantics.recordExecution(input.events, executed.receipt)
-            yield* input.semantics.recordObservation(input.events, executed.receipt, executed.receipt.outputSummary)
-            yield* input.semantics.admitEvidence(
-              input.events,
-              executed.receipt,
-              executed.receipt.capability,
-              executed.receipt.outputSummary,
-            )
-            const result = executed.value
+            const started = Date.now()
+            let executedValue: any
+            let executionError: unknown
+            try {
+              if (!admission.revision.equals(input.semantics.hardState.revision)) {
+                throw new Error("ACCP authority rejected: action revision became stale before execution")
+              }
+              const executed = yield* input.semantics.executeAuthorizedAction(
+                admission,
+                (action) => item.execute(action.proposal.parameters as typeof args, ctx),
+                (value) => value.output,
+              )
+              executedValue = executed.value
+              yield* input.semantics.recordExecution(input.events, executed.receipt)
+              yield* input.semantics.recordObservation(input.events, executed.receipt, executed.receipt.outputSummary)
+              yield* input.semantics.admitEvidence(
+                input.events,
+                executed.receipt,
+                executed.receipt.capability,
+                executed.receipt.outputSummary,
+              )
+            } catch (err) {
+              executionError = err
+              const reason = err instanceof Error ? err.message : String(err)
+              const actionId = createActionId(options.toolCallId)
+              yield* input.semantics.recordExecution(input.events, {
+                receiptId: createReceiptId(),
+                actionId,
+                idempotencyKey: options.toolCallId,
+                actionFingerprint: JSON.stringify(isRecord(args) ? args : {}),
+                capability: `tool.${item.id}`,
+                target: item.id,
+                success: false,
+                exitCode: 1,
+                scope: input.semantics.scope(input.session.directory),
+                risk: REJECTION_RISK,
+                humanApproved: false,
+                outputSummary: reason.slice(0, 500),
+                evidenceId: createEvidenceId(),
+                executionDurationMs: Date.now() - started,
+                timestamp: new Date().toISOString(),
+              })
+              throw err
+            }
+
+            const result = executedValue
             const output = {
               ...result,
-              attachments: result.attachments?.map((attachment) => ({
+              attachments: result.attachments?.map((attachment: any) => ({
                 ...attachment,
                 id: PartID.ascending(),
                 sessionID: ctx.sessionID,
@@ -254,7 +305,12 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
             )
             yield* input.semantics.recordExecution(input.events, executed.receipt)
             yield* input.semantics.recordObservation(input.events, executed.receipt, executed.receipt.outputSummary)
-            yield* input.semantics.admitEvidence(input.events, executed.receipt, executed.receipt.capability, executed.receipt.outputSummary)
+            yield* input.semantics.admitEvidence(
+              input.events,
+              executed.receipt,
+              executed.receipt.capability,
+              executed.receipt.outputSummary,
+            )
             const resources = Object.values(executed.value)
             const filtered = resources
               .filter((resource) => !normalized.server || resource.client === normalized.server)
@@ -346,7 +402,12 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
             )
             yield* input.semantics.recordExecution(input.events, executed.receipt)
             yield* input.semantics.recordObservation(input.events, executed.receipt, executed.receipt.outputSummary)
-            yield* input.semantics.admitEvidence(input.events, executed.receipt, executed.receipt.capability, executed.receipt.outputSummary)
+            yield* input.semantics.admitEvidence(
+              input.events,
+              executed.receipt,
+              executed.receipt.capability,
+              executed.receipt.outputSummary,
+            )
             const templates = Object.values(executed.value)
             const filtered = templates
               .filter((template) => !normalized.server || template.client === normalized.server)
@@ -435,7 +496,12 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
             )
             yield* input.semantics.recordExecution(input.events, executed.receipt)
             yield* input.semantics.recordObservation(input.events, executed.receipt, executed.receipt.outputSummary)
-            yield* input.semantics.admitEvidence(input.events, executed.receipt, executed.receipt.capability, executed.receipt.outputSummary)
+            yield* input.semantics.admitEvidence(
+              input.events,
+              executed.receipt,
+              executed.receipt.capability,
+              executed.receipt.outputSummary,
+            )
             const content = executed.value
             if (!content) throw new Error(`Failed to read MCP resource: ${parsed.server}/${parsed.uri}`)
 
@@ -498,41 +564,73 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
               allowedScope: scope,
               allowedCapabilities: ["file.read", "file.write", "process.exec", "tool.*", "mcp.*"],
               allowMaterial: true,
-              humanApproved: true,
+              humanApproved: false,
             },
           )
-          if (!admission.authorizedAction) throw new Error(admission.decision?.reason ?? "MCP action was not authorized")
+          if (!admission.authorizedAction)
+            throw new Error(admission.decision?.reason ?? "MCP action was not authorized")
+          if (!admission.authorizedAction.revision.equals(input.semantics.hardState.revision)) {
+            throw new Error("ACCP authority rejected: action revision became stale before execution")
+          }
           yield* plugin.trigger(
             "tool.execute.before",
             { tool: key, sessionID: ctx.sessionID, callID: opts.toolCallId },
             { args },
           )
-          const executed = yield* input.semantics.executeAuthorizedAction(
-            admission.authorizedAction,
-            (action) =>
-              Effect.gen(function* () {
-                yield* ctx.ask({ permission: key, metadata: {}, patterns: ["*"], always: ["*"] })
-                return yield* Effect.promise(() => execute(action.proposal.parameters as typeof args, opts))
-              }).pipe(
-                Effect.withSpan("Tool.execute", {
-                  attributes: {
-                    "tool.name": key,
-                    "tool.call_id": opts.toolCallId,
-                    "session.id": ctx.sessionID,
-                    "message.id": input.processor.message.id,
-                  },
-                }),
-              ),
-            (value) => JSON.stringify(value).slice(0, 500),
-          )
-          yield* input.semantics.recordExecution(input.events, executed.receipt)
-          yield* input.semantics.recordObservation(input.events, executed.receipt, executed.receipt.outputSummary)
-          yield* input.semantics.admitEvidence(
-            input.events,
-            executed.receipt,
-            executed.receipt.capability,
-            executed.receipt.outputSummary,
-          )
+          const started = Date.now()
+          let executed: any
+          try {
+            if (!admission.authorizedAction.revision.equals(input.semantics.hardState.revision)) {
+              throw new Error("ACCP authority rejected: action revision became stale before execution")
+            }
+            executed = yield* input.semantics.executeAuthorizedAction(
+              admission.authorizedAction,
+              (action) =>
+                Effect.gen(function* () {
+                  yield* ctx.ask({ permission: key, metadata: {}, patterns: ["*"], always: ["*"] })
+                  return yield* Effect.promise(() => execute(action.proposal.parameters as typeof args, opts))
+                }).pipe(
+                  Effect.withSpan("Tool.execute", {
+                    attributes: {
+                      "tool.name": key,
+                      "tool.call_id": opts.toolCallId,
+                      "session.id": ctx.sessionID,
+                      "message.id": input.processor.message.id,
+                    },
+                  }),
+                ),
+              (value) => JSON.stringify(value).slice(0, 500),
+            )
+            yield* input.semantics.recordExecution(input.events, executed.receipt)
+            yield* input.semantics.recordObservation(input.events, executed.receipt, executed.receipt.outputSummary)
+            yield* input.semantics.admitEvidence(
+              input.events,
+              executed.receipt,
+              executed.receipt.capability,
+              executed.receipt.outputSummary,
+            )
+          } catch (err) {
+            const reason = err instanceof Error ? err.message : String(err)
+            const actionId = createActionId(opts.toolCallId)
+            yield* input.semantics.recordExecution(input.events, {
+              receiptId: createReceiptId(),
+              actionId,
+              idempotencyKey: opts.toolCallId,
+              actionFingerprint: JSON.stringify(isRecord(args) ? args : {}),
+              capability: `mcp.${key}`,
+              target: key,
+              success: false,
+              exitCode: 1,
+              scope: input.semantics.scope(input.session.directory),
+              risk: REJECTION_RISK,
+              humanApproved: false,
+              outputSummary: reason.slice(0, 500),
+              evidenceId: createEvidenceId(),
+              executionDurationMs: Date.now() - started,
+              timestamp: new Date().toISOString(),
+            })
+            throw err
+          }
           const result: Awaited<ReturnType<NonNullable<typeof execute>>> = executed.value
           yield* plugin.trigger(
             "tool.execute.after",

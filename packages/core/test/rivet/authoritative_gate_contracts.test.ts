@@ -1,17 +1,8 @@
 import { describe, expect, test } from "bun:test"
-import {
-  AccpSemanticGate,
-  type CompletionProposal,
-} from "../../src/rivet/accp"
+import { AccpSemanticGate, type CompletionProposal } from "../../src/rivet/accp"
 import { GoalCompiler } from "../../src/rivet/goal-compiler"
 import { HardState } from "../../src/rivet/noesis"
-import {
-  Revision,
-  Scope,
-  createObligationId,
-  createReceiptId,
-  createTaskId,
-} from "../../src/rivet/types"
+import { Revision, Scope, createObligationId, createReceiptId, createTaskId } from "../../src/rivet/types"
 import { CognitiveViewCompiler } from "../../src/rivet/view-compiler"
 
 describe("Authoritative Gate Contracts & Cognitive Controller Alignment", () => {
@@ -118,7 +109,7 @@ describe("Authoritative Gate Contracts & Cognitive Controller Alignment", () => 
       {
         getKind: (id) => state.obligationKind(id),
         getDescription: (id) => state.obligations.get(id) ?? id,
-      }
+      },
     )
 
     expect(decision.completed).toBe(true)
@@ -180,7 +171,7 @@ describe("Authoritative Gate Contracts & Cognitive Controller Alignment", () => 
       {
         getKind: (id) => state.obligationKind(id),
         getDescription: (id) => state.obligations.get(id) ?? id,
-      }
+      },
     )
 
     expect(decision.completed).toBe(false)
@@ -238,5 +229,29 @@ describe("Authoritative Gate Contracts & Cognitive Controller Alignment", () => 
     expect(stateMutation.verifier).toBe("HARNESS")
     expect(stateMutation.praxisRequired).toBe(false)
     expect(stateMutation.requiredProofKind).toBe("STATE_TRANSITION_RECEIPT")
+  })
+
+  test("Completion evidence is bound to the active task", () => {
+    const activeTask = createTaskId("active-task")
+    const priorTask = createTaskId("prior-task")
+    const decision = AccpSemanticGate.evaluateCompletion(
+      {
+        taskId: priorTask,
+        summary: "Prior task completion",
+        claimsAddressed: [],
+        baseRevision: Revision.ZERO,
+        timestamp: new Date().toISOString(),
+      },
+      Revision.ZERO,
+      [],
+      [createReceiptId()],
+      undefined,
+      true,
+      activeTask,
+    )
+
+    expect(decision.completed).toBe(false)
+    expect(decision.internalClosureReady).toBe(false)
+    expect(decision.blockers.some((blocker) => blocker.includes("does not match the active task"))).toBe(true)
   })
 })
