@@ -59,6 +59,7 @@ import {
   type PremiseConflict,
   type Provenance,
   type RecoveryId,
+  type RecoveryVerificationReceipt,
   type SessionId,
   type TaskId,
   type TaskAuthority,
@@ -1065,6 +1066,19 @@ export class SessionSemantics {
         reason: `Acceptance verified by ${receipt.receiptId}`,
         timestamp: new Date().toISOString(),
       },
+      {
+        type: "focus_folded",
+        fold: {
+          focusId: current.id,
+          taskId: current.taskId,
+          kind: current.kind,
+          summary: `RESOLVED FOCUS ${current.id}: ${current.objective}. Acceptance verified.`,
+          evidenceRefs: [receipt.evidenceId, receipt.receiptId],
+          startedAt: current.createdAt,
+          completedAt: new Date().toISOString(),
+        },
+        timestamp: new Date().toISOString(),
+      },
       { type: "focus_set", focus, timestamp: new Date().toISOString() },
     ])
   }
@@ -1076,6 +1090,7 @@ export class SessionSemantics {
       readonly objective: string
       readonly acceptanceCriteria: readonly string[]
       readonly budget?: number
+      readonly trajectoryStartMessageId?: string
     },
   ) {
     const parent = this.hardState.executionFocus
@@ -1092,6 +1107,7 @@ export class SessionSemantics {
       acceptanceCriteria: input.acceptanceCriteria,
       allowedScope: parent.contract.allowedScope,
       budget: input.budget,
+      trajectoryStartMessageId: input.trajectoryStartMessageId,
     })
     return this.append(events, {
       type: "recovery_opened",
@@ -1101,19 +1117,134 @@ export class SessionSemantics {
     }).pipe(Effect.as(recovery.frame))
   }
 
-  popRecovery(events: EventV2.Interface, recoveryId: RecoveryId, receipt: VerificationReceipt) {
+  recordRecoveryVerification(events: EventV2.Interface, receipt: RecoveryVerificationReceipt) {
+    const frame = this.hardState.recoveryFrames.get(receipt.recoveryId)
+    if (!frame || frame.status !== "open") {
+      return Effect.fail(new Error(`Recovery ${receipt.recoveryId} is not open`))
+    }
+    if (this.hardState.recoveryStack.at(-1) !== receipt.recoveryId) {
+      return Effect.fail(new Error(`Recovery ${receipt.recoveryId} is not the active recovery frame`))
+    }
+    if (
+      receipt.acceptanceCriteria.length !== frame.acceptanceCriteria.length ||
+      receipt.acceptanceCriteria.some((criterion, index) => criterion !== frame.acceptanceCriteria[index])
+    ) {
+      return Effect.fail(new Error("Recovery verification does not bind the frame acceptance contract"))
+    }
+    if (!receipt.evidenceRefs.every((evidenceId) => this.hardState.evidence.has(evidenceId))) {
+      return Effect.fail(new Error("Recovery verification references unadmitted evidence"))
+    }
+    if (receipt.passed && receipt.evidenceRefs.length === 0) {
+      return Effect.fail(new Error("Passing recovery verification requires admitted evidence"))
+    }
+    return this.append(events, {
+      type: "recovery_verification_recorded",
+      receipt,
+      timestamp: new Date().toISOString(),
+    })
+  }
+
+  verifyRecovery(events: EventV2.Interface, request: VerificationRequest) {
+    const recoveryId = this.hardState.recoveryStack.at(-1)
+    const frame = recoveryId ? this.hardState.recoveryFrames.get(recoveryId) : undefined
+    if (!recoveryId || !frame || frame.status !== "open") {
+      return Effect.fail(new Error("No active recovery frame to verify"))
+    }
+    const activeRecoveryId = recoveryId
+    if (request.obligationId !== frame.targetObligationId) {
+      return Effect.fail(new Error("Recovery verification must target the inherited obligation boundary"))
+    }
+    const predicate = this.hardState.obligationPredicates.get(frame.targetObligationId)
+    if (!predicate) return Effect.fail(new Error("Recovery verification requires a declared predicate"))
+
+    const self = this
+    return Effect.gen(function* () {
+      const evaluated = (() => {
+        if (predicate.type === "file_constraint") {
+          const outcome = evaluateFileConstraintOnDisk(request.targetScope.repository, predicate)
+          return {
+            passed: outcome.passed,
+            evidenceId: createEvidenceId(),
+            evidenceSource: "praxis.recovery.file_constraint",
+            evidenceSummary: outcome.observation,
+            diagnostics: outcome.diagnostics,
+          }
+        }
+        if (predicate.type === "command_pass") {
+          const execution = self.hardState.executionReceipts.findLast(
+            (candidate) =>
+              candidate.scope.repository === request.targetScope.repository && candidate.target === predicate.command,
+          )
+          const observedExitCode = execution?.exitCode ?? (execution?.success ? 0 : 1)
+          const passed = Boolean(execution?.success && observedExitCode === predicate.expectedExitCode)
+          return {
+            passed,
+            evidenceId: execution?.evidenceId,
+            evidenceSource: "praxis.recovery.command_pass",
+            evidenceSummary: execution
+              ? `Observed '${predicate.command}' exit ${observedExitCode}`
+              : `No observed execution for '${predicate.command}'`,
+            diagnostics: passed ? null : `COMMAND_FAILED: expected exit ${predicate.expectedExitCode}`,
+          }
+        }
+        if (predicate.type === "claims_verified") {
+          const outcome = self.evaluateClaimsVerified(frame.targetObligationId, predicate)
+          return {
+            passed: outcome.passed,
+            evidenceId: createEvidenceId(),
+            evidenceSource: "praxis.recovery.claims_verified",
+            evidenceSummary: outcome.evidenceSummary,
+            diagnostics: outcome.diagnostics,
+          }
+        }
+        return {
+          passed: false,
+          evidenceId: undefined,
+          evidenceSource: "praxis.recovery.unsupported",
+          evidenceSummary: "Recovery acceptance requires a machine-checkable predicate",
+          diagnostics: "RECOVERY_PREDICATE_UNSUPPORTED",
+        }
+      })()
+
+      if (evaluated.evidenceId && !self.hardState.evidence.has(evaluated.evidenceId)) {
+        yield* self.append(events, {
+          type: "evidence_recorded",
+          evidenceId: evaluated.evidenceId,
+          source: evaluated.evidenceSource,
+          summary: evaluated.evidenceSummary,
+          timestamp: new Date().toISOString(),
+        })
+      }
+      const receipt: RecoveryVerificationReceipt = {
+        receiptId: createReceiptId(),
+        recoveryId: activeRecoveryId,
+        passed: evaluated.passed,
+        acceptanceCriteria: [...frame.acceptanceCriteria],
+        evidenceRefs: evaluated.evidenceId ? [evaluated.evidenceId] : [],
+        verifier: "PRAXIS",
+        diagnostics: evaluated.diagnostics,
+        timestamp: new Date().toISOString(),
+      }
+      yield* self.recordRecoveryVerification(events, receipt)
+      if (receipt.passed) yield* self.popRecovery(events, activeRecoveryId, receipt)
+      return receipt
+    })
+  }
+
+  popRecovery(events: EventV2.Interface, recoveryId: RecoveryId, receipt: RecoveryVerificationReceipt) {
     const frame = this.hardState.recoveryFrames.get(recoveryId)
     if (!frame || frame.status !== "open") return Effect.fail(new Error(`Recovery ${recoveryId} is not open`))
-    if (this.hardState.verificationReceipts.get(receipt.obligationId)?.receiptId !== receipt.receiptId) {
+    if (this.hardState.recoveryVerificationReceipts.get(recoveryId)?.receiptId !== receipt.receiptId) {
       return Effect.fail(new Error("Recovery transition requires a recorded Praxis receipt"))
     }
     try {
-      TaskControlController.requirePassingVerification(receipt, frame.targetObligationId)
+      TaskControlController.requirePassingRecoveryVerification(receipt, recoveryId)
     } catch (error) {
       return Effect.fail(error instanceof Error ? error : new Error(String(error)))
     }
     const parent = this.hardState.focuses.get(frame.parentFocusId)
     if (!parent) return Effect.fail(new Error(`Recovery ${recoveryId} has no resumable parent focus`))
+    const recoveryFocus = this.hardState.executionFocus
     return this.appendAll(events, [
       {
         type: "recovery_verified",
@@ -1127,7 +1258,68 @@ export class SessionSemantics {
         resumeFocus: parent,
         timestamp: new Date().toISOString(),
       },
+      ...(recoveryFocus
+        ? [
+            {
+              type: "focus_folded" as const,
+              fold: {
+                focusId: recoveryFocus.id,
+                taskId: recoveryFocus.taskId,
+                kind: recoveryFocus.kind,
+                summary: `RESOLVED RECOVERY ${recoveryId}: ${frame.objective}. Cause: ${frame.failureClass}. No remaining recovery blocker.`,
+                evidenceRefs: [...receipt.evidenceRefs, receipt.receiptId],
+                startedAt: recoveryFocus.createdAt,
+                completedAt: new Date().toISOString(),
+                startMessageId: frame.trajectoryStartMessageId,
+              },
+              timestamp: new Date().toISOString(),
+            },
+          ]
+        : []),
     ])
+  }
+
+  settleFocusAfterVerification(events: EventV2.Interface, receipt: VerificationReceipt) {
+    if (!receipt.passed) return Effect.fail(new Error("Cannot settle focus from a failing verification receipt"))
+    const self = this
+    return Effect.gen(function* () {
+      if (self.hardState.recoveryStack.length > 0) return
+      const current = self.hardState.executionFocus
+      const next = self.hardState.readyObligationIds().find((id) => id !== current?.targetObligationId)
+      if (next && current?.targetObligationId === receipt.obligationId) {
+        yield* self.advanceFocus(events, next, receipt)
+        return
+      }
+      if (
+        current?.targetObligationId === receipt.obligationId &&
+        !self.hardState.obligations.has(receipt.obligationId)
+      ) {
+        yield* self.append(events, {
+          type: "focus_folded",
+          fold: {
+            focusId: current.id,
+            taskId: current.taskId,
+            kind: current.kind,
+            summary: `RESOLVED FOCUS ${current.id}: ${current.objective}. Awaiting verified task completion.`,
+            evidenceRefs: [receipt.evidenceId, receipt.receiptId],
+            startedAt: current.createdAt,
+            completedAt: new Date().toISOString(),
+          },
+          timestamp: new Date().toISOString(),
+        })
+      }
+    })
+  }
+
+  strategyRedirect(events: EventV2.Interface, reason: string) {
+    const focus = this.hardState.executionFocus
+    if (!focus) return Effect.fail(new Error("Strategy redirect requires an active focus"))
+    return this.append(events, {
+      type: "strategy_redirected",
+      focusId: focus.id,
+      reason,
+      timestamp: new Date().toISOString(),
+    })
   }
 
   completeObligation(events: EventV2.Interface, receipt: VerificationReceipt) {

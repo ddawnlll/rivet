@@ -18,6 +18,7 @@ import {
   type PremiseConflict,
   type RecoveryFrame,
   type Revision,
+  type TrajectoryFold,
   Scope,
 } from "./types"
 import { AccpSemanticGate } from "./accp"
@@ -80,6 +81,7 @@ export interface CompiledViewPayload {
   readonly activeFocus: readonly string[]
   readonly executionFocus: ExecutionFocus | null
   readonly recoveryFrames: readonly RecoveryFrame[]
+  readonly trajectoryFolds: readonly TrajectoryFold[]
   readonly hypotheses: readonly string[]
   readonly unknowns: readonly string[]
   readonly candidateActions: readonly string[]
@@ -183,6 +185,7 @@ export class CognitiveViewCompiler {
       recoveryFrames: ctx.hardState.recoveryStack
         .map((id) => ctx.hardState.recoveryFrames.get(id))
         .filter((frame): frame is RecoveryFrame => frame !== undefined),
+      trajectoryFolds: ctx.hardState.trajectoryFolds,
       hypotheses: ctx.softWorkspace.hypotheses,
       unknowns: ctx.softWorkspace.unknowns,
       candidateActions: ctx.softWorkspace.candidateActions,
@@ -223,6 +226,7 @@ export class CognitiveViewCompiler {
       activeFocus: [...compiled.activeFocus],
       executionFocus: compiled.executionFocus,
       recoveryFrames: compiled.recoveryFrames,
+      trajectoryFolds: compiled.trajectoryFolds,
       relevantFiles: [...compiled.relevantFiles],
       premiseConflicts: [...compiled.premiseConflicts],
       memoryFrontier: compiled.memoryFrontier,
