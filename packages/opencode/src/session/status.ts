@@ -1,5 +1,5 @@
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
-import { InstanceState } from "@/effect/instance-state"
+import { InstanceRef } from "@/effect/instance-ref"
 import { SessionID } from "./schema"
 import { Effect, Layer, Context } from "effect"
 import { EventV2Bridge } from "@/event-v2-bridge"
@@ -23,43 +23,48 @@ const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const events = yield* EventV2Bridge.Service
+    const statusMap = new Map<SessionID, { info: Info; directory?: string }>()
 
-    const state = yield* InstanceState.make(
-      Effect.fn("SessionStatus.state")(() => Effect.succeed(new Map<SessionID, Info>())),
-    )
     const unsubscribe = yield* events.listen((event) => {
       if (event.type !== Event.Status.type) return Effect.void
       const statusEvent = event as Payload<typeof Event.Status>
-      return InstanceState.get(state).pipe(
-        Effect.tap((data) =>
-          Effect.sync(() => {
-            if (statusEvent.data.status.type === "idle") data.delete(statusEvent.data.sessionID)
-            else data.set(statusEvent.data.sessionID, statusEvent.data.status)
-          }),
-        ),
-        Effect.asVoid,
-      )
+      return Effect.sync(() => {
+        if (statusEvent.data.status.type === "idle") {
+          statusMap.delete(statusEvent.data.sessionID)
+        } else {
+          statusMap.set(statusEvent.data.sessionID, {
+            info: statusEvent.data.status,
+            directory: statusEvent.location?.directory,
+          })
+        }
+      })
     })
     yield* Effect.addFinalizer(() => unsubscribe)
 
     const get = Effect.fn("SessionStatus.get")(function* (sessionID: SessionID) {
-      const data = yield* InstanceState.get(state)
-      return data.get(sessionID) ?? { type: "idle" as const }
+      return statusMap.get(sessionID)?.info ?? { type: "idle" as const }
     })
 
     const list = Effect.fn("SessionStatus.list")(function* () {
-      return new Map(yield* InstanceState.get(state))
+      const ctx = yield* InstanceRef
+      const result = new Map<SessionID, Info>()
+      for (const [id, entry] of statusMap) {
+        if (!ctx || !entry.directory || entry.directory === ctx.directory) {
+          result.set(id, entry.info)
+        }
+      }
+      return result
     })
 
     const set = Effect.fn("SessionStatus.set")(function* (sessionID: SessionID, status: Info) {
-      const data = yield* InstanceState.get(state)
+      const ctx = yield* InstanceRef
       yield* events.publish(Event.Status, { sessionID, status })
       if (status.type === "idle") {
         yield* events.publish(Event.Idle, { sessionID })
-        data.delete(sessionID)
+        statusMap.delete(sessionID)
         return
       }
-      data.set(sessionID, status)
+      statusMap.set(sessionID, { info: status, directory: ctx?.directory })
     })
 
     return Service.of({ get, list, set })

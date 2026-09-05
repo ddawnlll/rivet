@@ -413,7 +413,21 @@ export const RunCommand = effectCmd({
         }
       }
 
-      const piped = process.stdin.isTTY ? undefined : await Bun.stdin.text()
+      const piped = await (async () => {
+        if (process.stdin.isTTY) return undefined
+        if (message.trim().length > 0) {
+          try {
+            const fs = await import("node:fs")
+            const stat = fs.fstatSync(0)
+            if (!stat.isFile() && !(stat.isFIFO() && stat.size > 0)) {
+              return undefined
+            }
+          } catch {
+            return undefined
+          }
+        }
+        return Bun.stdin.text()
+      })()
       message = resolveRunInput(message, piped) ?? ""
       const initialInput = resolveRunInput(rawMessage, piped)
 
@@ -715,6 +729,35 @@ export const RunCommand = effectCmd({
               UI.println(`> ${event.properties.info.agent} · ${event.properties.info.modelID}`)
               UI.empty()
               toggles.set("start", true)
+            }
+
+            if (
+              event.type === "session.next.step.started" &&
+              event.properties.sessionID === sessionID &&
+              args.format !== "json" &&
+              toggles.get("start") !== true
+            ) {
+              UI.empty()
+              UI.println(`> ${event.properties.agent} · ${event.properties.model.id}`)
+              UI.empty()
+              toggles.set("start", true)
+            }
+
+            const rawEvent = event as { type: string; properties?: Record<string, any> }
+            if (rawEvent.type === "session.next.text.delta" && rawEvent.properties?.sessionID === sessionID) {
+              process.stdout.write(rawEvent.properties.delta)
+            }
+
+            if (rawEvent.type === "session.next.text.ended" && rawEvent.properties?.sessionID === sessionID) {
+              process.stdout.write(EOL)
+            }
+
+            if (rawEvent.type === "session.next.tool.input.called" && rawEvent.properties?.sessionID === sessionID) {
+              UI.println(`> tool: ${rawEvent.properties.name}(${JSON.stringify(rawEvent.properties.input)})`)
+            }
+
+            if (rawEvent.type === "session.next.tool.settled" && rawEvent.properties?.sessionID === sessionID) {
+              UI.println(`✓ tool settled: ${rawEvent.properties.name}`)
             }
 
             if (event.type === "message.part.updated") {

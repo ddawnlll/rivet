@@ -58,6 +58,7 @@ import {
   type Provenance,
   type SessionId,
   type TaskId,
+  type TaskAuthority,
   type ValidityPolicy,
 } from "../rivet/types"
 import { parseProviderToolFrame, type ProviderToolFrame } from "./commitment"
@@ -196,7 +197,12 @@ export class SessionSemantics {
         ? { ...parsed, proposal: { ...parsed.proposal, taskId: this.hardState.activeTaskId } }
         : parsed
     if (commitment.type !== "action_proposal") return { commitment, authorizedAction: null }
-    const authorization = AccpSemanticGate.authorize(commitment.proposal, policy)
+    const authorization = AccpSemanticGate.authorize(commitment.proposal, {
+      ...policy,
+      // The provider cannot supply this authority. Re-derive it from the
+      // durable goal admission state at the semantic boundary.
+      taskAuthority: this.hardState.activeTaskAuthority ?? "normal_project_task",
+    })
     return { commitment, authorizedAction: authorization.authorizedAction, decision: authorization.decision }
   }
 
@@ -962,8 +968,15 @@ export class SessionSemantics {
     }).pipe(Effect.as(decision))
   }
 
-  ensureGoal(events: EventV2.Interface, goal: string, repository: string, kind?: ObligationKind) {
-    if (this.hardState.goalDescription === goal) return Effect.void
+  ensureGoal(
+    events: EventV2.Interface,
+    goal: string,
+    repository: string,
+    kind?: ObligationKind,
+    taskAuthority: TaskAuthority = "normal_project_task",
+  ) {
+    if (this.hardState.goalDescription === goal && this.hardState.activeTaskAuthority === taskAuthority)
+      return Effect.void
     const compiled = GoalCompiler.compile(goal, repository, this.hardState.revision, kind)
     const self = this
     return Effect.gen(function* () {
@@ -971,6 +984,7 @@ export class SessionSemantics {
         type: "goal_set",
         goal,
         goalId: compiled.goalId,
+        taskAuthority,
         timestamp: new Date().toISOString(),
       })
       self.hardState.activeTaskId = compiled.goalId

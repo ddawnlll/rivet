@@ -11,6 +11,13 @@ export type ActionId = string & { readonly __brand: "ActionId" }
 export type ReceiptId = string & { readonly __brand: "ReceiptId" }
 export type InvocationId = string & { readonly __brand: "InvocationId" }
 
+/**
+ * User-authorized subject of the active task. Autonomous self-repair is never
+ * an admission value; it is the fail-closed outcome when a normal task reaches
+ * Rivet internals without this authority.
+ */
+export type TaskAuthority = "normal_project_task" | "rivet_maintenance_task"
+
 function randomSuffix(): string {
   return Math.random().toString(36).substring(2, 10) + Math.random().toString(36).substring(2, 10)
 }

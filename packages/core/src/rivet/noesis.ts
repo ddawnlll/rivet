@@ -19,6 +19,7 @@ import {
   type Scope,
   type SessionId,
   type TaskId,
+  type TaskAuthority,
   type ValidityPolicy,
   type WorkspaceId,
   createWorkspaceId,
@@ -105,6 +106,7 @@ export type NoesisEvent =
       readonly type: "goal_set"
       readonly goal: string
       readonly goalId?: TaskId
+      readonly taskAuthority?: TaskAuthority
       readonly timestamp: string
     }
   | {
@@ -303,6 +305,8 @@ export class HardState {
   /** Revision at which the currently active goal was admitted. */
   activeGoalRevision: Revision | null = null
   activeTaskId: TaskId | null = null
+  /** Durable authority for the currently active user goal. */
+  activeTaskAuthority: TaskAuthority | null = null
   readonly claims: Map<ClaimId, ClaimRecord> = new Map()
   readonly contradictions: Map<ClaimId, ContradictionRecord> = new Map()
   readonly rejectedClaims: Map<ClaimId, RejectionRecord> = new Map()
@@ -391,6 +395,7 @@ export class HardState {
         this.goalDescription = (event as any).goal ?? (event as any).description ?? null
         this.activeGoalRevision = this.revision
         if ((event as any).goalId) this.activeTaskId = (event as any).goalId
+        this.activeTaskAuthority = (event as any).taskAuthority ?? "normal_project_task"
         break
       }
       case "claim_asserted": {
@@ -643,6 +648,7 @@ export class HardState {
       }
       case "completion_accepted": {
         this.completedTasks.set(event.taskId, event.finalReceipt)
+        if (this.activeTaskId === event.taskId) this.activeTaskAuthority = null
         this.completionAttempts++
         if (this.firstAttemptAccepted === null) {
           this.firstAttemptAccepted = true

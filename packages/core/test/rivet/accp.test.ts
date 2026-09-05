@@ -143,6 +143,7 @@ describe("ACCP 3.0 Protocol & Semantic Gates", () => {
       allowedCapabilities: ["file.read"],
       allowMaterial: false,
       humanApproved: false,
+      taskAuthority: "rivet_maintenance_task",
     }
     const read = (target: string) =>
       AccpSemanticGate.authorizeAction(
@@ -161,6 +162,74 @@ describe("ACCP 3.0 Protocol & Semantic Gates", () => {
     expect(read(`./${file}`).verdict).toBe("allow")
     expect(read(`${repository}/./packages//core/src/rivet/./goal-compiler.ts`).verdict).toBe("allow")
     expect(read(`${repository}/${file}/`).verdict).toBe("allow")
+  })
+
+  test("Action authorization: Rivet maintenance authority allows internal reads and material mutations", () => {
+    const repository = "/work/checkouts/rivet"
+    const maintenancePolicy: ActionAuthorizationPolicy = {
+      repository,
+      currentRevision: Revision.ZERO,
+      allowedScope: Scope.global(repository, Revision.ZERO),
+      allowedCapabilities: ["file.read", "file.write"],
+      allowMaterial: true,
+      humanApproved: false,
+      taskAuthority: "rivet_maintenance_task",
+    }
+    const authorize = (capability: string, target: string, estimatedRisk: "inspect" | "material") =>
+      AccpSemanticGate.authorizeAction(
+        createActionProposal({
+          capability,
+          target,
+          estimatedRisk,
+          intent: "user-authorized Rivet maintenance",
+          scope: Scope.global(repository, Revision.ZERO),
+        }),
+        maintenancePolicy,
+      )
+
+    expect(authorize("file.read", "packages/core/src/session/commitment.ts", "inspect").verdict).toBe("allow")
+    expect(authorize("file.write", "packages/core/src/rivet/accp.ts", "material").verdict).toBe("allow")
+  })
+
+  test("Action authorization: Internal self-repair stays denied without maintenance authority", () => {
+    const repository = "/work/checkouts/rivet"
+    const normalPolicy: ActionAuthorizationPolicy = {
+      repository,
+      currentRevision: Revision.ZERO,
+      allowedScope: Scope.global(repository, Revision.ZERO),
+      allowedCapabilities: ["file.read", "file.write"],
+      allowMaterial: true,
+      humanApproved: false,
+      taskAuthority: "normal_project_task",
+    }
+    const authorize = (
+      capability: string,
+      target: string,
+      estimatedRisk: "inspect" | "material",
+      intent: string,
+    ) =>
+      AccpSemanticGate.authorizeAction(
+        createActionProposal({
+          capability,
+          target,
+          estimatedRisk,
+          intent,
+          scope: Scope.global(repository, Revision.ZERO),
+        }),
+        normalPolicy,
+      )
+
+    const read = authorize(
+      "file.read",
+      "packages/core/src/session/commitment.ts",
+      "inspect",
+      "Rivet is broken",
+    )
+    const mutation = authorize("file.write", "packages/core/src/rivet/accp.ts", "material", "repair Rivet")
+    expect(read.verdict).toBe("block")
+    expect(mutation.verdict).toBe("block")
+    expect(read.reason).toContain("autonomous self-repair is denied")
+    expect(mutation.reason).toContain("autonomous self-repair is denied")
   })
 
   test("Action authorization: Absolute escape spellings remain blocked (fails closed)", () => {

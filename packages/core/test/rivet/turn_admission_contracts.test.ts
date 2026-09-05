@@ -5,6 +5,8 @@ import {
   HardState,
   Revision,
   TurnAdmissionGate,
+  createReceiptId,
+  createTaskId,
 } from "../../src/rivet"
 
 describe("Turn Semantics & Lifecycle Admission Gate (v0.3.1 / I-21)", () => {
@@ -90,6 +92,51 @@ describe("Turn Semantics & Lifecycle Admission Gate (v0.3.1 / I-21)", () => {
     }
   })
 
+  test("I-21.4: Conversational Rivet maintenance phrasing creates trusted maintenance authority", () => {
+    const maintenanceExamples = [
+      "Audit Rivet's system prompt.",
+      "Inspect commitment.ts and determine how Rivet completion works.",
+      "Rivet'in system promptunu audit et, ilgili runtime dosyalarını incele.",
+      "ACCP'nin şu bugını düzelt.",
+      "Improve Rivet's runtime.",
+    ]
+
+    for (const text of maintenanceExamples) {
+      const decision = TurnAdmissionGate.classify(text)
+      expect(decision.category).toBe("autonomous_goal")
+      expect(decision.taskAuthority).toBe("rivet_maintenance_task")
+      expect(decision.shouldCreateGoal).toBe(true)
+    }
+  })
+
+  test("I-21.5: Maintenance authority is durable only for the current goal", () => {
+    const state = new HardState()
+    const maintenanceTask = createTaskId()
+    state.apply({
+      type: "goal_set",
+      goal: "Audit Rivet's system prompt",
+      goalId: maintenanceTask,
+      taskAuthority: "rivet_maintenance_task",
+      timestamp: new Date().toISOString(),
+    })
+    expect(state.activeTaskAuthority).toBe("rivet_maintenance_task")
+
+    state.apply({
+      type: "completion_accepted",
+      taskId: maintenanceTask,
+      finalReceipt: createReceiptId(),
+      timestamp: new Date().toISOString(),
+    })
+    expect(state.activeTaskAuthority).toBeNull()
+
+    state.apply({
+      type: "goal_set",
+      goal: "Find the provider config",
+      goalId: createTaskId(),
+      timestamp: new Date().toISOString(),
+    })
+    expect(state.activeTaskAuthority).toBe("normal_project_task")
+  })
 
   test("I-21.7: Completion contract v2 returns NOT_REQUIRED when no active goal exists", () => {
     const readiness = AccpSemanticGate.checkCompletionReadiness({

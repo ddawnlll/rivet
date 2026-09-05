@@ -46,6 +46,7 @@ export const prepareTurn = Effect.fn("RivetController.prepareTurn")(function* (i
       admission.goalText,
       input.session.directory,
       admission.obligationKind,
+      admission.taskAuthority,
     )
   return yield* input.semantics.cognitiveView({
     repositoryId: input.session.directory,

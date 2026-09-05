@@ -9,8 +9,9 @@
     "db": "bun drizzle-kit",
     "migration": "bun run script/migration.ts",
     "fix-node-pty": "bun run script/fix-node-pty.ts",
-    "test": "bun test --bail --only-failures",
-    "test:all": "bun test --bail",
+    "test": "bun test --bail --only-failures --path-ignore-patterns=bench/**",
+    "test:all": "bun test --bail --path-ignore-patterns=bench/**",
+    "bench": "bun test bench",
     "typecheck": "tsgo --noEmit"
   },
   "bin": {

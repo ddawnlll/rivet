@@ -112,6 +112,10 @@ const recoveryModel = Model.make({
 })
 const authorizations: Tool.Context[] = []
 const executions: string[] = []
+const readExecutions: string[] = []
+const editExecutions: string[] = []
+const grepExecutions: string[] = []
+const globExecutions: string[] = []
 const permission = Layer.succeed(
   PermissionV2.Service,
   PermissionV2.Service.of({
@@ -153,6 +157,53 @@ const echo = Layer.effectDiscard(
     }),
   ),
 )
+const registerLoopTestTools = (applicationTools: ApplicationTools.Interface) =>
+  applicationTools.register({
+    read: Tool.make({
+      description: "Read file",
+      input: Schema.Struct({ path: Schema.String }),
+      output: Schema.Struct({ content: Schema.String }),
+      toModelOutput: ({ output }) => [{ type: "text", text: output.content }],
+      execute: ({ path }) =>
+        Effect.sync(() => {
+          readExecutions.push(path)
+          return { content: `Content of ${path}` }
+        }),
+    }),
+    edit: Tool.make({
+      description: "Edit file",
+      input: Schema.Struct({ path: Schema.String, content: Schema.String }),
+      output: Schema.Struct({ success: Schema.Boolean }),
+      toModelOutput: () => [{ type: "text", text: "ok" }],
+      execute: ({ path, content }) =>
+        Effect.sync(() => {
+          editExecutions.push(`${path}:${content}`)
+          return { success: true }
+        }),
+    }),
+    grep: Tool.make({
+      description: "Grep files",
+      input: Schema.Struct({ pattern: Schema.String, path: Schema.optional(Schema.String) }),
+      output: Schema.Struct({ matches: Schema.Array(Schema.String) }),
+      toModelOutput: ({ output }) => [{ type: "text", text: output.matches.join("\n") }],
+      execute: ({ pattern }) =>
+        Effect.sync(() => {
+          grepExecutions.push(pattern)
+          return { matches: [`Match for ${pattern} in file.ts`] }
+        }),
+    }),
+    glob: Tool.make({
+      description: "Glob files",
+      input: Schema.Struct({ pattern: Schema.String }),
+      output: Schema.Struct({ files: Schema.Array(Schema.String) }),
+      toModelOutput: ({ output }) => [{ type: "text", text: output.files.join("\n") }],
+      execute: ({ pattern }) =>
+        Effect.sync(() => {
+          globExecutions.push(pattern)
+          return { files: ["a.ts", "b.ts", "c.ts"] }
+        }),
+    }),
+  })
 const echoNode = makeLocationNode({ name: "test/session-runner-tools", layer: echo, deps: [ToolRegistry.node] })
 let modelResolveHook = Effect.void
 let currentModel = model
@@ -332,6 +383,10 @@ const setup = Effect.gen(function* () {
   activeToolExecutions = 0
   maxActiveToolExecutions = 0
   executions.length = 0
+  readExecutions.length = 0
+  editExecutions.length = 0
+  grepExecutions.length = 0
+  globExecutions.length = 0
   authorizations.length = 0
   yield* db
     .insert(ProjectTable)
@@ -3466,6 +3521,108 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
+  it.effect("allows an explicitly requested Rivet audit through the native runner", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const applicationTools = yield* ApplicationTools.Service
+      const reads: string[] = []
+      yield* applicationTools.register({
+        read: Tool.make({
+          description: "Read a file for the test",
+          input: Schema.Struct({ path: Schema.String }),
+          output: Schema.Struct({ content: Schema.String }),
+          toModelOutput: ({ output }) => [{ type: "text", text: output.content }],
+          execute: ({ path }) =>
+            Effect.sync(() => {
+              reads.push(path)
+              return { content: "Rivet runtime source" }
+            }),
+        }),
+      })
+      const session = yield* SessionV2.Service
+      yield* session.prompt({
+        sessionID,
+        prompt: Prompt.make({ text: "Rivet'in system promptunu audit et, ilgili runtime dosyalarını incele." }),
+        resume: false,
+      })
+      responses = [
+        [
+          LLMEvent.toolCall({
+            id: "call-rivet-audit-read",
+            name: "read",
+            input: { path: "packages/core/src/session/commitment.ts" },
+          }),
+          LLMEvent.stepFinish({ index: 0, reason: "tool-calls" }),
+          LLMEvent.finish({ reason: "tool-calls" }),
+        ],
+        [
+          LLMEvent.textStart({ id: "rivet-audit-answer" }),
+          LLMEvent.textDelta({ id: "rivet-audit-answer", text: "Audit tamamlandı." }),
+          LLMEvent.textEnd({ id: "rivet-audit-answer" }),
+          LLMEvent.stepFinish({ index: 0, reason: "stop" }),
+          LLMEvent.finish({ reason: "stop" }),
+        ],
+      ]
+
+      yield* session.resume(sessionID)
+
+      expect(reads).toEqual(["packages/core/src/session/commitment.ts"])
+      const semantics = yield* SessionSemantics.load((yield* Database.Service).db, sessionID)
+      expect(semantics.hardState.activeTaskAuthority).toBe("rivet_maintenance_task")
+    }),
+  )
+
+  it.effect("allows an explicitly requested ACCP fix to execute an internal mutation", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const applicationTools = yield* ApplicationTools.Service
+      const writes: Array<{ readonly path: string; readonly content: string }> = []
+      yield* applicationTools.register({
+        write: Tool.make({
+          description: "Write a file for the test",
+          input: Schema.Struct({ path: Schema.String, content: Schema.String }),
+          output: Schema.Struct({ written: Schema.String }),
+          toModelOutput: ({ output }) => [{ type: "text", text: output.written }],
+          execute: (input) =>
+            Effect.sync(() => {
+              writes.push(input)
+              return { written: input.path }
+            }),
+        }),
+      })
+      const session = yield* SessionV2.Service
+      yield* session.prompt({
+        sessionID,
+        prompt: Prompt.make({ text: "ACCP'nin şu bugını düzelt." }),
+        resume: false,
+      })
+      responses = [
+        [
+          LLMEvent.toolCall({
+            id: "call-rivet-maintenance-write",
+            name: "write",
+            input: { path: "packages/core/src/rivet/accp.ts", content: "updated" },
+          }),
+          LLMEvent.stepFinish({ index: 0, reason: "tool-calls" }),
+          LLMEvent.finish({ reason: "tool-calls" }),
+        ],
+        [
+          LLMEvent.textStart({ id: "rivet-maintenance-answer" }),
+          LLMEvent.textDelta({ id: "rivet-maintenance-answer", text: "ACCP düzeltildi." }),
+          LLMEvent.textEnd({ id: "rivet-maintenance-answer" }),
+          LLMEvent.stepFinish({ index: 0, reason: "stop" }),
+          LLMEvent.finish({ reason: "stop" }),
+        ],
+      ]
+
+      yield* session.resume(sessionID)
+
+      expect(writes).toEqual([{ path: "packages/core/src/rivet/accp.ts", content: "updated" }])
+      const semantics = yield* SessionSemantics.load((yield* Database.Service).db, sessionID)
+      expect(semantics.hardState.activeTaskAuthority).toBe("rivet_maintenance_task")
+    }),
+  )
+
   it.effect("delivers a response after ACCP denies an internal-runtime read", () =>
     Effect.gen(function* () {
       yield* setup
@@ -3478,6 +3635,11 @@ describe("SessionRunnerLLM", () => {
       requests.length = 0
       responses = [
         [
+          LLMEvent.toolCall({
+            id: "call-verification-failure-before-denied-read",
+            name: "request_verification",
+            input: { predicate: "bun test" },
+          }),
           LLMEvent.toolCall({
             id: "call-denied-read",
             name: "read",
@@ -3684,7 +3846,7 @@ describe("SessionRunnerLLM", () => {
 
       yield* session.resume(sessionID)
 
-      expect(executions).toEqual(["same", "same", "same"])
+      expect(executions).toEqual(["same"])
       const terminal = yield* db
         .select({ data: EventTable.data })
         .from(EventTable)
@@ -3692,6 +3854,8 @@ describe("SessionRunnerLLM", () => {
         .all()
         .pipe(Effect.orDie)
       expect(terminal.at(-1)?.data).toMatchObject({ status: { outcome: "stalled", source: "stagnation_guard" } })
+      const messages = yield* session.messages({ sessionID })
+      expect(messages.some((m) => m.type === "assistant")).toBe(true)
     }),
   )
 
@@ -3971,6 +4135,293 @@ describe("SessionRunnerLLM", () => {
       expect(requests).toHaveLength(1)
       const messages = yield* session.messages({ sessionID })
       expect(messages.some((m) => m.type === "synthetic")).toBe(false)
+    }),
+  )
+
+  it.effect("tool loop: legitimate different reads continue without loop warnings", () =>
+    Effect.gen(function* () {
+      yield* setup
+      yield* registerLoopTestTools(yield* ApplicationTools.Service)
+      const session = yield* SessionV2.Service
+      const { db } = yield* Database.Service
+
+      yield* session.prompt({
+        sessionID,
+        prompt: Prompt.make({ text: "Inspect 4 different files" }),
+        resume: false,
+      })
+
+      responses = [
+        [
+          LLMEvent.toolCall({ id: "call-1", name: "read", input: { path: "a.ts" } }),
+          LLMEvent.stepFinish({ index: 0, reason: "tool-calls" }),
+          LLMEvent.finish({ reason: "tool-calls" }),
+        ],
+        [
+          LLMEvent.toolCall({ id: "call-2", name: "read", input: { path: "b.ts" } }),
+          LLMEvent.stepFinish({ index: 0, reason: "tool-calls" }),
+          LLMEvent.finish({ reason: "tool-calls" }),
+        ],
+        [
+          LLMEvent.toolCall({ id: "call-3", name: "read", input: { path: "c.ts" } }),
+          LLMEvent.stepFinish({ index: 0, reason: "tool-calls" }),
+          LLMEvent.finish({ reason: "tool-calls" }),
+        ],
+        [
+          LLMEvent.toolCall({ id: "call-4", name: "read", input: { path: "d.ts" } }),
+          LLMEvent.stepFinish({ index: 0, reason: "tool-calls" }),
+          LLMEvent.finish({ reason: "tool-calls" }),
+        ],
+        [
+          LLMEvent.textStart({ id: "txt-done" }),
+          LLMEvent.textDelta({ id: "txt-done", text: "Inspected all 4 files successfully." }),
+          LLMEvent.textEnd({ id: "txt-done" }),
+          LLMEvent.stepFinish({ index: 0, reason: "stop" }),
+          LLMEvent.finish({ reason: "stop" }),
+        ],
+      ]
+
+      yield* session.resume(sessionID)
+
+      // All 4 distinct reads must execute
+      expect(readExecutions).toEqual(["a.ts", "b.ts", "c.ts", "d.ts"])
+
+      const terminal = yield* db
+        .select({ data: EventTable.data })
+        .from(EventTable)
+        .where(eq(EventTable.type, EventV2.versionedType(SessionEvent.Run.Status.type, 1)))
+        .all()
+        .pipe(Effect.orDie)
+      expect(terminal.at(-1)?.data).toMatchObject({
+        status: { outcome: "completed" },
+      })
+    }),
+  )
+
+  it.effect("tool loop: state changed between repeats allows re-execution (read -> edit -> read)", () =>
+    Effect.gen(function* () {
+      yield* setup
+      yield* registerLoopTestTools(yield* ApplicationTools.Service)
+      const session = yield* SessionV2.Service
+
+      yield* session.prompt({
+        sessionID,
+        prompt: Prompt.make({ text: "Read file, edit file, read file again" }),
+        resume: false,
+      })
+
+      responses = [
+        [
+          LLMEvent.toolCall({ id: "call-read-1", name: "read", input: { path: "foo.ts" } }),
+          LLMEvent.stepFinish({ index: 0, reason: "tool-calls" }),
+          LLMEvent.finish({ reason: "tool-calls" }),
+        ],
+        [
+          LLMEvent.toolCall({ id: "call-edit", name: "edit", input: { path: "foo.ts", content: "new content" } }),
+          LLMEvent.stepFinish({ index: 0, reason: "tool-calls" }),
+          LLMEvent.finish({ reason: "tool-calls" }),
+        ],
+        [
+          LLMEvent.toolCall({ id: "call-read-2", name: "read", input: { path: "foo.ts" } }),
+          LLMEvent.stepFinish({ index: 0, reason: "tool-calls" }),
+          LLMEvent.finish({ reason: "tool-calls" }),
+        ],
+        [
+          LLMEvent.textStart({ id: "txt-done" }),
+          LLMEvent.textDelta({ id: "txt-done", text: "Read, edited, and read again." }),
+          LLMEvent.textEnd({ id: "txt-done" }),
+          LLMEvent.stepFinish({ index: 0, reason: "stop" }),
+          LLMEvent.finish({ reason: "stop" }),
+        ],
+      ]
+
+      yield* session.resume(sessionID)
+
+      // Both reads must execute because the intervening edit mutated workspace state
+      expect(readExecutions).toEqual(["foo.ts", "foo.ts"])
+      expect(editExecutions).toEqual(["foo.ts:new content"])
+    }),
+  )
+
+  it.effect("tool loop: oscillating two-action loop halts cleanly with guaranteed user response", () =>
+    Effect.gen(function* () {
+      yield* setup
+      yield* registerLoopTestTools(yield* ApplicationTools.Service)
+      const session = yield* SessionV2.Service
+      const { db } = yield* Database.Service
+
+      yield* session.prompt({
+        sessionID,
+        prompt: Prompt.make({ text: "Oscillate between grep and read" }),
+        resume: false,
+      })
+
+      responses = [
+        [
+          LLMEvent.toolCall({ id: "call-g1", name: "grep", input: { pattern: "SessionRunner" } }),
+          LLMEvent.stepFinish({ index: 0, reason: "tool-calls" }),
+          LLMEvent.finish({ reason: "tool-calls" }),
+        ],
+        [
+          LLMEvent.toolCall({ id: "call-r1", name: "read", input: { path: "session.ts" } }),
+          LLMEvent.stepFinish({ index: 0, reason: "tool-calls" }),
+          LLMEvent.finish({ reason: "tool-calls" }),
+        ],
+        [
+          LLMEvent.toolCall({ id: "call-g2", name: "grep", input: { pattern: "SessionRunner " } }),
+          LLMEvent.stepFinish({ index: 0, reason: "tool-calls" }),
+          LLMEvent.finish({ reason: "tool-calls" }),
+        ],
+        [
+          LLMEvent.toolCall({ id: "call-r2", name: "read", input: { path: "session.ts" } }),
+          LLMEvent.stepFinish({ index: 0, reason: "tool-calls" }),
+          LLMEvent.finish({ reason: "tool-calls" }),
+        ],
+        [
+          LLMEvent.toolCall({ id: "call-g3", name: "grep", input: { pattern: "SessionRunner" } }),
+          LLMEvent.stepFinish({ index: 0, reason: "tool-calls" }),
+          LLMEvent.finish({ reason: "tool-calls" }),
+        ],
+      ]
+
+      yield* session.resume(sessionID)
+
+      const terminal = yield* db
+        .select({ data: EventTable.data })
+        .from(EventTable)
+        .where(eq(EventTable.type, EventV2.versionedType(SessionEvent.Run.Status.type, 1)))
+        .all()
+        .pipe(Effect.orDie)
+      expect(terminal.at(-1)?.data).toMatchObject({
+        status: { outcome: "stalled", source: "stagnation_guard" },
+      })
+
+      // Must have delivered an assistant response to user
+      const messages = yield* session.messages({ sessionID })
+      expect(messages.some((m) => m.type === "assistant")).toBe(true)
+    }),
+  )
+
+  it.effect("tool loop: recovery resets stagnation counter when model shifts to progressing tool", () =>
+    Effect.gen(function* () {
+      yield* setup
+      yield* registerLoopTestTools(yield* ApplicationTools.Service)
+      const session = yield* SessionV2.Service
+      const { db } = yield* Database.Service
+
+      yield* session.prompt({
+        sessionID,
+        prompt: Prompt.make({ text: "Repeat once, then recover" }),
+        resume: false,
+      })
+
+      responses = [
+        [
+          LLMEvent.toolCall({ id: "call-1", name: "read", input: { path: "stuck.ts" } }),
+          LLMEvent.stepFinish({ index: 0, reason: "tool-calls" }),
+          LLMEvent.finish({ reason: "tool-calls" }),
+        ],
+        [
+          // Duplicate call: receives blocked result + warning
+          LLMEvent.toolCall({ id: "call-2", name: "read", input: { path: "stuck.ts" } }),
+          LLMEvent.stepFinish({ index: 0, reason: "tool-calls" }),
+          LLMEvent.finish({ reason: "tool-calls" }),
+        ],
+        [
+          // Recover: switch strategy to read a different file
+          LLMEvent.toolCall({ id: "call-3", name: "read", input: { path: "different.ts" } }),
+          LLMEvent.stepFinish({ index: 0, reason: "tool-calls" }),
+          LLMEvent.finish({ reason: "tool-calls" }),
+        ],
+        [
+          LLMEvent.textStart({ id: "txt-recovered" }),
+          LLMEvent.textDelta({ id: "txt-recovered", text: "Successfully recovered and finished." }),
+          LLMEvent.textEnd({ id: "txt-recovered" }),
+          LLMEvent.stepFinish({ index: 0, reason: "stop" }),
+          LLMEvent.finish({ reason: "stop" }),
+        ],
+      ]
+
+      yield* session.resume(sessionID)
+
+      // stuck.ts was executed once (second was blocked), then different.ts executed
+      expect(readExecutions).toEqual(["stuck.ts", "different.ts"])
+
+      const terminal = yield* db
+        .select({ data: EventTable.data })
+        .from(EventTable)
+        .where(eq(EventTable.type, EventV2.versionedType(SessionEvent.Run.Status.type, 1)))
+        .all()
+        .pipe(Effect.orDie)
+      expect(terminal.at(-1)?.data).toMatchObject({
+        status: { outcome: "completed" },
+      })
+    }),
+  )
+
+  it.effect("tool loop: normal 5-step progressing repository inspection passes", () =>
+    Effect.gen(function* () {
+      yield* setup
+      yield* registerLoopTestTools(yield* ApplicationTools.Service)
+      const session = yield* SessionV2.Service
+      const { db } = yield* Database.Service
+
+      yield* session.prompt({
+        sessionID,
+        prompt: Prompt.make({ text: "Perform 5-step repo inspection" }),
+        resume: false,
+      })
+
+      responses = [
+        [
+          LLMEvent.toolCall({ id: "step-1", name: "glob", input: { pattern: "*.ts" } }),
+          LLMEvent.stepFinish({ index: 0, reason: "tool-calls" }),
+          LLMEvent.finish({ reason: "tool-calls" }),
+        ],
+        [
+          LLMEvent.toolCall({ id: "step-2", name: "read", input: { path: "index.ts" } }),
+          LLMEvent.stepFinish({ index: 0, reason: "tool-calls" }),
+          LLMEvent.finish({ reason: "tool-calls" }),
+        ],
+        [
+          LLMEvent.toolCall({ id: "step-3", name: "grep", input: { pattern: "export" } }),
+          LLMEvent.stepFinish({ index: 0, reason: "tool-calls" }),
+          LLMEvent.finish({ reason: "tool-calls" }),
+        ],
+        [
+          LLMEvent.toolCall({ id: "step-4", name: "read", input: { path: "utils.ts" } }),
+          LLMEvent.stepFinish({ index: 0, reason: "tool-calls" }),
+          LLMEvent.finish({ reason: "tool-calls" }),
+        ],
+        [
+          LLMEvent.toolCall({ id: "step-5", name: "read", input: { path: "types.ts" } }),
+          LLMEvent.stepFinish({ index: 0, reason: "tool-calls" }),
+          LLMEvent.finish({ reason: "tool-calls" }),
+        ],
+        [
+          LLMEvent.textStart({ id: "txt-5step" }),
+          LLMEvent.textDelta({ id: "txt-5step", text: "5-step repository inspection complete." }),
+          LLMEvent.textEnd({ id: "txt-5step" }),
+          LLMEvent.stepFinish({ index: 0, reason: "stop" }),
+          LLMEvent.finish({ reason: "stop" }),
+        ],
+      ]
+
+      yield* session.resume(sessionID)
+
+      expect(globExecutions).toEqual(["*.ts"])
+      expect(readExecutions).toEqual(["index.ts", "utils.ts", "types.ts"])
+      expect(grepExecutions).toEqual(["export"])
+
+      const terminal = yield* db
+        .select({ data: EventTable.data })
+        .from(EventTable)
+        .where(eq(EventTable.type, EventV2.versionedType(SessionEvent.Run.Status.type, 1)))
+        .all()
+        .pipe(Effect.orDie)
+      expect(terminal.at(-1)?.data).toMatchObject({
+        status: { outcome: "completed" },
+      })
     }),
   )
 })

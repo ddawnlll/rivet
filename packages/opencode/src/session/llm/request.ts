@@ -64,17 +64,17 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
   const isOpenaiOauth = input.provider.id === "openai" && input.auth?.type === "oauth"
   const rivetBlock = input.cognitiveView?.formatPromptBlock()
   const agentPrompt = input.agent.prompt ?? BUILD_SYSTEM
+  const baseSystem = [
+    agentPrompt,
+    ...input.system,
+    ...(input.user.system ? [input.user.system] : []),
+  ]
+    .filter((x) => x)
+    .join("\n")
   const system = [
-    [
-      agentPrompt,
-      ...input.system,
-      ...(input.user.system ? [input.user.system] : []),
-      ...(rivetBlock && !input.system.some((s) => s.includes("RIVET COGNITIVE VIEW"))
-        ? [rivetBlock]
-        : []),
-    ]
-      .filter((x) => x)
-      .join("\n\n"),
+    rivetBlock && !input.system.some((s) => s.includes("RIVET COGNITIVE VIEW"))
+      ? (baseSystem ? `${baseSystem}\n\n${rivetBlock}` : rivetBlock)
+      : baseSystem,
   ]
 
   const header = system[0]

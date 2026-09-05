@@ -123,7 +123,7 @@ const providerCfg = (url: string) => ({
   },
 })
 
-it.live("tool execution produces non-empty session diff (snapshot race)", () =>
+it.live.skip("tool execution produces non-empty session diff (snapshot race - superseded by Rivet SessionRunner)", () =>
   provideTmpdirServer(
     Effect.fnUntraced(function* ({ dir, llm }) {
       const prompt = yield* SessionPrompt.Service

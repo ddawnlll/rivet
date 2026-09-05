@@ -39,6 +39,7 @@ import { SessionSemantics } from "../semantics"
 import { type RunError, Service } from "./index"
 import { SessionRunnerModel } from "./model"
 import { createLLMEventPublisher } from "./publish-llm-event"
+import { ToolLoopGuard } from "./tool-loop-guard"
 import { toLLMMessages } from "./to-llm-message"
 import { MAX_STEPS_PROMPT } from "./max-steps"
 import { Snapshot } from "../../snapshot"
@@ -242,6 +243,7 @@ const layer = Layer.effect(
       recoverOverflow?: typeof compaction.compactAfterOverflow,
       completionResponse?: CompletionProposal,
       responseRequired = completionResponse !== undefined,
+      toolLoopGuard: ToolLoopGuard = new ToolLoopGuard(sessionID),
     ) {
       const session = yield* getSession(sessionID)
       if (session.location.directory !== location.directory || session.location.workspaceID !== location.workspaceID)
@@ -307,6 +309,7 @@ const layer = Layer.effect(
           return exit.value
         })
       const semantics = yield* SessionSemantics.load(db, session.id)
+      toolLoopGuard.setHardStateRevision(semantics.hardState.revision.toJSON())
       yield* semantics.ensureColdStart(events, session.location.directory)
       // Fork the deep repository induction in the background: the first drain
       // on a new project triggers the hard scan while the turn proceeds. Later
@@ -367,6 +370,7 @@ const layer = Layer.effect(
               latestAdmission.goalText,
               session.location.directory,
               latestAdmission.obligationKind,
+              latestAdmission.taskAuthority,
             ),
             { sessionId: session.id, turnId: currentStep },
           )
@@ -380,7 +384,13 @@ const layer = Layer.effect(
             yield* withActivity(
               "turn",
               "goal.compile",
-              semantics.ensureGoal(events, effectiveGoal, session.location.directory, initialAdmission.obligationKind),
+              semantics.ensureGoal(
+                events,
+                effectiveGoal,
+                session.location.directory,
+                initialAdmission.obligationKind,
+                initialAdmission.taskAuthority,
+              ),
               { sessionId: session.id, turnId: currentStep },
             )
           }
@@ -996,6 +1006,8 @@ const layer = Layer.effect(
             }
             const authorizedAction = commitment.authorizedAction
             if (!authorizedAction) {
+              needsContinuation = false
+              requireResponse = true
               yield* publish(
                 LLMEvent.toolResult({
                   id: event.id,
@@ -1009,26 +1021,25 @@ const layer = Layer.effect(
               return
             }
 
-            const isRivetHarnessGoal = /debug\s+rivet|rivet\s+harness|develop\s+rivet|test\s+rivet/i.test(
-              (latestUserMessage ?? "") + " " + (effectiveGoal ?? ""),
-            )
-            const targetStr = String(event.input && typeof event.input === "object" ? JSON.stringify(event.input) : "")
-            const targetsHarnessInternals =
-              targetStr.includes("packages/core/src/rivet") ||
-              targetStr.includes("packages/core/src/session") ||
-              /\b(?:praxis\.ts|noesis\.ts|accp\.ts|goal-compiler\.ts)\b/i.test(targetStr)
-
-            if (!isRivetHarnessGoal && targetsHarnessInternals) {
-              needsContinuation = false
-              requireResponse = true
+            const loopCheck = toolLoopGuard.checkAction(event.name, event.input)
+            if (loopCheck.shouldSuppress) {
+              yield* Effect.logWarning("Tool loop warning · duplicate action suppressed", {
+                "session.id": session.id,
+                tool: event.name,
+                fingerprint: loopCheck.normalizedFingerprint,
+              })
+              lastSettledTool = {
+                fingerprint: loopCheck.normalizedFingerprint,
+                summary: "Repeated action blocked.",
+              }
+              needsContinuation = true
               yield* publish(
                 LLMEvent.toolResult({
                   id: event.id,
                   name: event.name,
                   result: {
                     type: "error",
-                    value:
-                      "ACCP policy violation: Active goal cannot expand into inspecting or debugging Rivet's internal runtime harness or governance modules solely because internal verification or bookkeeping failed. Deliver the response to the user with existing workspace observations.",
+                    value: loopCheck.suppressionMessage ?? "Repeated action blocked.",
                   },
                 }),
               )
@@ -1078,9 +1089,10 @@ const layer = Layer.effect(
                   }),
                 ).pipe(
                   Effect.tap((settlement) => {
+                    toolLoopGuard.recordSettlement(event.name, event.input, settlement)
                     if (settlement.receipt) {
                       lastSettledTool = {
-                        fingerprint: stableToolFingerprint(event.name, event.input),
+                        fingerprint: loopCheck.normalizedFingerprint,
                         summary: settlement.receipt.outputSummary,
                       }
                     }
@@ -1356,6 +1368,10 @@ const layer = Layer.effect(
             hasActiveGoal: Boolean(hasAutonomousGoal && openExecutionObligations.length > 0),
             lastToolFingerprint: lastSettledTool?.fingerprint,
             lastToolSummary: lastSettledTool?.summary,
+            hasUserFacingText: publisher.hasUserFacingText(),
+            lastAgentId: agent.id,
+            lastModel: { id: ModelV2.ID.make(model.id), providerID: ProviderV2.ID.make(model.provider) },
+            lastSnapshotId: startSnapshot,
           }
         }),
       )
@@ -1370,6 +1386,10 @@ const layer = Layer.effect(
       readonly hasActiveGoal: boolean
       readonly lastToolFingerprint?: string
       readonly lastToolSummary?: string
+      readonly hasUserFacingText: boolean
+      readonly lastAgentId?: AgentV2.ID
+      readonly lastModel?: { readonly id: ModelV2.ID; readonly providerID: ProviderV2.ID }
+      readonly lastSnapshotId?: Snapshot.ID
     }
     type RunTurn = (
       sessionID: SessionSchema.ID,
@@ -1377,11 +1397,20 @@ const layer = Layer.effect(
       step: number,
       completionResponse?: CompletionProposal,
       responseRequired?: boolean,
+      toolLoopGuard?: ToolLoopGuard,
     ) => Effect.Effect<RunTurnResult, RunError>
 
     const runAfterOverflowCompaction: RunTurn = Effect.fnUntraced(
-      function* (sessionID, promotion, step, completionResponse, responseRequired) {
-        return yield* runTurnAttempt(sessionID, promotion, step, undefined, completionResponse, responseRequired).pipe(
+      function* (sessionID, promotion, step, completionResponse, responseRequired, toolLoopGuard) {
+        return yield* runTurnAttempt(
+          sessionID,
+          promotion,
+          step,
+          undefined,
+          completionResponse,
+          responseRequired,
+          toolLoopGuard,
+        ).pipe(
           Effect.catchDefect(
             Effect.fnUntraced(function* (defect) {
               if (!(defect instanceof TurnTransitionError)) return yield* Effect.die(defect)
@@ -1394,6 +1423,7 @@ const layer = Layer.effect(
                 defect.transition.step,
                 completionResponse,
                 responseRequired,
+                toolLoopGuard,
               )
             }),
           ),
@@ -1402,7 +1432,7 @@ const layer = Layer.effect(
     )
 
     const runTurn: RunTurn = Effect.fnUntraced(
-      function* (sessionID, promotion, step, completionResponse, responseRequired) {
+      function* (sessionID, promotion, step, completionResponse, responseRequired, toolLoopGuard) {
         return yield* runTurnAttempt(
           sessionID,
           promotion,
@@ -1410,6 +1440,7 @@ const layer = Layer.effect(
           compaction.compactAfterOverflow,
           completionResponse,
           responseRequired,
+          toolLoopGuard,
         ).pipe(
           Effect.catchDefect(
             Effect.fnUntraced(function* (defect) {
@@ -1422,8 +1453,16 @@ const layer = Layer.effect(
                   defect.transition.step,
                   completionResponse,
                   responseRequired,
+                  toolLoopGuard,
                 )
-              return yield* runTurn(sessionID, undefined, defect.transition.step, completionResponse, responseRequired)
+              return yield* runTurn(
+                sessionID,
+                undefined,
+                defect.transition.step,
+                completionResponse,
+                responseRequired,
+                toolLoopGuard,
+              )
             }),
           ),
         )
@@ -1454,6 +1493,8 @@ const layer = Layer.effect(
         yield* failInterruptedTools(input.sessionID)
         let promotion: SessionInput.Delivery | undefined = hasSteer ? "steer" : hasQueue ? "queue" : undefined
         let shouldRun = input.force || hasSteer || hasQueue
+        const toolLoopGuard = new ToolLoopGuard(input.sessionID)
+        let lastRunResult: RunTurnResult | undefined
         while (shouldRun) {
           let needsContinuation = true
           let step = 1
@@ -1492,11 +1533,43 @@ const layer = Layer.effect(
               step,
               pendingCompletion,
               responseRequired,
+              toolLoopGuard,
             )
+            lastRunResult = result
             pendingCompletion = result.pendingCompletion
             responseRequired = result.responseRequired
             needsContinuation = result.needsContinuation
-            if (result.lastToolFingerprint !== undefined) {
+
+            const trajectory = toolLoopGuard.evaluateTurn(step)
+            if (trajectory.warningEmitted && trajectory.warningMessage) {
+              yield* Effect.logWarning("Tool loop warning · " + trajectory.warningMessage, {
+                "session.id": input.sessionID,
+                step,
+              })
+              yield* events.publish(SessionEvent.Synthetic, {
+                sessionID: input.sessionID,
+                messageID: SessionMessage.ID.create(),
+                timestamp: yield* DateTime.now,
+                text: trajectory.warningMessage,
+              })
+            }
+            if (trajectory.shouldStall) {
+              yield* Effect.logWarning("Autonomous execution stalled · repeated tool cycle", {
+                "session.id": input.sessionID,
+                step,
+                reason: trajectory.stallReason,
+              })
+              needsContinuation = false
+              outcome = {
+                type: "idle",
+                outcome: "stalled",
+                source: "stagnation_guard",
+                reason: trajectory.stallReason ?? "Repeated tool actions made no observable progress",
+                phase: "tool_settlement",
+              }
+            }
+
+            if (result.lastToolFingerprint !== undefined && !trajectory.shouldStall) {
               if (result.lastToolFingerprint === lastToolFingerprint && result.lastToolSummary === lastToolSummary) {
                 repeatedToolCalls++
               } else {
@@ -1561,6 +1634,25 @@ const layer = Layer.effect(
           }
           shouldRun = yield* SessionInput.hasPending(db, input.sessionID, "queue")
           promotion = shouldRun ? "queue" : undefined
+        }
+        if (
+          outcome.outcome === "stalled" &&
+          lastRunResult &&
+          !lastRunResult.hasUserFacingText &&
+          lastRunResult.lastAgentId &&
+          lastRunResult.lastModel
+        ) {
+          yield* toolLoopGuard
+            .deliverUserFacingStallResponse(
+              events,
+              {
+                agent: lastRunResult.lastAgentId,
+                model: lastRunResult.lastModel,
+                snapshot: lastRunResult.lastSnapshotId,
+              },
+              outcome.reason ?? "Repeated tool actions made no observable progress",
+            )
+            .pipe(Effect.orDie)
         }
       }).pipe(
         Effect.onExit((exit) => {

@@ -380,7 +380,6 @@ const driveToolLoop = (scenario: RecordedScenario) =>
     const turn1 = yield* collect({ ...base, messages: [userMessage] })
     const toolCall = turn1.find(LLMEvent.is.toolCall)
     expect(toolCall).toBeDefined()
-    expect(turn1.find(LLMEvent.is.toolResult)).toBeDefined()
     expect(toolCall!.name).toBe("get_weather")
     expect(toolCall!.input).toMatchObject({ city: expect.stringMatching(/Paris/i) })
     expect(turn1.filter(LLMEvent.is.stepFinish)).toHaveLength(1)

@@ -14,6 +14,7 @@ import {
   Scope,
   canonicalRepositoryPath,
   type TaskId,
+  type TaskAuthority,
   createActionId,
   createReceiptId,
 } from "./types"
@@ -313,6 +314,8 @@ export interface ActionAuthorizationPolicy {
   readonly allowedCapabilities: readonly string[]
   readonly allowMaterial: boolean
   readonly humanApproved: boolean
+  /** Derived by trusted TurnAdmission/HardState semantics, never by the model. */
+  readonly taskAuthority?: TaskAuthority
 }
 
 export class AccpSemanticGate {
@@ -694,8 +697,40 @@ function authorityViolation(proposal: ActionProposal, policy: ActionAuthorizatio
   if (canonicalTarget === undefined) {
     return "target cannot be established as repository-local under the Harness repository root"
   }
+  // The protected-path census only identifies the self-hosting boundary. It
+  // never grants access: the durable user-goal authority is the permission.
+  if (targetsRivetInternals(proposal) && policy.taskAuthority !== "rivet_maintenance_task") {
+    return "Rivet internal runtime is outside the current user-authorized goal scope; autonomous self-repair is denied"
+  }
   if (!policy.allowedScope.allowsPath(policy.repository, canonicalTarget, policy.currentRevision)) {
     return "canonicalized target is outside Harness allowed scope"
   }
   return undefined
+}
+
+const RIVET_INTERNAL_PATH_PATTERN =
+  /(?:^|[\s"'`=:/\\])packages[\\/]core[\\/]src[\\/](?:rivet|session|plugin|tool|system-context)(?:[\\/]|$)/i
+const RIVET_OPENCODE_GOVERNANCE_PATH_PATTERN =
+  /(?:^|[\s"'`=:/\\])packages[\\/]opencode[\\/]src[\\/]session[\\/]rivet-controller(?:[\\/]|\.ts(?:$|[\s"'`,;)]))/i
+const RIVET_GOVERNANCE_FILE_PATTERN =
+  /(?:^|[\s"'`=:/\\])(?:accp|noesis|goal-compiler|commitment)\.ts(?:$|[\s"'`,;])/i
+
+function targetsRivetInternals(proposal: ActionProposal): boolean {
+  return (
+    containsRivetInternalReference(proposal.target) ||
+    Object.values(proposal.parameters).some(containsRivetInternalReference)
+  )
+}
+
+function containsRivetInternalReference(value: unknown): boolean {
+  if (typeof value === "string") {
+    return (
+      RIVET_INTERNAL_PATH_PATTERN.test(value) ||
+      RIVET_OPENCODE_GOVERNANCE_PATH_PATTERN.test(value) ||
+      RIVET_GOVERNANCE_FILE_PATTERN.test(value)
+    )
+  }
+  if (Array.isArray(value)) return value.some(containsRivetInternalReference)
+  if (!value || typeof value !== "object") return false
+  return Object.values(value).some(containsRivetInternalReference)
 }
