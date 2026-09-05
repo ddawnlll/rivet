@@ -6,7 +6,7 @@ import { useRoute } from "../../context/route"
 import { useRivet } from "../context"
 import type { UiHardClaim, UiMemoryItem } from "../types"
 
-export type StateTab = "hard" | "workspace" | "memory" | "history" | "economics"
+export type StateTab = "control" | "hard" | "workspace" | "memory" | "history" | "economics"
 
 export interface StateViewProps {
   initialTab?: StateTab
@@ -19,7 +19,7 @@ export function StateView(props: StateViewProps) {
   const { theme } = useTheme()
   const dimensions = useTerminalDimensions()
 
-  const [activeTab, setActiveTab] = createSignal<StateTab>(props.initialTab ?? "hard")
+  const [activeTab, setActiveTab] = createSignal<StateTab>(props.initialTab ?? "control")
   const [memoryFilter, setMemoryFilter] = createSignal<"all" | "used" | "ignored">("all")
   const [selectedClaimId, setSelectedClaimId] = createSignal<string | undefined>()
   const [selectedMemoryId, setSelectedMemoryId] = createSignal<string | undefined>()
@@ -86,6 +86,12 @@ export function StateView(props: StateViewProps) {
       {/* Tabs */}
       <box flexDirection="row" gap={1} flexShrink={0}>
         <TabButton
+          label="Control"
+          count={rivet.taskControl.recovery.length}
+          active={activeTab() === "control"}
+          onClick={() => setActiveTab("control")}
+        />
+        <TabButton
           label="Hard State"
           count={rivet.hardState.length}
           active={activeTab() === "hard"}
@@ -109,16 +115,99 @@ export function StateView(props: StateViewProps) {
           active={activeTab() === "history"}
           onClick={() => setActiveTab("history")}
         />
-        <TabButton
-          label="Economics"
-          active={activeTab() === "economics"}
-          onClick={() => setActiveTab("economics")}
-        />
+        <TabButton label="Economics" active={activeTab() === "economics"} onClick={() => setActiveTab("economics")} />
       </box>
 
       {/* Main Content Area */}
       <scrollbox flexGrow={1} minHeight={0}>
         <Switch>
+          {/* TASK CONTROL PLANE */}
+          <Match when={activeTab() === "control"}>
+            <box flexDirection="column" gap={1}>
+              <box padding={1} backgroundColor={theme.backgroundElement} border={["left"]} borderColor={theme.primary}>
+                <text fg={theme.primary} attributes={TextAttributes.BOLD}>
+                  AUTHORITATIVE TRAJECTORY
+                </text>
+                <text fg={theme.textMuted}>
+                  Harness-owned task, focus, evidence progress, recovery stack, and mechanical resume target.
+                </text>
+              </box>
+
+              <box padding={1} backgroundColor={theme.backgroundPanel} flexDirection="column">
+                <text fg={theme.textMuted}>ROOT</text>
+                <text fg={theme.text} attributes={TextAttributes.BOLD}>
+                  {rivet.taskControl.root?.objective ?? rivet.goal ?? "No active root goal"}
+                </text>
+                <Show when={rivet.taskControl.root}>
+                  <text fg={theme.textMuted}>
+                    {rivet.taskControl.root?.taskId} · r{rivet.taskControl.root?.revision ?? "—"}
+                  </text>
+                </Show>
+              </box>
+
+              <box padding={1} backgroundColor={theme.backgroundPanel} flexDirection="column">
+                <text fg={theme.textMuted}>CURRENT FOCUS</text>
+                <Show
+                  when={rivet.taskControl.focus}
+                  fallback={<text fg={theme.textMuted}>No active autonomous focus.</text>}
+                >
+                  <text fg={theme.info} attributes={TextAttributes.BOLD}>
+                    {rivet.taskControl.focus?.kind.toUpperCase()} · {rivet.taskControl.focus?.id}
+                  </text>
+                  <text fg={theme.text}>{rivet.taskControl.focus?.objective}</text>
+                  <text fg={theme.textMuted}>Acceptance: {rivet.taskControl.focus?.acceptanceCriteria.join("; ")}</text>
+                  <text fg={theme.textMuted}>Evidence: {rivet.taskControl.focus?.requiredEvidence.join(", ")}</text>
+                  <text fg={theme.textMuted}>
+                    Effort: {rivet.taskControl.focus?.effort.used}/{rivet.taskControl.focus?.effort.budget ?? "∞"} tool
+                    calls
+                  </text>
+                </Show>
+              </box>
+
+              <box padding={1} backgroundColor={theme.backgroundPanel} flexDirection="column">
+                <text fg={theme.textMuted}>PROGRESS</text>
+                <text
+                  fg={
+                    rivet.taskControl.progress.verified >= rivet.taskControl.progress.required
+                      ? theme.success
+                      : theme.warning
+                  }
+                  attributes={TextAttributes.BOLD}
+                >
+                  {rivet.taskControl.progress.verified} verified / {rivet.taskControl.progress.required} required
+                </text>
+                <text fg={theme.textMuted}>Control revision {rivet.taskControl.progress.revision}</text>
+              </box>
+
+              <box padding={1} backgroundColor={theme.backgroundPanel} flexDirection="column">
+                <text fg={theme.textMuted}>RECOVERY</text>
+                <Show
+                  when={rivet.taskControl.recovery.length > 0}
+                  fallback={<text fg={theme.success}>No active recovery.</text>}
+                >
+                  <For each={rivet.taskControl.recovery}>
+                    {(frame) => (
+                      <box flexDirection="column" border={["left"]} borderColor={theme.warning} paddingLeft={1}>
+                        <text fg={theme.warning} attributes={TextAttributes.BOLD}>
+                          {frame.id} · {frame.failureClass}
+                        </text>
+                        <text fg={theme.text}>{frame.objective}</text>
+                        <text fg={theme.textMuted}>Status: {frame.status}</text>
+                      </box>
+                    )}
+                  </For>
+                </Show>
+              </box>
+
+              <box padding={1} backgroundColor={theme.backgroundPanel} flexDirection="column">
+                <text fg={theme.textMuted}>RESUME</text>
+                <text fg={rivet.taskControl.resumeTarget ? theme.info : theme.textMuted}>
+                  {rivet.taskControl.resumeTarget ?? "No recovery detour; continue current focus."}
+                </text>
+              </box>
+            </box>
+          </Match>
+
           {/* 1. HARD STATE */}
           <Match when={activeTab() === "hard"}>
             <box flexDirection="column" gap={1}>
@@ -192,7 +281,8 @@ export function StateView(props: StateViewProps) {
                             </Show>
                             <Show when={(claim.sourceRefs ?? []).length > 0}>
                               <text fg={theme.textMuted}>
-                                Source refs: <span style={{ fg: theme.text }}>{(claim.sourceRefs ?? []).join(", ")}</span>
+                                Source refs:{" "}
+                                <span style={{ fg: theme.text }}>{(claim.sourceRefs ?? []).join(", ")}</span>
                               </text>
                             </Show>
                           </box>
@@ -208,17 +298,13 @@ export function StateView(props: StateViewProps) {
           {/* 2. WORKSPACE */}
           <Match when={activeTab() === "workspace"}>
             <box flexDirection="column" gap={1}>
-              <box
-                padding={1}
-                backgroundColor={theme.backgroundElement}
-                border={["left"]}
-                borderColor={theme.info}
-              >
+              <box padding={1} backgroundColor={theme.backgroundElement} border={["left"]} borderColor={theme.info}>
                 <text fg={theme.info} attributes={TextAttributes.BOLD}>
                   WORKSPACE (SOFT STATE)
                 </text>
                 <text fg={theme.textMuted}>
-                  Provisional working cognition — what Rivet is currently investigating, not authoritative project truth.
+                  Provisional working cognition — what Rivet is currently investigating, not authoritative project
+                  truth.
                 </text>
               </box>
 
@@ -319,16 +405,8 @@ export function StateView(props: StateViewProps) {
                   Memory admission decisions: what was remembered, what was excluded, and why.
                 </text>
                 <box flexDirection="row" gap={1}>
-                  <FilterChip
-                    label="All"
-                    active={memoryFilter() === "all"}
-                    onClick={() => setMemoryFilter("all")}
-                  />
-                  <FilterChip
-                    label="Used"
-                    active={memoryFilter() === "used"}
-                    onClick={() => setMemoryFilter("used")}
-                  />
+                  <FilterChip label="All" active={memoryFilter() === "all"} onClick={() => setMemoryFilter("all")} />
+                  <FilterChip label="Used" active={memoryFilter() === "used"} onClick={() => setMemoryFilter("used")} />
                   <FilterChip
                     label="Ignored"
                     active={memoryFilter() === "ignored"}
@@ -441,7 +519,7 @@ export function StateView(props: StateViewProps) {
                                   <box flexDirection="column" marginTop={1}>
                                     <text fg={theme.warning}>Why ignored:</text>
                                     <For each={item.whyIgnored}>
-                                      {(reason) => <text fg={theme.textMuted}>  - {reason}</text>}
+                                      {(reason) => <text fg={theme.textMuted}> - {reason}</text>}
                                     </For>
                                   </box>
                                 </Show>
@@ -461,8 +539,7 @@ export function StateView(props: StateViewProps) {
                                     </Show>
                                     <Show when={item.details?.score !== undefined}>
                                       <text fg={theme.textMuted}>
-                                        Relevance Score:{" "}
-                                        <span style={{ fg: theme.text }}>{item.details!.score}</span>
+                                        Relevance Score: <span style={{ fg: theme.text }}>{item.details!.score}</span>
                                       </text>
                                     </Show>
                                   </box>
@@ -520,12 +597,7 @@ export function StateView(props: StateViewProps) {
           {/* 5. ECONOMICS */}
           <Match when={activeTab() === "economics"}>
             <box flexDirection="column" gap={1}>
-              <box
-                padding={1}
-                backgroundColor={theme.backgroundElement}
-                border={["left"]}
-                borderColor={theme.primary}
-              >
+              <box padding={1} backgroundColor={theme.backgroundElement} border={["left"]} borderColor={theme.primary}>
                 <text fg={theme.primary} attributes={TextAttributes.BOLD}>
                   RUNTIME ECONOMICS & TOKEN EFFICIENCY
                 </text>
@@ -547,7 +619,8 @@ export function StateView(props: StateViewProps) {
                   borderColor={theme.primary}
                 >
                   <text fg={theme.primary} attributes={TextAttributes.BOLD}>
-                    FLIGHT RECORDER · TURN {rivet.statusRail.flightTimeline?.turnId ?? 1} · {((rivet.statusRail.flightTimeline?.totalElapsedMs ?? 0) / 1000).toFixed(3)}s
+                    FLIGHT RECORDER · TURN {rivet.statusRail.flightTimeline?.turnId ?? 1} ·{" "}
+                    {((rivet.statusRail.flightTimeline?.totalElapsedMs ?? 0) / 1000).toFixed(3)}s
                   </text>
                   <Show when={rivet.statusRail.activeSpan !== undefined}>
                     <box flexDirection="row" gap={1} marginTop={1}>
@@ -603,7 +676,8 @@ export function StateView(props: StateViewProps) {
                     <box flexDirection="row" justifyContent="space-between">
                       <text fg={theme.text}>Tool execution</text>
                       <text fg={theme.text}>
-                        {rivet.statusRail.flightTimeline?.toolExecutionMs !== undefined && rivet.statusRail.flightTimeline.toolExecutionMs > 0
+                        {rivet.statusRail.flightTimeline?.toolExecutionMs !== undefined &&
+                        rivet.statusRail.flightTimeline.toolExecutionMs > 0
                           ? `${rivet.statusRail.flightTimeline.toolExecutionMs.toFixed(1)} ms`
                           : "—"}
                       </text>
@@ -611,7 +685,8 @@ export function StateView(props: StateViewProps) {
                     <box flexDirection="row" justifyContent="space-between">
                       <text fg={theme.text}>Settlement & Finalize</text>
                       <text fg={theme.text}>
-                        {rivet.statusRail.flightTimeline?.providerFinalizeMs !== undefined && rivet.statusRail.flightTimeline.providerFinalizeMs > 0
+                        {rivet.statusRail.flightTimeline?.providerFinalizeMs !== undefined &&
+                        rivet.statusRail.flightTimeline.providerFinalizeMs > 0
                           ? `${rivet.statusRail.flightTimeline.providerFinalizeMs.toFixed(1)} ms`
                           : "—"}
                       </text>
@@ -670,7 +745,8 @@ export function StateView(props: StateViewProps) {
                 </text>
                 <Show when={rivet.statusRail.totalTokens !== undefined}>
                   <text fg={theme.textMuted}>
-                    Total Prompt Tokens: {rivet.statusRail.totalTokens?.toLocaleString()} · Cached Tokens: {rivet.statusRail.cachedTokens?.toLocaleString()}
+                    Total Prompt Tokens: {rivet.statusRail.totalTokens?.toLocaleString()} · Cached Tokens:{" "}
+                    {rivet.statusRail.cachedTokens?.toLocaleString()}
                   </text>
                 </Show>
               </box>
@@ -733,6 +809,25 @@ export function StateView(props: StateViewProps) {
           </Match>
         </Switch>
       </scrollbox>
+      <box
+        flexDirection="row"
+        justifyContent="space-between"
+        flexShrink={0}
+        paddingLeft={1}
+        paddingRight={1}
+        backgroundColor={theme.backgroundElement}
+      >
+        <text fg={rivet.statusRail.activeSpan ? theme.info : theme.textMuted}>
+          {rivet.statusRail.activeSpan
+            ? `${rivet.statusRail.activeSpan.label} · ${rivet.statusRail.activeSpan.elapsedMs.toFixed(0)}ms`
+            : "Idle"}
+        </text>
+        <text fg={theme.textMuted}>
+          {rivet.statusRail.lastCompletedSpan
+            ? `${rivet.statusRail.lastCompletedSpan.label} · ${rivet.statusRail.lastCompletedSpan.durationMs.toFixed(0)}ms`
+            : rivet.revision}
+        </text>
+      </box>
     </box>
   )
 }

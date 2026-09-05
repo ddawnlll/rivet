@@ -253,7 +253,10 @@ const layer = Layer.effect(
       const recentCompletedActivities: SessionStatusEvent.CompletedActivity[] = []
       const activityLabel = (operation: string, metadata?: Record<string, unknown>) => {
         const tool = metadata?.tool as string | undefined
+        const target = metadata?.target as string | undefined
         if (operation === "tool.execute" && tool) {
+          if (tool === "read" && target) return `Reading ${target}`
+          if ((tool === "edit" || tool === "write" || tool === "apply_patch") && target) return `Editing ${target}`
           return `Executing ${tool}`
         }
         if (operation === "tool.result_process" && tool) {
@@ -1229,7 +1232,12 @@ const layer = Layer.effect(
                   }),
                 ),
               ),
-              { sessionId: session.id, turnId: currentStep, tool: event.name },
+              {
+                sessionId: session.id,
+                turnId: currentStep,
+                tool: event.name,
+                metadata: { tool: event.name, target: authorizedAction.proposal.target },
+              },
             ).pipe(FiberSet.run(toolFibers))
           }),
         ),
@@ -1360,6 +1368,52 @@ const layer = Layer.effect(
                     flightRecorder: {
                       turnId: currentStep,
                       breakdown: FlightRecorder.getTurnTimeline(currentStep, session.id),
+                    },
+                    taskControl: {
+                      root: semantics.hardState.activeTaskId
+                        ? {
+                            taskId: semantics.hardState.activeTaskId,
+                            objective: semantics.hardState.goalDescription,
+                            revision: semantics.hardState.activeGoalRevision?.toJSON(),
+                          }
+                        : undefined,
+                      focus: semantics.hardState.executionFocus
+                        ? {
+                            id: semantics.hardState.executionFocus.id,
+                            kind: semantics.hardState.executionFocus.kind,
+                            objective: semantics.hardState.executionFocus.objective,
+                            acceptanceCriteria: semantics.hardState.executionFocus.contract.acceptanceCriteria,
+                            requiredEvidence: semantics.hardState.executionFocus.contract.requiredEvidence,
+                            effort: {
+                              used: semantics.hardState.focusEffort.get(semantics.hardState.executionFocus.id) ?? 0,
+                              budget: semantics.hardState.executionFocus.contract.effortBudget,
+                            },
+                          }
+                        : undefined,
+                      progress: {
+                        verified: semantics.hardState.closureReceiptIds().length,
+                        required:
+                          semantics.hardState.openObligationIds().length +
+                          [...semantics.hardState.closedObligations.keys()].filter(
+                            (id) =>
+                              semantics.hardState.activeTaskId === null ||
+                              semantics.hardState.obligationTaskIds.get(id) === semantics.hardState.activeTaskId,
+                          ).length,
+                        revision: semantics.hardState.controlProgressVersion,
+                      },
+                      recovery: semantics.hardState.recoveryStack
+                        .map((id) => semantics.hardState.recoveryFrames.get(id))
+                        .filter((frame) => frame !== undefined)
+                        .map((frame) => ({
+                          id: frame.id,
+                          failureClass: frame.failureClass,
+                          objective: frame.objective,
+                          status: frame.status,
+                          resumeTarget: frame.resumeTarget,
+                        })),
+                      resumeTarget: semantics.hardState.recoveryStack
+                        .map((id) => semantics.hardState.recoveryFrames.get(id))
+                        .findLast((frame) => frame !== undefined)?.resumeTarget,
                     },
                   },
                 },
