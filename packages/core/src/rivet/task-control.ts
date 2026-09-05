@@ -87,7 +87,8 @@ export class TaskControlController {
   static recoveryFocus(input: {
     readonly taskId: TaskId
     readonly parentFocusId: FocusId
-    readonly resumeTarget: ObligationId
+    readonly targetObligationId: ObligationId
+    readonly resumeTarget: FocusId
     readonly failureClass: FailureClass
     readonly objective: string
     readonly acceptanceCriteria: readonly string[]
@@ -99,6 +100,7 @@ export class TaskControlController {
       taskId: input.taskId,
       failureClass: input.failureClass,
       parentFocusId: input.parentFocusId,
+      targetObligationId: input.targetObligationId,
       objective: input.objective,
       acceptanceCriteria: [...input.acceptanceCriteria],
       resumeTarget: input.resumeTarget,
@@ -118,6 +120,7 @@ export class TaskControlController {
         id: createFocusId(),
         taskId: input.taskId,
         kind: "recovery",
+        targetObligationId: input.targetObligationId,
         parentFocusId: input.parentFocusId,
         objective: input.objective,
         reason: `Selective recovery for ${input.failureClass}`,

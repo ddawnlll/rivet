@@ -1085,7 +1085,8 @@ export class SessionSemantics {
     const recovery = TaskControlController.recoveryFocus({
       taskId: this.hardState.activeTaskId,
       parentFocusId: parent.id,
-      resumeTarget: parent.targetObligationId,
+      targetObligationId: parent.targetObligationId,
+      resumeTarget: parent.id,
       failureClass: input.failureClass,
       objective: input.objective,
       acceptanceCriteria: input.acceptanceCriteria,
@@ -1107,7 +1108,7 @@ export class SessionSemantics {
       return Effect.fail(new Error("Recovery transition requires a recorded Praxis receipt"))
     }
     try {
-      TaskControlController.requirePassingVerification(receipt, frame.resumeTarget)
+      TaskControlController.requirePassingVerification(receipt, frame.targetObligationId)
     } catch (error) {
       return Effect.fail(error instanceof Error ? error : new Error(String(error)))
     }
