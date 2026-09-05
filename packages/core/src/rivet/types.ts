@@ -188,14 +188,17 @@ export interface RecoveryFrame {
   readonly createdAt: string
   readonly verificationReceiptId?: ReceiptId
   readonly closedAt?: string
+  readonly trajectoryStartMessageId?: string
 }
 
 export interface RecoveryVerificationReceipt {
   readonly receiptId: ReceiptId
   readonly recoveryId: RecoveryId
   readonly passed: boolean
+  readonly acceptanceCriteria: readonly string[]
   readonly evidenceRefs: readonly EvidenceId[]
   readonly verifier: "PRAXIS"
+  readonly diagnostics?: string | null
   readonly timestamp: string
 }
 
@@ -207,6 +210,7 @@ export interface TrajectoryFold {
   readonly evidenceRefs: readonly string[]
   readonly startedAt: string
   readonly completedAt: string
+  readonly startMessageId?: string
 }
 
 export interface ObligationClosureSpec {

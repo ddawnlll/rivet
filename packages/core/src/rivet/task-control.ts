@@ -94,6 +94,7 @@ export class TaskControlController {
     readonly acceptanceCriteria: readonly string[]
     readonly allowedScope: readonly string[]
     readonly budget?: number
+    readonly trajectoryStartMessageId?: string
   }): { readonly frame: RecoveryFrame; readonly focus: ExecutionFocus } {
     const frame: RecoveryFrame = {
       id: createRecoveryId(),
@@ -108,6 +109,7 @@ export class TaskControlController {
       budget: input.budget ?? DEFAULT_EFFORT_BUDGET,
       status: "open",
       createdAt: new Date().toISOString(),
+      trajectoryStartMessageId: input.trajectoryStartMessageId,
     }
     const contract = this.compileContract({
       objective: input.objective,
