@@ -22,7 +22,10 @@ describe("Rivet render clock", () => {
       }, 30)
     })
 
+    const stoppedCount = observed.length
+    await new Promise((resolve) => setTimeout(resolve, 20))
     dispose()
     expect(observed.length).toBeGreaterThan(1)
+    expect(observed.length).toBe(stoppedCount)
   })
 })
